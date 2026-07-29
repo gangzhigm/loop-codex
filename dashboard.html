@@ -1,0 +1,1136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Local Agent Loop</title>
+  <style>
+    :root {
+      --canvas: #f3f5f7;
+      --surface: #ffffff;
+      --surface-subtle: #f8fafb;
+      --ink: #18212b;
+      --muted: #66727f;
+      --line: #dce2e8;
+      --line-strong: #c8d0d8;
+      --accent: #087f8c;
+      --accent-soft: #e7f4f5;
+      --success: #137a4a;
+      --success-soft: #e8f5ee;
+      --warning: #9a5b00;
+      --warning-soft: #fff3d9;
+      --danger: #b42318;
+      --danger-soft: #fdecea;
+      --human: #7c3b83;
+      --human-soft: #f5eaf6;
+      --neutral-soft: #edf1f4;
+      --shadow: 0 8px 24px rgba(24, 33, 43, 0.12);
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--canvas);
+    }
+
+    * { box-sizing: border-box; }
+
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background: var(--canvas);
+    }
+
+    button, input { font: inherit; }
+
+    button { letter-spacing: 0; }
+
+    button:focus-visible,
+    input:focus-visible,
+    [tabindex]:focus-visible {
+      outline: 3px solid rgba(8, 127, 140, 0.25);
+      outline-offset: 2px;
+    }
+
+    .app-header {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 12px 28px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      flex: 0 0 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 19px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .connection {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .connection-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 8px;
+      border-radius: 50%;
+      background: #98a2ad;
+    }
+
+    .connection[data-state="live"] .connection-dot { background: var(--success); }
+    .connection[data-state="error"] .connection-dot { background: var(--danger); }
+    .connection[data-state="snapshot"] .connection-dot { background: var(--warning); }
+
+    .primary-button,
+    .secondary-button {
+      min-height: 38px;
+      border-radius: 6px;
+      padding: 8px 13px;
+      cursor: pointer;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .primary-button {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .primary-button:hover { background: #066d78; }
+
+    .secondary-button {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    .secondary-button:hover { background: var(--surface-subtle); }
+
+    .main {
+      width: min(1480px, 100%);
+      margin: 0 auto;
+      padding: 24px 28px 40px;
+    }
+
+    .notice {
+      display: none;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+      padding: 11px 14px;
+      border: 1px solid #e7c985;
+      border-radius: 6px;
+      background: var(--warning-soft);
+      color: #654100;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .notice.is-visible { display: flex; }
+
+    .notice button {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-weight: 800;
+    }
+
+    .summary-band {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .metric {
+      min-width: 0;
+      min-height: 94px;
+      padding: 18px;
+      border-right: 1px solid var(--line);
+    }
+
+    .metric:last-child { border-right: 0; }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .metric-value {
+      margin-top: 9px;
+      font-size: 27px;
+      line-height: 1;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .metric-value.success { color: var(--success); }
+    .metric-value.warning { color: var(--warning); }
+    .metric-value.danger { color: var(--danger); }
+
+    .distribution {
+      margin-top: 14px;
+      height: 8px;
+      display: flex;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--neutral-soft);
+    }
+
+    .distribution span { min-width: 0; transition: width 180ms ease; }
+    .distribution .done { background: var(--success); }
+    .distribution .active { background: var(--accent); }
+    .distribution .attention { background: var(--warning); }
+    .distribution .failed { background: var(--danger); }
+    .distribution .queued { background: #98a2ad; }
+
+    .workspace-meta {
+      min-height: 43px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .workspace-meta strong { color: var(--ink); }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 2.2fr) minmax(290px, 0.8fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .task-section,
+    .side-section {
+      min-width: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .section-header {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-header h2,
+    .side-block h2 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    .task-tools {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .search-input {
+      width: min(220px, 100%);
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    .segments {
+      display: flex;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-subtle);
+    }
+
+    .segments button {
+      min-height: 28px;
+      border: 0;
+      border-radius: 4px;
+      padding: 4px 9px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .segments button[aria-pressed="true"] {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: 0 1px 3px rgba(24, 33, 43, 0.12);
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th {
+      height: 38px;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--surface-subtle);
+      font-size: 11px;
+      font-weight: 700;
+      text-align: left;
+    }
+
+    td {
+      padding: 13px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+      font-size: 13px;
+    }
+
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #f7fbfb; }
+    tbody tr:last-child td { border-bottom: 0; }
+
+    .task-cell { min-width: 0; }
+
+    .task-title {
+      display: block;
+      overflow: hidden;
+      color: var(--ink);
+      font-weight: 700;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .task-id {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-family: Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .status-badge,
+    .priority-badge {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      min-height: 24px;
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 760;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .status-draft, .status-pending, .status-claimed { background: var(--neutral-soft); color: #46515c; }
+    .status-running { background: var(--accent-soft); color: #056a74; }
+    .status-waiting-human { background: var(--human-soft); color: var(--human); }
+    .status-waiting-conflict, .status-blocked, .status-stalled { background: var(--warning-soft); color: var(--warning); }
+    .status-succeeded { background: var(--success-soft); color: var(--success); }
+    .status-confirmed { background: #d9f0e4; color: #0d633c; }
+    .status-failed { background: var(--danger-soft); color: var(--danger); }
+    .status-cancelled { background: var(--neutral-soft); color: var(--muted); }
+
+    .priority-critical { background: var(--danger-soft); color: var(--danger); }
+    .priority-high { background: var(--warning-soft); color: var(--warning); }
+    .priority-medium { background: var(--accent-soft); color: #056a74; }
+    .priority-low { background: var(--neutral-soft); color: var(--muted); }
+
+    .progress-cell {
+      display: grid;
+      grid-template-columns: minmax(58px, 1fr) 34px;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .progress-track {
+      height: 6px;
+      overflow: hidden;
+      border-radius: 3px;
+      background: var(--neutral-soft);
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+    }
+
+    .progress-cell span { color: var(--muted); font-size: 11px; text-align: right; }
+
+    .muted { color: var(--muted); }
+
+    .empty-state {
+      display: grid;
+      min-height: 280px;
+      place-items: center;
+      padding: 30px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .empty-state strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+      font-size: 15px;
+    }
+
+    .side-section { overflow: hidden; }
+
+    .side-block { padding: 16px; }
+    .side-block + .side-block { border-top: 1px solid var(--line); }
+
+    .side-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .side-heading span { color: var(--muted); font-size: 11px; }
+
+    .alert-list,
+    .agent-list,
+    .activity-list {
+      display: grid;
+      gap: 9px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .alert-item {
+      padding-left: 10px;
+      border-left: 3px solid var(--warning);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .alert-item.danger { border-color: var(--danger); }
+    .alert-item.human { border-color: var(--human); }
+    .alert-item strong { display: block; color: var(--ink); }
+    .alert-item span { color: var(--muted); }
+
+    .agent-item {
+      display: grid;
+      grid-template-columns: 9px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      min-height: 37px;
+    }
+
+    .agent-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #98a2ad;
+    }
+
+    .agent-dot.running { background: var(--accent); }
+    .agent-dot.idle { background: var(--success); }
+    .agent-dot.failed { background: var(--danger); }
+    .agent-dot.waiting { background: var(--warning); }
+
+    .agent-name {
+      overflow: hidden;
+      font-size: 12px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agent-role { color: var(--muted); font-size: 11px; }
+
+    .activity-item {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .activity-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .activity-copy { color: #44505c; }
+    .activity-copy strong { color: var(--ink); }
+
+    .detail-dialog {
+      width: min(680px, calc(100vw - 32px));
+      max-height: min(780px, calc(100vh - 32px));
+      padding: 0;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      color: var(--ink);
+    }
+
+    .detail-dialog::backdrop { background: rgba(24, 33, 43, 0.48); }
+
+    .dialog-header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .dialog-header h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+    .dialog-header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+
+    .icon-button {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .dialog-body { padding: 20px; }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .detail-field {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-subtle);
+    }
+
+    .detail-label { display: block; color: var(--muted); font-size: 10px; }
+    .detail-value { display: block; margin-top: 5px; overflow-wrap: anywhere; font-size: 12px; font-weight: 700; }
+
+    .detail-block + .detail-block { margin-top: 20px; }
+    .detail-block h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0; }
+    .detail-block p { margin: 0; color: #44505c; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+    .detail-block ul { margin: 0; padding-left: 18px; color: #44505c; font-size: 12px; line-height: 1.7; }
+
+    .timeline { margin: 0; padding: 0; list-style: none; }
+    .timeline li { position: relative; padding: 0 0 14px 19px; font-size: 12px; line-height: 1.45; }
+    .timeline li::before { content: ""; position: absolute; top: 5px; left: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+    .timeline li::after { content: ""; position: absolute; top: 13px; bottom: 0; left: 5px; width: 1px; background: var(--line-strong); }
+    .timeline li:last-child::after { display: none; }
+    .timeline time { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+
+    @media (max-width: 1080px) {
+      .summary-band { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .metric:nth-child(3) { border-right: 0; }
+      .metric:nth-child(-n + 3) { border-bottom: 1px solid var(--line); }
+      .content-grid { grid-template-columns: minmax(0, 1fr); }
+      .side-section { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .side-block + .side-block { border-top: 0; border-left: 1px solid var(--line); }
+    }
+
+    @media (max-width: 760px) {
+      .app-header { align-items: flex-start; flex-direction: column; padding: 14px 16px; }
+      .header-actions { width: 100%; justify-content: space-between; }
+      .connection-label { overflow: hidden; text-overflow: ellipsis; }
+      .main { padding: 16px 12px 28px; }
+      .summary-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric { min-height: 82px; padding: 14px; border-bottom: 1px solid var(--line); }
+      .metric:nth-child(2n) { border-right: 0; }
+      .metric:nth-last-child(-n + 2) { border-bottom: 0; }
+      .metric:nth-child(3) { border-right: 1px solid var(--line); }
+      .workspace-meta { align-items: flex-start; flex-direction: column; justify-content: center; padding: 10px 2px; gap: 4px; }
+      .section-header { align-items: stretch; flex-direction: column; padding: 12px; }
+      .task-tools { align-items: stretch; flex-direction: column; }
+      .search-input { width: 100%; }
+      .segments { overflow-x: auto; }
+      .segments button { flex: 1 0 auto; }
+      .table-wrap { overflow: visible; }
+      table, thead, tbody, tr, td { display: block; }
+      thead { display: none; }
+      tbody tr { padding: 13px; border-bottom: 1px solid var(--line); }
+      tbody tr:last-child { border-bottom: 0; }
+      td { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; padding: 5px 0; border: 0; }
+      td::before { content: attr(data-label); flex: 0 0 72px; color: var(--muted); font-size: 10px; }
+      td:first-child { display: block; padding-bottom: 9px; }
+      td:first-child::before { display: none; }
+      .task-title { white-space: normal; }
+      .progress-cell { width: min(200px, 100%); }
+      .side-section { grid-template-columns: minmax(0, 1fr); }
+      .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
+      .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 420px) {
+      .brand p { display: none; }
+      .header-actions { align-items: stretch; flex-direction: column; }
+      .primary-button { width: 100%; }
+      .detail-grid { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">LA</div>
+      <div>
+        <h1>Local Agent Loop</h1>
+        <p>本地任务运行状态</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="connection" class="connection" data-state="idle" role="status" aria-live="polite">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span id="connectionLabel" class="connection-label">正在连接 SQLite 服务</span>
+      </div>
+      <button id="refreshState" class="primary-button" type="button">刷新</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <div id="notice" class="notice" role="alert">
+      <span id="noticeText"></span>
+      <button id="dismissNotice" type="button" aria-label="关闭提示" title="关闭">×</button>
+    </div>
+
+    <section class="summary-band" aria-label="任务总览">
+      <div class="metric"><div class="metric-label">全部任务</div><div id="metricTotal" class="metric-value">0</div></div>
+      <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
+      <div class="metric"><div class="metric-label">执行中</div><div id="metricRunning" class="metric-value">0</div></div>
+      <div class="metric"><div class="metric-label">等待人工</div><div id="metricHuman" class="metric-value warning">0</div></div>
+      <div class="metric"><div class="metric-label">卡顿或阻塞</div><div id="metricBlocked" class="metric-value warning">0</div></div>
+      <div class="metric"><div class="metric-label">失败</div><div id="metricFailed" class="metric-value danger">0</div></div>
+    </section>
+
+    <div id="distribution" class="distribution" aria-label="任务状态分布">
+      <span class="done" style="width: 0"></span>
+      <span class="active" style="width: 0"></span>
+      <span class="attention" style="width: 0"></span>
+      <span class="failed" style="width: 0"></span>
+      <span class="queued" style="width: 100%"></span>
+    </div>
+
+    <div class="workspace-meta">
+      <span id="workspaceName"><strong>未连接</strong></span>
+      <span id="workspaceUpdated">更新时间：--</span>
+    </div>
+
+    <div class="content-grid">
+      <section class="task-section">
+        <div class="section-header">
+          <h2>任务</h2>
+          <div class="task-tools">
+            <input id="search" class="search-input" type="search" placeholder="搜索 ID、标题或 Agent" aria-label="搜索任务">
+            <div class="segments" aria-label="任务筛选">
+              <button type="button" data-filter="all" aria-pressed="true">全部</button>
+              <button type="button" data-filter="active" aria-pressed="false">执行中</button>
+              <button type="button" data-filter="attention" aria-pressed="false">需关注</button>
+              <button type="button" data-filter="closed" aria-pressed="false">已结束</button>
+            </div>
+          </div>
+        </div>
+        <div id="taskTable" class="table-wrap" hidden>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 31%">任务</th>
+                <th style="width: 15%">状态</th>
+                <th style="width: 10%">优先级</th>
+                <th style="width: 14%">Agent</th>
+                <th style="width: 18%">进度</th>
+                <th style="width: 12%">耗时</th>
+              </tr>
+            </thead>
+            <tbody id="taskRows"></tbody>
+          </table>
+        </div>
+        <div id="taskEmpty" class="empty-state">
+          <div><strong>正在载入任务</strong><span>等待 SQLite 状态服务响应</span></div>
+        </div>
+      </section>
+
+      <aside class="side-section" aria-label="运行详情">
+        <section class="side-block">
+          <div class="side-heading"><h2>需要关注</h2><span id="alertCount">0 项</span></div>
+          <ul id="alertList" class="alert-list"><li class="muted">暂无异常</li></ul>
+        </section>
+        <section class="side-block">
+          <div class="side-heading"><h2>Agent</h2><span id="agentCount">0 个</span></div>
+          <ul id="agentList" class="agent-list"><li class="muted">暂无 Agent</li></ul>
+        </section>
+        <section class="side-block">
+          <div class="side-heading"><h2>最近活动</h2><span>状态变更</span></div>
+          <ul id="activityList" class="activity-list"><li class="muted">暂无活动</li></ul>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <dialog id="taskDialog" class="detail-dialog">
+    <div class="dialog-header">
+      <div><h2 id="dialogTitle"></h2><p id="dialogSubtitle"></p></div>
+      <button id="closeDialog" class="icon-button" type="button" aria-label="关闭任务详情" title="关闭">×</button>
+    </div>
+    <div id="dialogBody" class="dialog-body"></div>
+  </dialog>
+
+  <script>
+    "use strict";
+
+    const STATUS_LABELS = {
+      DRAFT: "草稿",
+      PENDING: "待执行",
+      CLAIMED: "已领取",
+      RUNNING: "执行中",
+      WAITING_CONFLICT: "等待冲突",
+      WAITING_HUMAN: "等待人工",
+      BLOCKED: "已阻塞",
+      STALLED: "已卡顿",
+      SUCCEEDED: "已完成",
+      CONFIRMED: "已确认",
+      FAILED: "失败",
+      CANCELLED: "已取消"
+    };
+    const PRIORITY_LABELS = { critical: "紧急", high: "高", medium: "中", low: "低" };
+    const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"]);
+    const ATTENTION_STATUSES = new Set(["WAITING_CONFLICT", "WAITING_HUMAN", "BLOCKED", "STALLED", "FAILED"]);
+    const CLOSED_STATUSES = new Set(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
+    const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+    const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
+    const TASK_SCHEMA_VERSION = "2.0.0";
+    const STATE_ENDPOINT = "/api/state";
+
+    const elements = {
+      connection: document.querySelector("#connection"),
+      connectionLabel: document.querySelector("#connectionLabel"),
+      refreshState: document.querySelector("#refreshState"),
+      notice: document.querySelector("#notice"),
+      noticeText: document.querySelector("#noticeText"),
+      dismissNotice: document.querySelector("#dismissNotice"),
+      search: document.querySelector("#search"),
+      taskTable: document.querySelector("#taskTable"),
+      taskEmpty: document.querySelector("#taskEmpty"),
+      taskRows: document.querySelector("#taskRows"),
+      metricTotal: document.querySelector("#metricTotal"),
+      metricRate: document.querySelector("#metricRate"),
+      metricRunning: document.querySelector("#metricRunning"),
+      metricHuman: document.querySelector("#metricHuman"),
+      metricBlocked: document.querySelector("#metricBlocked"),
+      metricFailed: document.querySelector("#metricFailed"),
+      distribution: document.querySelector("#distribution"),
+      workspaceName: document.querySelector("#workspaceName"),
+      workspaceUpdated: document.querySelector("#workspaceUpdated"),
+      alertList: document.querySelector("#alertList"),
+      alertCount: document.querySelector("#alertCount"),
+      agentList: document.querySelector("#agentList"),
+      agentCount: document.querySelector("#agentCount"),
+      activityList: document.querySelector("#activityList"),
+      taskDialog: document.querySelector("#taskDialog"),
+      dialogTitle: document.querySelector("#dialogTitle"),
+      dialogSubtitle: document.querySelector("#dialogSubtitle"),
+      dialogBody: document.querySelector("#dialogBody"),
+      closeDialog: document.querySelector("#closeDialog")
+    };
+
+    let state = null;
+    let pollTimer = null;
+    let currentFilter = "all";
+    let currentQuery = "";
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function statusClass(status) {
+      return `status-${String(status).toLowerCase().replaceAll("_", "-")}`;
+    }
+
+    function setConnection(mode, label) {
+      elements.connection.dataset.state = mode;
+      elements.connectionLabel.textContent = label;
+    }
+
+    function showNotice(message) {
+      elements.noticeText.textContent = message;
+      elements.notice.classList.add("is-visible");
+    }
+
+    function hideNotice() {
+      elements.notice.classList.remove("is-visible");
+    }
+
+    function formatDate(value, includeDate = true) {
+      if (!value) return "--";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "时间无效";
+      return new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        month: includeDate ? "2-digit" : undefined,
+        day: includeDate ? "2-digit" : undefined,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: includeDate ? undefined : "2-digit",
+        hour12: false
+      }).format(date);
+    }
+
+    function formatDuration(start, end) {
+      if (!start) return "--";
+      const startTime = new Date(start).getTime();
+      const endTime = end ? new Date(end).getTime() : Date.now();
+      if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) return "--";
+      const seconds = Math.max(0, Math.floor((endTime - startTime) / 1000));
+      if (seconds < 60) return `${seconds}秒`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes}分钟`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours}小时 ${minutes % 60}分`;
+      return `${Math.floor(hours / 24)}天 ${hours % 24}小时`;
+    }
+
+    function validateState(candidate) {
+      const errors = [];
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) errors.push("根节点必须是对象");
+      if (candidate?.schema_version !== TASK_SCHEMA_VERSION) {
+        errors.push(`schema_version 必须为 ${TASK_SCHEMA_VERSION}`);
+      }
+      if (!candidate?.workspace || !Number.isInteger(candidate.workspace.revision)) errors.push("workspace.revision 无效");
+      if (!Array.isArray(candidate?.tasks)) errors.push("tasks 必须是数组");
+      if (!Array.isArray(candidate?.agents)) errors.push("agents 必须是数组");
+      const ids = new Set();
+      for (const [index, task] of (candidate?.tasks ?? []).entries()) {
+        if (!task?.id || ids.has(task.id)) errors.push(`tasks[${index}].id 缺失或重复`);
+        ids.add(task?.id);
+        if (!VALID_STATUSES.has(task?.status)) errors.push(`任务 ${task?.id ?? index} 状态无效`);
+        if (!Number.isInteger(task?.progress?.percent) || task.progress.percent < 0 || task.progress.percent > 100) {
+          errors.push(`任务 ${task?.id ?? index} 进度无效`);
+        }
+      }
+      if (errors.length) throw new Error(errors.join("；"));
+      return candidate;
+    }
+
+    function applyState(candidate) {
+      try {
+        state = validateState(candidate);
+        render();
+        hideNotice();
+        setConnection("live", `SQLite · revision ${state.workspace.revision}`);
+      } catch (error) {
+        setConnection("error", "状态响应无效");
+        showNotice(`未应用无效内容，页面保留最后一次有效数据。${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    async function refreshState() {
+      try {
+        const response = await fetch(STATE_ENDPOINT, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        applyState(await response.json());
+      } catch (error) {
+        setConnection("error", "SQLite 服务不可用");
+        showNotice(`无法读取 ${STATE_ENDPOINT}。${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    function startPolling() {
+      stopPolling();
+      const interval = Math.max(500, state?.runtime_config?.dashboard?.poll_interval_ms ?? 2000);
+      pollTimer = window.setInterval(refreshState, interval);
+    }
+
+    function stopPolling() {
+      if (pollTimer !== null) window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    function taskMatches(task) {
+      if (currentFilter === "active" && !ACTIVE_STATUSES.has(task.status)) return false;
+      if (currentFilter === "attention" && !ATTENTION_STATUSES.has(task.status) && !isHeartbeatLate(task)) return false;
+      if (currentFilter === "closed" && !CLOSED_STATUSES.has(task.status)) return false;
+      if (!currentQuery) return true;
+      return [task.id, task.title, task.description, task.assigned_agent]
+        .filter(Boolean)
+        .some((value) => String(value).toLocaleLowerCase("zh-CN").includes(currentQuery));
+    }
+
+    function isHeartbeatLate(task) {
+      if (!ACTIVE_STATUSES.has(task.status) || !task.heartbeat_at) return false;
+      const threshold = (state?.settings?.stalled_after_seconds ?? 300) * 1000;
+      return Date.now() - new Date(task.heartbeat_at).getTime() > threshold;
+    }
+
+    function render() {
+      const tasks = state?.tasks ?? [];
+      const counts = tasks.reduce((result, task) => {
+        result[task.status] = (result[task.status] ?? 0) + 1;
+        return result;
+      }, {});
+      const succeeded = (counts.SUCCEEDED ?? 0) + (counts.CONFIRMED ?? 0);
+      const running = (counts.RUNNING ?? 0) + (counts.CLAIMED ?? 0);
+      const blocked = (counts.WAITING_CONFLICT ?? 0) + (counts.BLOCKED ?? 0) + (counts.STALLED ?? 0);
+      const failed = counts.FAILED ?? 0;
+      const human = counts.WAITING_HUMAN ?? 0;
+      const queued = (counts.DRAFT ?? 0) + (counts.PENDING ?? 0) + (counts.CANCELLED ?? 0);
+      const total = tasks.length;
+
+      elements.metricTotal.textContent = total;
+      elements.metricRate.textContent = total ? `${Math.round((succeeded / total) * 100)}%` : "0%";
+      elements.metricRunning.textContent = running;
+      elements.metricHuman.textContent = human;
+      elements.metricBlocked.textContent = blocked;
+      elements.metricFailed.textContent = failed;
+      const widths = [succeeded, running, human + blocked, failed, queued].map((value) => total ? `${(value / total) * 100}%` : "0%");
+      [...elements.distribution.children].forEach((child, index) => { child.style.width = widths[index]; });
+      elements.distribution.setAttribute("aria-label", `任务状态分布：完成 ${succeeded}，执行中 ${running}，需关注 ${human + blocked}，失败 ${failed}，其他 ${queued}`);
+
+      elements.workspaceName.innerHTML = `<strong>${escapeHtml(state.workspace.name)}</strong> · revision ${escapeHtml(state.workspace.revision)} · ${escapeHtml(state.workspace.writer)}`;
+      elements.workspaceUpdated.textContent = `更新时间：${formatDate(state.workspace.updated_at)} · ${escapeHtml(state.workspace.timezone)}`;
+
+      renderTasks(tasks);
+      renderAlerts(tasks);
+      renderAgents(state.agents ?? []);
+      renderActivity(tasks);
+    }
+
+    function renderTasks(tasks) {
+      const visible = tasks
+        .filter(taskMatches)
+        .sort((left, right) => {
+          const priorityDifference = (PRIORITY_ORDER[left.priority] ?? 9) - (PRIORITY_ORDER[right.priority] ?? 9);
+          if (priorityDifference !== 0) return priorityDifference;
+          return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+        });
+
+      elements.taskRows.innerHTML = visible.map((task) => `
+        <tr tabindex="0" data-task-id="${escapeHtml(task.id)}" aria-label="查看任务 ${escapeHtml(task.title)}">
+          <td class="task-cell">
+            <span class="task-title">${escapeHtml(task.title)}</span>
+            <span class="task-id">${escapeHtml(task.id)}</span>
+          </td>
+          <td data-label="状态"><span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span></td>
+          <td data-label="优先级"><span class="priority-badge priority-${escapeHtml(task.priority)}">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></td>
+          <td data-label="Agent"><span>${escapeHtml(task.assigned_agent ?? "未分配")}</span></td>
+          <td data-label="进度">
+            <div class="progress-cell">
+              <div class="progress-track" aria-hidden="true"><div class="progress-fill" style="width: ${task.progress.percent}%"></div></div>
+              <span>${task.progress.percent}%</span>
+            </div>
+          </td>
+          <td data-label="耗时"><span>${escapeHtml(formatDuration(task.started_at, task.completed_at))}</span></td>
+        </tr>
+      `).join("");
+
+      elements.taskTable.hidden = visible.length === 0;
+      elements.taskEmpty.hidden = visible.length > 0;
+      if (tasks.length === 0) {
+        elements.taskEmpty.innerHTML = "<div><strong>当前没有任务</strong><span>任务文件已连接</span></div>";
+      } else if (visible.length === 0) {
+        elements.taskEmpty.innerHTML = "<div><strong>没有匹配任务</strong><span>调整筛选条件或搜索内容</span></div>";
+      }
+    }
+
+    function renderAlerts(tasks) {
+      const alerts = [];
+      for (const task of tasks) {
+        if (task.status === "WAITING_HUMAN") {
+          alerts.push({ kind: "human", task, title: "等待人工决定", detail: task.human_intervention?.question ?? task.progress?.next_step ?? "需要人工介入" });
+        } else if (task.status === "FAILED") {
+          alerts.push({ kind: "danger", task, title: "任务失败", detail: task.result?.error ?? "未记录失败原因" });
+        } else if (["WAITING_CONFLICT", "BLOCKED", "STALLED"].includes(task.status)) {
+          alerts.push({ kind: "warning", task, title: STATUS_LABELS[task.status], detail: task.progress?.next_step ?? task.progress?.summary ?? "等待处理" });
+        } else if (isHeartbeatLate(task)) {
+          alerts.push({ kind: "warning", task, title: "心跳可能超时", detail: `最后心跳 ${formatDate(task.heartbeat_at)}` });
+        }
+      }
+      elements.alertCount.textContent = `${alerts.length} 项`;
+      elements.alertList.innerHTML = alerts.length ? alerts.slice(0, 6).map((alert) => `
+        <li class="alert-item ${escapeHtml(alert.kind)}">
+          <strong>${escapeHtml(alert.task.id)} · ${escapeHtml(alert.title)}</strong>
+          <span>${escapeHtml(alert.detail)}</span>
+        </li>
+      `).join("") : '<li class="muted">暂无异常</li>';
+    }
+
+    function renderAgents(agents) {
+      elements.agentCount.textContent = `${agents.length} 个`;
+      elements.agentList.innerHTML = agents.length ? agents.map((agent) => `
+        <li class="agent-item">
+          <span class="agent-dot ${escapeHtml(agent.status.toLowerCase())}" aria-hidden="true"></span>
+          <span class="agent-name">${escapeHtml(agent.id)}</span>
+          <span class="agent-role">${escapeHtml(agent.role)} · ${escapeHtml(agent.status)}</span>
+        </li>
+      `).join("") : '<li class="muted">暂无 Agent</li>';
+    }
+
+    function renderActivity(tasks) {
+      const events = tasks.flatMap((task) => (task.history ?? []).map((entry) => ({ ...entry, taskId: task.id })))
+        .sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
+        .slice(0, 8);
+      elements.activityList.innerHTML = events.length ? events.map((event) => `
+        <li class="activity-item">
+          <span class="activity-time">${escapeHtml(formatDate(event.at, false))}</span>
+          <span class="activity-copy"><strong>${escapeHtml(event.taskId)}</strong> ${escapeHtml(STATUS_LABELS[event.to] ?? event.to)} · ${escapeHtml(event.reason)}</span>
+        </li>
+      `).join("") : '<li class="muted">暂无活动</li>';
+    }
+
+    function listBlock(title, values, emptyText = "无") {
+      const items = Array.isArray(values) ? values : [];
+      return `<section class="detail-block"><h3>${escapeHtml(title)}</h3>${items.length
+        ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+        : `<p class="muted">${escapeHtml(emptyText)}</p>`}</section>`;
+    }
+
+    function openTask(taskId) {
+      const task = state?.tasks?.find((candidate) => candidate.id === taskId);
+      if (!task) return;
+      elements.dialogTitle.textContent = task.title;
+      elements.dialogSubtitle.textContent = `${task.id} · ${STATUS_LABELS[task.status]} · revision ${state.workspace.revision}`;
+      const intervention = task.human_intervention?.required
+        ? `<section class="detail-block"><h3>人工介入</h3><p>${escapeHtml(task.human_intervention.question ?? "需要人工确认")}</p>${listBlock("可选方案", task.human_intervention.options)}</section>`
+        : "";
+      const result = task.result?.summary || task.result?.error
+        ? `<section class="detail-block"><h3>结果</h3><p>${escapeHtml(task.result.summary ?? task.result.error)}</p></section>`
+        : "";
+      const timeline = (task.history ?? []).slice().reverse().map((entry) => `
+        <li><strong>${escapeHtml(STATUS_LABELS[entry.to] ?? entry.to)}</strong> · ${escapeHtml(entry.reason)}<time>${escapeHtml(formatDate(entry.at))} · ${escapeHtml(entry.actor)}</time></li>
+      `).join("");
+      elements.dialogBody.innerHTML = `
+        <div class="detail-grid">
+          <div class="detail-field"><span class="detail-label">状态</span><span class="detail-value">${escapeHtml(STATUS_LABELS[task.status])}</span></div>
+          <div class="detail-field"><span class="detail-label">Agent</span><span class="detail-value">${escapeHtml(task.assigned_agent ?? "未分配")}</span></div>
+          <div class="detail-field"><span class="detail-label">尝试次数</span><span class="detail-value">${escapeHtml(task.attempt)}</span></div>
+          <div class="detail-field"><span class="detail-label">开始时间</span><span class="detail-value">${escapeHtml(formatDate(task.started_at))}</span></div>
+          <div class="detail-field"><span class="detail-label">最后心跳</span><span class="detail-value">${escapeHtml(formatDate(task.heartbeat_at))}</span></div>
+          <div class="detail-field"><span class="detail-label">执行耗时</span><span class="detail-value">${escapeHtml(formatDuration(task.started_at, task.completed_at))}</span></div>
+        </div>
+        <section class="detail-block"><h3>任务描述</h3><p>${escapeHtml(task.description || "无")}</p></section>
+        <section class="detail-block"><h3>当前进展 · ${escapeHtml(task.progress.percent)}%</h3><p>${escapeHtml(task.progress.summary || "暂无进展摘要")}</p></section>
+        ${listBlock("已完成", task.progress.completed)}
+        ${listBlock("验收条件", task.acceptance)}
+        ${intervention}
+        ${result}
+        ${listBlock("验证记录", task.result?.verification)}
+        ${listBlock("附件", (task.attachments ?? []).map((attachment) => `${attachment.role}: ${attachment.path}`))}
+        <section class="detail-block"><h3>状态历史</h3><ul class="timeline">${timeline}</ul></section>
+      `;
+      elements.taskDialog.showModal();
+    }
+
+    elements.refreshState.addEventListener("click", refreshState);
+    elements.dismissNotice.addEventListener("click", hideNotice);
+    elements.search.addEventListener("input", (event) => {
+      currentQuery = event.target.value.trim().toLocaleLowerCase("zh-CN");
+      if (state) renderTasks(state.tasks);
+    });
+    document.querySelectorAll("[data-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        currentFilter = button.dataset.filter;
+        document.querySelectorAll("[data-filter]").forEach((candidate) => candidate.setAttribute("aria-pressed", String(candidate === button)));
+        if (state) renderTasks(state.tasks);
+      });
+    });
+    elements.taskRows.addEventListener("click", (event) => {
+      const row = event.target.closest("tr[data-task-id]");
+      if (row) openTask(row.dataset.taskId);
+    });
+    elements.taskRows.addEventListener("keydown", (event) => {
+      if (!["Enter", " "].includes(event.key)) return;
+      const row = event.target.closest("tr[data-task-id]");
+      if (!row) return;
+      event.preventDefault();
+      openTask(row.dataset.taskId);
+    });
+    elements.closeDialog.addEventListener("click", () => elements.taskDialog.close());
+    elements.taskDialog.addEventListener("click", (event) => {
+      if (event.target === elements.taskDialog) elements.taskDialog.close();
+    });
+    window.addEventListener("beforeunload", stopPolling);
+
+    refreshState().finally(startPolling);
+  </script>
+</body>
+</html>

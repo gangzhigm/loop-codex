@@ -1,0 +1,15 @@
+{
+  "config_version": "1.0.0",
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 4178,
+    "poll_interval_ms": 2000
+  },
+  "automations": {
+    "worker_interval_minutes": 10,
+    "health_interval_minutes": 30
+  },
+  "health": {
+    "failure_threshold": 3
+  }
+}

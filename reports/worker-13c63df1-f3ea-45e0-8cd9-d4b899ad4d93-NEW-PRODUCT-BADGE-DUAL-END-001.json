@@ -1,0 +1,43 @@
+{
+  "status": "WAITING_HUMAN",
+  "task_id": "NEW-PRODUCT-BADGE-DUAL-END-001",
+  "execution_id": "worker-13c63df1-f3ea-45e0-8cd9-d4b899ad4d93",
+  "completed_at": "2026-07-29T18:29:01+08:00",
+  "summary": "已在 PC 商品列表行、PC 商品网格卡片、小程序商品列表/卡片、小程序商品详情主图和详情推荐卡片接入严格布尔新品角标；未修改接口请求参数、筛选、排序、价格、库存、加购或埋点。由于未能从小程序 OpenAPI 或真实接口响应确认返回字段和值域，按任务要求转人工确认。",
+  "confirmed_facts": [
+    "PC PDP 已存在 product.newProduct === true 的新品角标判断。",
+    "PC 列表和分类相关请求使用 newProductFilter/newProductSort 作为请求参数。",
+    "小程序列表调用 /rs-product/api/guest-mini/rsProduct/v1/mini/product/pcProductListV2。",
+    "小程序详情调用 /rs-product/api/guest-mini/rsProduct/v1/mini/product/pcProductDetail。",
+    "小程序 OpenAPI 文档仅确认请求参数 newProductFilter 为 boolean，未找到响应字段 newProduct 或 isNew 的 schema。"
+  ],
+  "reasonable_inferences": [
+    "小程序商品服务 mini 路径与 PC 商品服务语义一致，现有代码也已尝试读取 isNew/newProduct，但这不能替代真实响应和值域确认。"
+  ],
+  "insufficient_evidence": [
+    "无法确认小程序列表和详情接口响应中权威新品字段究竟是 newProduct、isNew 还是其他字段。",
+    "无法确认小程序响应字段是否保证 boolean true/false，或是否可能返回 0/1、字符串等兼容值。"
+  ],
+  "changes": [
+    "rs/rs-mall4pc-pro/src/components/product-list-view/index.vue: 列表 badge-row 增加新品角标，判断为 newProduct === true。",
+    "rs/rs-mall4pc-pro/src/components/product-grid/index.vue: 网格图片角标容器增加新品角标，判断为 newProduct === true。",
+    "rs/rs-mall4pc-pro/src/test/components/product-list-components.spec.js: 增加严格布尔新品角标局部单测。",
+    "rs/rschina-mini/pages/shop-goods/good-list/good-list.js: 新品归一化改为严格 boolean true，保留 newProduct 映射。",
+    "rs/rschina-mini/pages/shop-goods/good-list/good-list.wxml: 卡片和列表图片角标容器增加新品角标。",
+    "rs/rschina-mini/pages/shop-goods/good-list/good-list.wxss: 增加新品图片角标样式。",
+    "rs/rschina-mini/pages/shop-core/good-detail/good-detail.js: 主商品和推荐商品新品归一化改为严格 boolean true，保留 newProduct 映射。",
+    "rs/rschina-mini/pages/shop-core/good-detail/good-detail.wxml: 详情主图和推荐卡片图片角标容器增加新品角标。",
+    "rs/rschina-mini/pages/shop-core/good-detail/good-detail.wxss: 增加详情新品角标样式。"
+  ],
+  "verification": [
+    "PASS: pnpm exec vitest run --config src/test/vitest.config.js src/test/components/product-list-components.spec.js -t \"renders new product badges only for strict boolean true\"",
+    "PASS: node --check pages/shop-goods/good-list/good-list.js",
+    "PASS: node --check pages/shop-core/good-detail/good-detail.js",
+    "PASS: git diff --check for touched PC files, with only line-ending warnings from Git output.",
+    "PASS: git diff --check for touched mini files, with only line-ending warnings from Git output.",
+    "PASS: rg check found no remaining Boolean(isNew || newProduct) truthy mappings in the touched mini JS files.",
+    "PASS_WITH_WARNINGS: pnpm exec eslint src/components/product-list-view/index.vue src/components/product-grid/index.vue src/test/components/product-list-components.spec.js returned 0 errors and 18 existing style warnings.",
+    "FAILED_UNRELATED: broader targeted Vitest command including existing product-list-components and product-detail specs failed on pre-existing action layout/subcategory image/package quantity assertions outside this新品角标 change."
+  ],
+  "question": "请确认小程序 pcProductListV2 和 pcProductDetail 响应中表示新品的权威字段名、类型和值域：是否为 boolean newProduct 且仅 true 表示新品？如果不是，请提供真实响应样例或接口 schema。"
+}
