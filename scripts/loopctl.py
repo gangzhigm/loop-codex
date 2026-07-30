@@ -5,7 +5,7 @@ import json
 import shutil
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,20 +22,18 @@ from loopdb import (
     bump_revision,
     commit,
     connect,
+    configured_projects,
+    execution_setting,
     expires_at,
     initialize_schema,
     insert_task,
     json_dump,
     load_initialization_config,
-    metadata,
     now_shanghai,
-    refresh_projects,
+    parse_project_registry,
     replace_ordered_text,
     resolve_scope_key,
     rollback,
-    set_metadata,
-    set_setting,
-    setting,
     state_payload,
     task_dict,
     task_exists,
@@ -59,6 +57,12 @@ def output(payload: dict[str, Any], exit_code: int = 0) -> None:
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_json_source(source: str) -> Any:
+    if source == "-":
+        return json.loads(sys.stdin.read())
+    return read_json(Path(source).resolve())
 
 
 def backup_legacy(tasks_path: Path, inbox_path: Path, backup_root: Path) -> Path:
@@ -129,40 +133,15 @@ def command_init(args: argparse.Namespace) -> None:
         initialize_schema(database)
         transaction(database)
         database.execute("PRAGMA defer_foreign_keys = ON")
-        workspace = legacy.get("workspace") or {}
-        set_metadata(database, "workspace_name", workspace.get("name", "Cross-Project Local Agent Loop"))
-        set_metadata(database, "task_root", workspace.get("task_root", r"E:\code"))
-        set_metadata(database, "project_registry", workspace.get("project_registry", "根目录清单.md"))
-        set_metadata(database, "revision", str(int(workspace.get("revision", 0)) + 1))
-        set_metadata(database, "updated_at", now_shanghai())
-        set_metadata(database, "writer", "sqlite-migration")
-        set_metadata(database, "legacy_schema_version", str(legacy.get("schema_version", "unknown")))
-
-        defaults = {
-            "heartbeat_interval_seconds": 30,
-            "stalled_after_seconds": 300,
-            "task_lease_seconds": 3600,
-            "max_attempts": 2,
-            "max_parallel_tasks": 6,
-            "scope_conflict_mode": "project",
-            "require_human_approval_for": [
-                "delete",
-                "publish",
-                "git_commit",
-                "external_message",
-                "credential_access",
-            ],
-        }
-        for key, value in defaults.items():
-            if key in (legacy.get("settings") or {}) and key not in {
-                "max_parallel_tasks",
-            }:
-                value = legacy["settings"][key]
-            set_setting(database, key, value)
-
-        projects = refresh_projects(database, registry_path)
+        projects = parse_project_registry(registry_path)
+        project_paths = [item["path"] for item in projects]
         for task in legacy.get("tasks") or []:
-            insert_task(database, normalize_legacy_task(task), actor="sqlite-migration")
+            insert_task(
+                database,
+                normalize_legacy_task(task),
+                actor="sqlite-migration",
+                project_paths=project_paths,
+            )
         for item in inbox.get("tasks") or []:
             stamp = now_shanghai()
             task = {
@@ -187,25 +166,17 @@ def command_init(args: argparse.Namespace) -> None:
                     }
                 ],
             }
-            insert_task(database, task, actor="sqlite-migration")
-        for request in legacy.get("change_requests") or []:
-            database.execute(
-                "INSERT INTO change_requests(id, action, task_id, reason, requested_at, status, payload_json) "
-                "VALUES(?, ?, ?, ?, ?, ?, '{}')",
-                (
-                    request.get("id"),
-                    request.get("action"),
-                    request.get("task_id"),
-                    request.get("reason", ""),
-                    request.get("requested_at") or now_shanghai(),
-                    request.get("status", "PENDING"),
-                ),
+            insert_task(
+                database,
+                task,
+                actor="sqlite-migration",
+                project_paths=project_paths,
             )
-        commit(database)
         validation = validate_database(database)
         expected = len(legacy.get("tasks") or []) + len(inbox.get("tasks") or [])
         if not validation["ok"] or validation["tasks"] != expected:
             raise LoopError(f"迁移校验失败: expected={expected}, validation={validation}")
+        commit(database)
         output(
             {
                 "outcome": "INITIALIZED",
@@ -227,17 +198,25 @@ def command_init(args: argparse.Namespace) -> None:
 
 def recover_expired(database: sqlite3.Connection) -> list[dict[str, str]]:
     stamp = now_shanghai()
+    stalled_cutoff = (
+        datetime.fromisoformat(stamp)
+        - timedelta(seconds=int(execution_setting("stalled_after_seconds", 300)))
+    ).isoformat(timespec="milliseconds")
     expired = database.execute(
-        "SELECT execution_id, task_id FROM executions WHERE status='RUNNING' AND lease_expires_at<=?",
-        (stamp,),
+        "SELECT execution_id, task_id, heartbeat_at, lease_expires_at FROM executions "
+        "WHERE status='RUNNING' AND (lease_expires_at<=? OR heartbeat_at<=?)",
+        (stamp, stalled_cutoff),
     ).fetchall()
     recovered: list[dict[str, str]] = []
-    max_attempts = int(setting(database, "max_attempts", 2))
+    max_attempts = int(execution_setting("max_attempts", 2))
     for execution in expired:
+        heartbeat_stalled = execution["heartbeat_at"] <= stalled_cutoff
+        recovery_outcome = "HEARTBEAT_STALLED" if heartbeat_stalled else "LEASE_EXPIRED"
+        recovery_reason = "执行心跳超时" if heartbeat_stalled else "执行租约过期"
         task = database.execute("SELECT status, attempt FROM tasks WHERE id=?", (execution["task_id"],)).fetchone()
         database.execute(
-            "UPDATE executions SET status='EXPIRED', finished_at=?, outcome='LEASE_EXPIRED' WHERE execution_id=?",
-            (stamp, execution["execution_id"]),
+            "UPDATE executions SET status='EXPIRED', finished_at=?, outcome=? WHERE execution_id=?",
+            (stamp, recovery_outcome, execution["execution_id"]),
         )
         database.execute("DELETE FROM scope_locks WHERE execution_id=?", (execution["execution_id"],))
         if not task or task["status"] != "RUNNING":
@@ -254,17 +233,19 @@ def recover_expired(database: sqlite3.Connection) -> list[dict[str, str]]:
                 new_status,
                 stamp,
                 new_status,
-                "执行租约过期，任务已恢复。" if new_status == "PENDING" else "执行租约过期且达到最大尝试次数。",
+                f"{recovery_reason}，任务已恢复。" if new_status == "PENDING" else f"{recovery_reason}且达到最大尝试次数。",
                 "等待下一次领取。" if new_status == "PENDING" else None,
-                None if new_status == "PENDING" else "执行租约过期且达到最大尝试次数。",
+                None if new_status == "PENDING" else f"{recovery_reason}且达到最大尝试次数。",
                 execution["task_id"],
             ),
         )
         database.execute(
             "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) VALUES(?, ?, 'RUNNING', ?, 'lease-recovery', ?)",
-            (execution["task_id"], stamp, new_status, "执行租约过期，按最大尝试次数恢复。"),
+            (execution["task_id"], stamp, new_status, f"{recovery_reason}，按最大尝试次数恢复。"),
         )
-        recovered.append({"task_id": execution["task_id"], "status": new_status})
+        recovered.append(
+            {"task_id": execution["task_id"], "status": new_status, "outcome": recovery_outcome}
+        )
     return recovered
 
 
@@ -306,6 +287,50 @@ def dependencies_ready(database: sqlite3.Connection, task_id: str) -> bool:
     return True
 
 
+def task_scopes_and_conflicts(
+    database: sqlite3.Connection, task_id: str
+) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+    scopes = database.execute(
+        "SELECT DISTINCT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key",
+        (task_id,),
+    ).fetchall()
+    conflicts = []
+    for scope in scopes:
+        lock = database.execute(
+            "SELECT scope_key, task_id, execution_id FROM scope_locks WHERE scope_key=?",
+            (scope["scope_key"],),
+        ).fetchone()
+        if lock:
+            conflicts.append(lock)
+    return scopes, conflicts
+
+
+def defer_conflicting_task(
+    database: sqlite3.Connection,
+    task_id: str,
+    conflicts: list[sqlite3.Row],
+    stamp: str,
+) -> dict[str, Any]:
+    database.execute(
+        "UPDATE tasks SET status='WAITING_CONFLICT', updated_at=?, "
+        "progress_summary='检测到正在执行任务的 scope 冲突。', "
+        "progress_next_step='等待阻塞任务结束后自动重新排队。', row_version=row_version+1 WHERE id=?",
+        (stamp, task_id),
+    )
+    for lock in conflicts:
+        database.execute(
+            "INSERT OR REPLACE INTO task_conflicts(task_id, scope_key, blocker_task_id, blocker_execution_id, detected_at) "
+            "VALUES(?, ?, ?, ?, ?)",
+            (task_id, lock["scope_key"], lock["task_id"], lock["execution_id"], stamp),
+        )
+    database.execute(
+        "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+        "VALUES(?, ?, 'PENDING', 'WAITING_CONFLICT', 'concurrent-claimer', '检测到 project scope 锁冲突。')",
+        (task_id, stamp),
+    )
+    return {"task_id": task_id, "conflicts": [dict(item) for item in conflicts]}
+
+
 def command_claim(args: argparse.Namespace) -> None:
     if not args.execution_id or len(args.execution_id) > 128:
         raise LoopError("execution-id 无效")
@@ -315,7 +340,7 @@ def command_claim(args: argparse.Namespace) -> None:
         recovered = recover_expired(database)
         requeued = requeue_resolved_conflicts(database)
         active = database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0]
-        maximum = int(setting(database, "max_parallel_tasks", 6))
+        maximum = int(execution_setting("max_parallel_tasks", 6))
         if active >= maximum:
             commit(database)
             output({"outcome": "SLOT_FULL", "active": active, "maximum": maximum, "recovered": recovered})
@@ -326,54 +351,42 @@ def command_claim(args: argparse.Namespace) -> None:
             "SELECT * FROM tasks WHERE status='PENDING' ORDER BY "
             "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at, id"
         ).fetchall()
-        task_row = next((row for row in candidates if dependencies_ready(database, row["id"])), None)
+        task_row = None
+        scopes: list[sqlite3.Row] = []
+        deferred_conflicts: list[dict[str, Any]] = []
+        stamp = now_shanghai()
+        for candidate in candidates:
+            if not dependencies_ready(database, candidate["id"]):
+                continue
+            candidate_scopes, conflicts = task_scopes_and_conflicts(database, candidate["id"])
+            if conflicts:
+                deferred_conflicts.append(
+                    defer_conflicting_task(database, candidate["id"], conflicts, stamp)
+                )
+                continue
+            task_row = candidate
+            scopes = candidate_scopes
+            break
         if task_row is None:
+            if deferred_conflicts:
+                revision = bump_revision(database, "concurrent-claimer")
+                commit(database)
+                output(
+                    {
+                        "outcome": "CONFLICT",
+                        "task_id": deferred_conflicts[0]["task_id"],
+                        "conflicts": deferred_conflicts[0]["conflicts"],
+                        "deferred_conflicts": deferred_conflicts,
+                        "recovered": recovered,
+                        "requeued": requeued,
+                        "revision": revision,
+                    }
+                )
+                return
             commit(database)
             output({"outcome": "NO_TASK", "active": active, "recovered": recovered, "requeued": requeued})
             return
-        scopes = database.execute(
-            "SELECT DISTINCT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key",
-            (task_row["id"],),
-        ).fetchall()
-        conflicts: list[sqlite3.Row] = []
-        for scope in scopes:
-            lock = database.execute(
-                "SELECT scope_key, task_id, execution_id FROM scope_locks WHERE scope_key=?",
-                (scope["scope_key"],),
-            ).fetchone()
-            if lock:
-                conflicts.append(lock)
-        stamp = now_shanghai()
-        if conflicts:
-            database.execute(
-                "UPDATE tasks SET status='WAITING_CONFLICT', updated_at=?, "
-                "progress_summary='检测到正在执行任务的 scope 冲突。', "
-                "progress_next_step='等待阻塞任务结束后自动重新排队。', row_version=row_version+1 WHERE id=?",
-                (stamp, task_row["id"]),
-            )
-            for lock in conflicts:
-                database.execute(
-                    "INSERT OR REPLACE INTO task_conflicts(task_id, scope_key, blocker_task_id, blocker_execution_id, detected_at) "
-                    "VALUES(?, ?, ?, ?, ?)",
-                    (task_row["id"], lock["scope_key"], lock["task_id"], lock["execution_id"], stamp),
-                )
-            database.execute(
-                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
-                "VALUES(?, ?, 'PENDING', 'WAITING_CONFLICT', 'concurrent-claimer', '检测到 project scope 锁冲突。')",
-                (task_row["id"], stamp),
-            )
-            revision = bump_revision(database, "concurrent-claimer")
-            commit(database)
-            output(
-                {
-                    "outcome": "CONFLICT",
-                    "task_id": task_row["id"],
-                    "conflicts": [dict(item) for item in conflicts],
-                    "revision": revision,
-                }
-            )
-            return
-        lease_seconds = int(setting(database, "task_lease_seconds", 3600))
+        lease_seconds = int(execution_setting("task_lease_seconds", 3600))
         expiry = expires_at(lease_seconds)
         database.execute(
             "INSERT INTO executions(execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at) "
@@ -420,6 +433,9 @@ def command_claim(args: argparse.Namespace) -> None:
                 "active": active + 1,
                 "maximum": maximum,
                 "revision": revision,
+                "deferred_conflicts": deferred_conflicts,
+                "recovered": recovered,
+                "requeued": requeued,
                 "task": payload,
             }
         )
@@ -440,7 +456,7 @@ def command_heartbeat(args: argparse.Namespace) -> None:
         if not execution or execution["task_id"] != args.task_id:
             raise LoopError("活动 execution 与 task-id 不匹配")
         stamp = now_shanghai()
-        expiry = expires_at(int(setting(database, "task_lease_seconds", 3600)))
+        expiry = expires_at(int(execution_setting("task_lease_seconds", 3600)))
         database.execute(
             "UPDATE executions SET heartbeat_at=?, lease_expires_at=? WHERE execution_id=?",
             (stamp, expiry, args.execution_id),
@@ -462,7 +478,7 @@ def command_heartbeat(args: argparse.Namespace) -> None:
 
 
 def command_finish(args: argparse.Namespace) -> None:
-    report = read_json(Path(args.report).resolve())
+    report = read_json_source(args.report)
     status = report.get("status")
     if status not in FINAL_EXECUTION_STATUSES:
         raise LoopError("报告 status 仅支持 SUCCEEDED、FAILED、WAITING_HUMAN")
@@ -601,7 +617,12 @@ def command_enqueue(args: argparse.Namespace) -> None:
                 },
                 "result": item.get("result") or {"summary": None, "verification": [], "error": None},
             }
-            insert_task(database, task, actor="task-manager")
+            insert_task(
+                database,
+                task,
+                actor="task-manager",
+                project_paths=[item["path"] for item in configured_projects()],
+            )
             added.append(task["id"])
         revision = bump_revision(database, "task-manager")
         commit(database)
@@ -643,7 +664,7 @@ def command_update(args: argparse.Namespace) -> None:
             for index, scope in enumerate(patch["scope"]):
                 database.execute(
                     "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) VALUES(?, ?, ?, ?)",
-                    (args.task_id, index, scope, resolve_scope_key(database, scope)),
+                    (args.task_id, index, scope, resolve_scope_key(scope)),
                 )
         if "acceptance" in patch:
             replace_ordered_text(database, "task_acceptance", args.task_id, patch["acceptance"])
@@ -673,8 +694,14 @@ def command_requeue(args: argparse.Namespace) -> None:
     try:
         transaction(database)
         row = database.execute("SELECT status FROM tasks WHERE id=?", (args.task_id,)).fetchone()
-        if not row or row["status"] not in {"DRAFT", "WAITING_HUMAN", "WAITING_CONFLICT", "FAILED"}:
-            raise LoopError("只有草稿、等待或失败任务可以重新排队")
+        if not row or row["status"] not in {
+            "DRAFT",
+            "WAITING_HUMAN",
+            "WAITING_CONFLICT",
+            "SUCCEEDED",
+            "FAILED",
+        }:
+            raise LoopError("只有草稿、等待、成功或失败任务可以重新排队")
         stamp = now_shanghai()
         database.execute("DELETE FROM task_conflicts WHERE task_id=?", (args.task_id,))
         database.execute(
@@ -773,7 +800,7 @@ def parser() -> argparse.ArgumentParser:
     finish = commands.add_parser("finish")
     finish.add_argument("execution_id")
     finish.add_argument("task_id")
-    finish.add_argument("report")
+    finish.add_argument("report", nargs="?", default="-", help="UTF-8 JSON 文件；省略或使用 - 时从 stdin 读取")
     finish.set_defaults(handler=command_finish)
     confirm = commands.add_parser("confirm")
     confirm.add_argument("task_id")

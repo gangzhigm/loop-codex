@@ -11,7 +11,15 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from loopdb import connect, initialize_schema, insert_task, load_initialization_config, now_shanghai, set_setting
+from loopdb import (
+    ALLOWED_TABLES,
+    DEFAULT_DB,
+    connect,
+    initialize_schema,
+    insert_task,
+    load_initialization_config,
+    now_shanghai,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,7 +30,11 @@ class LoopConcurrencyTests(unittest.TestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
         self.assertEqual(config["automations"]["worker_interval_minutes"], 10)
-        self.assertEqual(config["automations"]["health_interval_minutes"], 30)
+        self.assertEqual(config["prompts"]["operator"], "prompts/operator.md")
+        self.assertEqual(config["prompts"]["worker"], "prompts/worker.md")
+        self.assertNotIn("health_interval_minutes", config["automations"])
+        self.assertEqual(config["health"]["scheduler"], "windows_task_scheduler")
+        self.assertEqual(config["health"]["interval_minutes"], 10)
         self.assertEqual(config["dashboard"]["port"], 4178)
         self.assertEqual(config["health"]["failure_threshold"], 3)
 
@@ -31,16 +43,8 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.db_path = Path(self.temporary.name) / "test.sqlite3"
         database = connect(self.db_path)
         initialize_schema(database)
-        set_setting(database, "max_parallel_tasks", 6)
-        set_setting(database, "task_lease_seconds", 3600)
-        set_setting(database, "max_attempts", 2)
-        stamp = now_shanghai()
-        for index in range(1, 9):
-            database.execute(
-                "INSERT INTO projects(path, description, exists_on_disk, updated_at) VALUES(?, '', 1, ?)",
-                (f"project-{index}", stamp),
-            )
         database.close()
+        self.project_paths = [f"project-{index}" for index in range(1, 9)]
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -60,10 +64,11 @@ class LoopConcurrencyTests(unittest.TestCase):
                 "acceptance": ["test"],
             },
             actor="test",
+            project_paths=self.project_paths,
         )
         database.close()
 
-    def run_ctl(self, *arguments: str) -> dict[str, object]:
+    def run_ctl(self, *arguments: str, input_text: str | None = None) -> dict[str, object]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         completed = subprocess.run(
@@ -74,17 +79,30 @@ class LoopConcurrencyTests(unittest.TestCase):
             text=True,
             encoding="utf-8",
             env=environment,
+            input=input_text,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
         return json.loads(completed.stdout)
 
     def finish(self, execution_id: str, task_id: str) -> dict[str, object]:
-        report = Path(self.temporary.name) / f"{execution_id}.json"
-        report.write_text(
-            json.dumps({"status": "SUCCEEDED", "summary": "done", "verification": ["ok"]}),
-            encoding="utf-8",
+        return self.run_ctl(
+            "finish",
+            execution_id,
+            task_id,
+            input_text=json.dumps({"status": "SUCCEEDED", "summary": "done", "verification": ["ok"]}),
         )
-        return self.run_ctl("finish", execution_id, task_id, str(report))
+
+    def test_database_contains_only_task_tables(self) -> None:
+        database = connect(self.db_path)
+        tables = {
+            row[0]
+            for row in database.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        database.close()
+        self.assertEqual(tables, ALLOWED_TABLES)
+        self.assertEqual(DEFAULT_DB, BASE_DIR / "data" / "loop-agent.sqlite3")
 
     def test_six_parallel_claims_and_seventh_slot_full(self) -> None:
         for index in range(1, 8):
@@ -110,6 +128,24 @@ class LoopConcurrencyTests(unittest.TestCase):
         database.close()
         self.assertEqual(status, "PENDING")
 
+    def test_conflicting_candidate_does_not_hide_runnable_task(self) -> None:
+        self.add_task("BLOCKER", "project-1", "critical")
+        self.add_task("CONFLICT", "project-1", "high")
+        self.add_task("RUNNABLE", "project-2", "medium")
+        self.run_ctl("claim", "exec-blocker")
+
+        result = self.run_ctl("claim", "exec-runnable")
+
+        self.assertEqual(result["outcome"], "CLAIMED")
+        self.assertEqual(result["task"]["id"], "RUNNABLE")
+        self.assertEqual(result["deferred_conflicts"][0]["task_id"], "CONFLICT")
+        database = connect(self.db_path)
+        conflict_status = database.execute(
+            "SELECT status FROM tasks WHERE id='CONFLICT'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(conflict_status, "WAITING_CONFLICT")
+
     def test_multiple_files_in_one_project_acquire_one_project_lock(self) -> None:
         database = connect(self.db_path)
         insert_task(
@@ -125,6 +161,7 @@ class LoopConcurrencyTests(unittest.TestCase):
                 "acceptance": ["test"],
             },
             actor="test",
+            project_paths=self.project_paths,
         )
         database.close()
         result = self.run_ctl("claim", "exec-multi")
@@ -148,6 +185,61 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(result["task"]["id"], "LEASE")
         self.assertEqual(result["task"]["attempt"], 2)
 
+    def test_stalled_heartbeat_is_recovered_before_lease_expiry(self) -> None:
+        self.add_task("STALLED", "project-1")
+        self.run_ctl("claim", "exec-stalled")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE executions SET heartbeat_at='2000-01-01T00:00:00+08:00', "
+            "lease_expires_at='2999-01-01T00:00:00+08:00' WHERE execution_id='exec-stalled'"
+        )
+        database.execute(
+            "UPDATE tasks SET heartbeat_at='2000-01-01T00:00:00+08:00' WHERE id='STALLED'"
+        )
+        database.close()
+
+        result = self.run_ctl("claim", "exec-recovered")
+
+        self.assertEqual(result["outcome"], "CLAIMED")
+        self.assertEqual(result["task"]["id"], "STALLED")
+        self.assertEqual(result["recovered"][0]["outcome"], "HEARTBEAT_STALLED")
+        self.assertEqual(result["task"]["attempt"], 2)
+
+    def test_two_conflicts_and_stalled_blocker_do_not_deadlock_new_claim(self) -> None:
+        self.add_task("BLOCKER", "project-1", "critical")
+        self.add_task("CONFLICT-1", "project-1", "high")
+        self.add_task("CONFLICT-2", "project-1", "high")
+        self.run_ctl("claim", "exec-blocker")
+        conflict_result = self.run_ctl("claim", "exec-conflicts")
+        self.assertEqual(conflict_result["outcome"], "CONFLICT")
+        self.assertEqual(
+            [item["task_id"] for item in conflict_result["deferred_conflicts"]],
+            ["CONFLICT-1", "CONFLICT-2"],
+        )
+        self.add_task("NEW-RUNNABLE", "project-2", "medium")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE executions SET heartbeat_at='2000-01-01T00:00:00+08:00', "
+            "lease_expires_at='2999-01-01T00:00:00+08:00' WHERE execution_id='exec-blocker'"
+        )
+        database.execute("UPDATE tasks SET attempt=2 WHERE id='BLOCKER'")
+        database.close()
+
+        result = self.run_ctl("claim", "exec-next")
+
+        self.assertEqual(result["outcome"], "CLAIMED")
+        self.assertEqual(result["recovered"][0]["outcome"], "HEARTBEAT_STALLED")
+        self.assertIn(result["task"]["id"], {"CONFLICT-1", "CONFLICT-2", "NEW-RUNNABLE"})
+        database = connect(self.db_path)
+        statuses = dict(
+            database.execute(
+                "SELECT id, status FROM tasks WHERE id IN ('CONFLICT-1', 'CONFLICT-2', 'NEW-RUNNABLE')"
+            ).fetchall()
+        )
+        database.close()
+        self.assertIn("RUNNING", statuses.values())
+        self.assertNotIn("WAITING_CONFLICT", statuses.values())
+
     def test_succeeded_requires_manual_confirmation(self) -> None:
         self.add_task("CONFIRM", "project-1")
         self.run_ctl("claim", "exec-confirm")
@@ -160,6 +252,19 @@ class LoopConcurrencyTests(unittest.TestCase):
         ).fetchone()
         database.close()
         self.assertEqual(tuple(history), ("SUCCEEDED", "CONFIRMED"))
+
+    def test_succeeded_can_be_reopened_by_operator(self) -> None:
+        self.add_task("REOPEN", "project-1")
+        self.run_ctl("claim", "exec-reopen")
+        self.finish("exec-reopen", "REOPEN")
+        result = self.run_ctl("requeue", "REOPEN", "--reason", "人工要求重新执行")
+        self.assertEqual(result["outcome"], "REQUEUED")
+        database = connect(self.db_path)
+        history = database.execute(
+            "SELECT from_status, to_status FROM task_history WHERE task_id='REOPEN' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(history), ("SUCCEEDED", "PENDING"))
 
     def test_draft_can_be_requeued_after_operator_review(self) -> None:
         self.add_task("DRAFT-TASK", "project-1")

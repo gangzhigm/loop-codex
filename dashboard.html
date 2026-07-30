@@ -54,17 +54,19 @@
     }
 
     .app-header {
-      min-height: 68px;
-      display: flex;
+      min-height: 78px;
+      display: grid;
+      grid-template-columns: minmax(230px, auto) minmax(420px, 1fr) auto;
+      grid-template-areas: "brand status actions";
       align-items: center;
-      justify-content: space-between;
-      gap: 24px;
-      padding: 12px 28px;
+      gap: 18px;
+      padding: 10px 28px;
       background: var(--surface);
       border-bottom: 1px solid var(--line);
     }
 
     .brand {
+      grid-area: brand;
       display: flex;
       align-items: center;
       min-width: 0;
@@ -97,12 +99,24 @@
       font-size: 12px;
     }
 
+    .header-status {
+      grid-area: status;
+      min-width: 0;
+    }
+
     .header-actions {
+      grid-area: actions;
       display: flex;
       align-items: center;
       justify-content: flex-end;
       gap: 10px;
       min-width: 0;
+    }
+
+    .connection-meta {
+      display: grid;
+      min-width: 0;
+      gap: 2px;
     }
 
     .connection {
@@ -126,6 +140,16 @@
     .connection[data-state="live"] .connection-dot { background: var(--success); }
     .connection[data-state="error"] .connection-dot { background: var(--danger); }
     .connection[data-state="snapshot"] .connection-dot { background: var(--warning); }
+
+    .workspace-updated {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     .primary-button,
     .secondary-button {
@@ -156,7 +180,7 @@
     .main {
       width: min(1480px, 100%);
       margin: 0 auto;
-      padding: 24px 28px 40px;
+      padding: 16px 28px 40px;
     }
 
     .notice {
@@ -187,16 +211,15 @@
     .summary-band {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
-      background: var(--surface);
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 6px;
       overflow: hidden;
     }
 
     .metric {
       min-width: 0;
-      min-height: 94px;
-      padding: 18px;
+      min-height: 42px;
+      padding: 7px 10px;
       border-right: 1px solid var(--line);
     }
 
@@ -204,13 +227,14 @@
 
     .metric-label {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       line-height: 1.2;
+      white-space: nowrap;
     }
 
     .metric-value {
-      margin-top: 9px;
-      font-size: 27px;
+      margin-top: 4px;
+      font-size: 19px;
       line-height: 1;
       font-weight: 760;
       letter-spacing: 0;
@@ -221,11 +245,11 @@
     .metric-value.danger { color: var(--danger); }
 
     .distribution {
-      margin-top: 14px;
-      height: 8px;
+      margin-top: 6px;
+      height: 6px;
       display: flex;
       overflow: hidden;
-      border-radius: 4px;
+      border-radius: 3px;
       background: var(--neutral-soft);
     }
 
@@ -235,18 +259,6 @@
     .distribution .attention { background: var(--warning); }
     .distribution .failed { background: var(--danger); }
     .distribution .queued { background: #98a2ad; }
-
-    .workspace-meta {
-      min-height: 43px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 18px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .workspace-meta strong { color: var(--ink); }
 
     .content-grid {
       display: grid;
@@ -265,9 +277,9 @@
 
     .section-header {
       min-height: 58px;
-      display: flex;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
       align-items: center;
-      justify-content: space-between;
       gap: 16px;
       padding: 10px 16px;
       border-bottom: 1px solid var(--line);
@@ -285,12 +297,16 @@
       display: flex;
       align-items: center;
       justify-content: flex-end;
+      flex-wrap: nowrap;
       gap: 10px;
+      width: 100%;
       min-width: 0;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
     }
 
-    .search-input {
-      width: min(220px, 100%);
+    .search-input,
+    .project-select {
       height: 34px;
       border: 1px solid var(--line-strong);
       border-radius: 6px;
@@ -299,16 +315,36 @@
       background: var(--surface);
     }
 
+    .search-input {
+      flex: 1 1 180px;
+      width: 220px;
+      min-width: 140px;
+      max-width: 220px;
+    }
+
+    .project-select {
+      flex: 1 1 150px;
+      width: 190px;
+      min-width: 130px;
+      max-width: 190px;
+      font-size: 12px;
+    }
+
     .segments {
       display: flex;
+      flex: 0 0 auto;
       gap: 2px;
+      min-width: max-content;
       padding: 2px;
       border: 1px solid var(--line);
       border-radius: 6px;
       background: var(--surface-subtle);
+      white-space: nowrap;
     }
 
     .segments button {
+      flex: 0 0 54px;
+      width: 54px;
       min-height: 28px;
       border: 0;
       border-radius: 4px;
@@ -400,10 +436,133 @@
     .status-failed { background: var(--danger-soft); color: var(--danger); }
     .status-cancelled { background: var(--neutral-soft); color: var(--muted); }
 
+    .status-cell {
+      position: relative;
+      min-width: 0;
+    }
+
+    .status-stack {
+      display: grid;
+      justify-items: start;
+      min-width: 0;
+      gap: 5px;
+    }
+
+    .conflict-summary {
+      position: relative;
+      width: min(180px, 100%);
+      min-width: 0;
+      color: var(--warning);
+      font-size: 10px;
+    }
+
+    .conflict-summary summary {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      cursor: pointer;
+      font-weight: 700;
+      line-height: 1.4;
+      list-style: none;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .conflict-summary summary::-webkit-details-marker { display: none; }
+    .conflict-summary summary:focus-visible { outline: 2px solid var(--warning); outline-offset: 2px; }
+
+    .conflict-popover {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 5px);
+      left: 0;
+      display: none;
+      width: min(390px, calc(100vw - 48px));
+      max-height: 320px;
+      overflow: auto;
+      border: 1px solid #d9bc8a;
+      border-radius: 6px;
+      padding: 10px;
+      background: var(--surface);
+      box-shadow: 0 8px 24px rgba(31, 41, 51, 0.16);
+      color: var(--ink);
+    }
+
+    .conflict-summary[open] .conflict-popover,
+    .conflict-summary:hover .conflict-popover,
+    .conflict-summary:focus-within .conflict-popover { display: grid; gap: 10px; }
+
+    .conflict-group {
+      display: grid;
+      min-width: 0;
+      gap: 4px;
+    }
+
+    .conflict-group + .conflict-group {
+      border-top: 1px solid var(--line);
+      padding-top: 9px;
+    }
+
+    .conflict-task-title { color: var(--ink); font-size: 12px; line-height: 1.4; }
+
+    .conflict-task-id,
+    .conflict-scope {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      font-family: Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.4;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .conflict-scopes {
+      display: grid;
+      gap: 4px;
+      margin: 2px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .conflict-scopes li { display: grid; min-width: 0; gap: 1px; }
+    .conflict-detected { color: var(--muted); font-size: 10px; line-height: 1.4; }
+
+    .conflict-detail-list {
+      display: grid;
+      gap: 12px;
+    }
+
     .priority-critical { background: var(--danger-soft); color: var(--danger); }
     .priority-high { background: var(--warning-soft); color: var(--warning); }
     .priority-medium { background: var(--accent-soft); color: #056a74; }
     .priority-low { background: var(--neutral-soft); color: var(--muted); }
+
+    .project-cell {
+      display: flex;
+      align-items: flex-start;
+      flex-direction: column;
+      min-width: 0;
+      gap: 4px;
+    }
+
+    .project-badge {
+      display: inline-block;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      border: 1px solid #c9d9dc;
+      border-radius: 4px;
+      padding: 3px 6px;
+      background: #f2f8f8;
+      color: #315c62;
+      font-family: Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.3;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     .progress-cell {
       display: grid;
@@ -590,12 +749,66 @@
     .detail-block p { margin: 0; color: #44505c; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
     .detail-block ul { margin: 0; padding-left: 18px; color: #44505c; font-size: 12px; line-height: 1.7; }
 
+    .attachment-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin: 0;
+      padding: 0 !important;
+      list-style: none;
+    }
+
+    .attachment-item {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-subtle);
+    }
+
+    .attachment-link {
+      display: grid;
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      place-items: center;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .attachment-image {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .attachment-meta {
+      display: grid;
+      gap: 2px;
+      padding: 8px 10px;
+      line-height: 1.4;
+    }
+
+    .attachment-role { color: var(--ink); font-size: 11px; font-weight: 700; }
+    .attachment-path { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+    .attachment-files { margin-top: 10px !important; }
+
     .timeline { margin: 0; padding: 0; list-style: none; }
     .timeline li { position: relative; padding: 0 0 14px 19px; font-size: 12px; line-height: 1.45; }
     .timeline li::before { content: ""; position: absolute; top: 5px; left: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
     .timeline li::after { content: ""; position: absolute; top: 13px; bottom: 0; left: 5px; width: 1px; background: var(--line-strong); }
     .timeline li:last-child::after { display: none; }
     .timeline time { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+
+    @media (max-width: 1180px) {
+      .app-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "brand actions"
+          "status status";
+      }
+    }
 
     @media (max-width: 1080px) {
       .summary-band { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -607,21 +820,28 @@
     }
 
     @media (max-width: 760px) {
-      .app-header { align-items: flex-start; flex-direction: column; padding: 14px 16px; }
+      .app-header {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+          "brand"
+          "status"
+          "actions";
+        align-items: stretch;
+        padding: 14px 16px;
+      }
       .header-actions { width: 100%; justify-content: space-between; }
       .connection-label { overflow: hidden; text-overflow: ellipsis; }
+      .connection-meta { overflow: hidden; }
       .main { padding: 16px 12px 28px; }
       .summary-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .metric { min-height: 82px; padding: 14px; border-bottom: 1px solid var(--line); }
+      .metric { min-height: 44px; border-bottom: 1px solid var(--line); }
       .metric:nth-child(2n) { border-right: 0; }
       .metric:nth-last-child(-n + 2) { border-bottom: 0; }
       .metric:nth-child(3) { border-right: 1px solid var(--line); }
-      .workspace-meta { align-items: flex-start; flex-direction: column; justify-content: center; padding: 10px 2px; gap: 4px; }
-      .section-header { align-items: stretch; flex-direction: column; padding: 12px; }
-      .task-tools { align-items: stretch; flex-direction: column; }
-      .search-input { width: 100%; }
-      .segments { overflow-x: auto; }
-      .segments button { flex: 1 0 auto; }
+      .section-header { grid-template-columns: minmax(0, 1fr); align-items: stretch; padding: 12px; }
+      .task-tools { justify-content: flex-start; }
+      .search-input { flex: 0 0 180px; width: 180px; }
+      .project-select { flex: 0 0 150px; width: 150px; }
       .table-wrap { overflow: visible; }
       table, thead, tbody, tr, td { display: block; }
       thead { display: none; }
@@ -632,6 +852,10 @@
       td:first-child { display: block; padding-bottom: 9px; }
       td:first-child::before { display: none; }
       .task-title { white-space: normal; }
+      .status-cell { overflow: visible; }
+      .status-stack { justify-items: end; max-width: calc(100% - 84px); }
+      .conflict-summary { width: min(240px, 100%); }
+      .conflict-popover { right: 0; left: auto; }
       .progress-cell { width: min(200px, 100%); }
       .side-section { grid-template-columns: minmax(0, 1fr); }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
@@ -655,10 +879,30 @@
         <p>本地任务运行状态</p>
       </div>
     </div>
+    <div class="header-status">
+      <section class="summary-band" aria-label="任务总览">
+        <div class="metric"><div class="metric-label">全部任务</div><div id="metricTotal" class="metric-value">0</div></div>
+        <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
+        <div class="metric"><div class="metric-label">执行中</div><div id="metricRunning" class="metric-value">0</div></div>
+        <div class="metric"><div class="metric-label">等待人工</div><div id="metricHuman" class="metric-value warning">0</div></div>
+        <div class="metric"><div class="metric-label">卡顿或阻塞</div><div id="metricBlocked" class="metric-value warning">0</div></div>
+        <div class="metric"><div class="metric-label">失败</div><div id="metricFailed" class="metric-value danger">0</div></div>
+      </section>
+      <div id="distribution" class="distribution" aria-label="任务状态分布">
+        <span class="done" style="width: 0"></span>
+        <span class="active" style="width: 0"></span>
+        <span class="attention" style="width: 0"></span>
+        <span class="failed" style="width: 0"></span>
+        <span class="queued" style="width: 100%"></span>
+      </div>
+    </div>
     <div class="header-actions">
-      <div id="connection" class="connection" data-state="idle" role="status" aria-live="polite">
-        <span class="connection-dot" aria-hidden="true"></span>
-        <span id="connectionLabel" class="connection-label">正在连接 SQLite 服务</span>
+      <div class="connection-meta">
+        <div id="connection" class="connection" data-state="idle" role="status" aria-live="polite">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connectionLabel" class="connection-label">正在连接 SQLite 服务</span>
+        </div>
+        <span id="workspaceUpdated" class="workspace-updated">更新时间：--</span>
       </div>
       <button id="refreshState" class="primary-button" type="button">刷新</button>
     </div>
@@ -670,39 +914,22 @@
       <button id="dismissNotice" type="button" aria-label="关闭提示" title="关闭">×</button>
     </div>
 
-    <section class="summary-band" aria-label="任务总览">
-      <div class="metric"><div class="metric-label">全部任务</div><div id="metricTotal" class="metric-value">0</div></div>
-      <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
-      <div class="metric"><div class="metric-label">执行中</div><div id="metricRunning" class="metric-value">0</div></div>
-      <div class="metric"><div class="metric-label">等待人工</div><div id="metricHuman" class="metric-value warning">0</div></div>
-      <div class="metric"><div class="metric-label">卡顿或阻塞</div><div id="metricBlocked" class="metric-value warning">0</div></div>
-      <div class="metric"><div class="metric-label">失败</div><div id="metricFailed" class="metric-value danger">0</div></div>
-    </section>
-
-    <div id="distribution" class="distribution" aria-label="任务状态分布">
-      <span class="done" style="width: 0"></span>
-      <span class="active" style="width: 0"></span>
-      <span class="attention" style="width: 0"></span>
-      <span class="failed" style="width: 0"></span>
-      <span class="queued" style="width: 100%"></span>
-    </div>
-
-    <div class="workspace-meta">
-      <span id="workspaceName"><strong>未连接</strong></span>
-      <span id="workspaceUpdated">更新时间：--</span>
-    </div>
-
     <div class="content-grid">
       <section class="task-section">
         <div class="section-header">
           <h2>任务</h2>
           <div class="task-tools">
-            <input id="search" class="search-input" type="search" placeholder="搜索 ID、标题或 Agent" aria-label="搜索任务">
+            <input id="search" class="search-input" type="search" placeholder="搜索 ID、标题或项目" aria-label="搜索任务">
+            <select id="projectFilter" class="project-select" aria-label="按项目筛选任务">
+              <option value="all">全部项目</option>
+            </select>
             <div class="segments" aria-label="任务筛选">
               <button type="button" data-filter="all" aria-pressed="true">全部</button>
+              <button type="button" data-filter="pending" aria-pressed="false">待执行</button>
               <button type="button" data-filter="active" aria-pressed="false">执行中</button>
               <button type="button" data-filter="attention" aria-pressed="false">需关注</button>
               <button type="button" data-filter="closed" aria-pressed="false">已结束</button>
+              <button type="button" data-filter="archived" aria-pressed="false">已归档</button>
             </div>
           </div>
         </div>
@@ -713,7 +940,7 @@
                 <th style="width: 31%">任务</th>
                 <th style="width: 15%">状态</th>
                 <th style="width: 10%">优先级</th>
-                <th style="width: 14%">Agent</th>
+                <th style="width: 14%">项目</th>
                 <th style="width: 18%">进度</th>
                 <th style="width: 12%">耗时</th>
               </tr>
@@ -732,8 +959,8 @@
           <ul id="alertList" class="alert-list"><li class="muted">暂无异常</li></ul>
         </section>
         <section class="side-block">
-          <div class="side-heading"><h2>Agent</h2><span id="agentCount">0 个</span></div>
-          <ul id="agentList" class="agent-list"><li class="muted">暂无 Agent</li></ul>
+          <div class="side-heading"><h2>活动执行</h2><span id="agentCount">0 项</span></div>
+          <ul id="agentList" class="agent-list"><li class="muted">暂无活动执行</li></ul>
         </section>
         <section class="side-block">
           <div class="side-heading"><h2>最近活动</h2><span>状态变更</span></div>
@@ -774,8 +1001,9 @@
     const CLOSED_STATUSES = new Set(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
     const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
-    const TASK_SCHEMA_VERSION = "2.0.0";
+    const TASK_SCHEMA_VERSION = "3.0.0";
     const STATE_ENDPOINT = "/api/state";
+    const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
 
     const elements = {
       connection: document.querySelector("#connection"),
@@ -785,6 +1013,7 @@
       noticeText: document.querySelector("#noticeText"),
       dismissNotice: document.querySelector("#dismissNotice"),
       search: document.querySelector("#search"),
+      projectFilter: document.querySelector("#projectFilter"),
       taskTable: document.querySelector("#taskTable"),
       taskEmpty: document.querySelector("#taskEmpty"),
       taskRows: document.querySelector("#taskRows"),
@@ -795,7 +1024,6 @@
       metricBlocked: document.querySelector("#metricBlocked"),
       metricFailed: document.querySelector("#metricFailed"),
       distribution: document.querySelector("#distribution"),
-      workspaceName: document.querySelector("#workspaceName"),
       workspaceUpdated: document.querySelector("#workspaceUpdated"),
       alertList: document.querySelector("#alertList"),
       alertCount: document.querySelector("#alertCount"),
@@ -812,6 +1040,7 @@
     let state = null;
     let pollTimer = null;
     let currentFilter = "all";
+    let currentProject = "all";
     let currentQuery = "";
 
     function escapeHtml(value) {
@@ -868,6 +1097,122 @@
       const hours = Math.floor(minutes / 60);
       if (hours < 24) return `${hours}小时 ${minutes % 60}分`;
       return `${Math.floor(hours / 24)}天 ${hours % 24}小时`;
+    }
+
+    function formatConflictDetectedAt(value) {
+      if (!value) return "检测时间未记录";
+      const timestamp = new Date(value);
+      return Number.isNaN(timestamp.getTime()) ? "检测时间无效" : formatDate(value);
+    }
+
+    function conflictGroups(task, tasks) {
+      if (task?.status !== "WAITING_CONFLICT" || !Array.isArray(task.conflicts) || task.conflicts.length === 0) return [];
+      const tasksById = new Map((Array.isArray(tasks) ? tasks : [])
+        .filter((candidate) => typeof candidate?.id === "string" && candidate.id)
+        .map((candidate) => [candidate.id, candidate]));
+      const groups = new Map();
+
+      task.conflicts.forEach((candidate) => {
+        const conflict = candidate && typeof candidate === "object" ? candidate : {};
+        const blockerId = typeof conflict.blocker_task_id === "string" ? conflict.blocker_task_id.trim() : "";
+        const groupKey = blockerId || "__unknown_blocker__";
+        if (!groups.has(groupKey)) {
+          const blockerTask = blockerId ? tasksById.get(blockerId) : null;
+          const blockerTitle = typeof blockerTask?.title === "string" ? blockerTask.title.trim() : "";
+          groups.set(groupKey, { blockerId, blockerTitle, scopes: new Map() });
+        }
+
+        const group = groups.get(groupKey);
+        const scopeKey = typeof conflict.scope_key === "string" && conflict.scope_key.trim()
+          ? conflict.scope_key.trim()
+          : "冲突项目未记录";
+        if (!group.scopes.has(scopeKey)) group.scopes.set(scopeKey, new Set());
+        group.scopes.get(scopeKey).add(formatConflictDetectedAt(conflict.detected_at));
+      });
+
+      return [...groups.values()].map((group) => ({
+        blockerId: group.blockerId,
+        blockerTitle: group.blockerTitle,
+        scopes: [...group.scopes.entries()].map(([scopeKey, detectedAt]) => ({
+          scopeKey,
+          detectedAt: [...detectedAt]
+        }))
+      }));
+    }
+
+    function conflictGroupMarkup(group) {
+      const title = group.blockerTitle || (group.blockerId ? "阻塞任务标题未找到" : "未知阻塞任务");
+      const blockerId = group.blockerId || "阻塞任务 ID 未记录";
+      return `<div class="conflict-group">
+        <strong class="conflict-task-title">${escapeHtml(title)}</strong>
+        <code class="conflict-task-id" title="${escapeHtml(blockerId)}">${escapeHtml(blockerId)}</code>
+        <ul class="conflict-scopes">${group.scopes.map((scope) => `
+          <li>
+            <code class="conflict-scope" title="${escapeHtml(scope.scopeKey)}">${escapeHtml(scope.scopeKey)}</code>
+            <span class="conflict-detected">detected_at：${escapeHtml(scope.detectedAt.join("、"))}</span>
+          </li>`).join("")}
+        </ul>
+      </div>`;
+    }
+
+    function renderConflictIndicator(task, tasks) {
+      const groups = conflictGroups(task, tasks);
+      if (!groups.length) return "";
+      const first = groups[0];
+      const firstLabel = first.blockerTitle || first.blockerId || "未知阻塞任务";
+      const suffix = groups.length > 1 ? ` +${groups.length - 1}` : "";
+      const tooltip = groups.map((group) => {
+        const title = group.blockerTitle ? `${group.blockerTitle} · ` : "";
+        return `${title}${group.blockerId || "阻塞任务 ID 未记录"}`;
+      }).join("；");
+      return `<details class="conflict-summary">
+        <summary title="${escapeHtml(tooltip)}">等待：${escapeHtml(firstLabel)}${escapeHtml(suffix)}</summary>
+        <div class="conflict-popover" aria-label="阻塞任务详情">${groups.map(conflictGroupMarkup).join("")}</div>
+      </details>`;
+    }
+
+    function renderConflictDetails(task, tasks) {
+      const groups = conflictGroups(task, tasks);
+      if (!groups.length) return "";
+      return `<section class="detail-block"><h3>阻塞任务</h3><div class="conflict-detail-list">${groups.map(conflictGroupMarkup).join("")}</div></section>`;
+    }
+
+    function taskProjects(task) {
+      const scopes = Array.isArray(task.scope) ? task.scope : [];
+      const keys = Array.isArray(task.scope_keys) ? task.scope_keys : [];
+      const projectScopes = new Map();
+      keys.forEach((key, index) => {
+        if (typeof key !== "string" || !key.startsWith("project:")) return;
+        const project = key.slice("project:".length);
+        if (!projectScopes.has(project)) projectScopes.set(project, []);
+        projectScopes.get(project).push(String(scopes[index] ?? "").replaceAll("\\", "/"));
+      });
+      if (projectScopes.size > 1) {
+        const loopScopes = projectScopes.get("local-agent-loop") ?? [];
+        if (loopScopes.length && loopScopes.every((scope) => scope.startsWith("local-agent-loop/assets/"))) {
+          projectScopes.delete("local-agent-loop");
+        }
+      }
+      return [...projectScopes.keys()];
+    }
+
+    function renderProjectFilter(tasks) {
+      const projects = [...new Set(tasks.flatMap(taskProjects))]
+        .sort((left, right) => left.localeCompare(right, "zh-CN"));
+      if (currentProject !== "all" && !projects.includes(currentProject)) currentProject = "all";
+      elements.projectFilter.innerHTML = [
+        '<option value="all">全部项目</option>',
+        ...projects.map((project) => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`)
+      ].join("");
+      elements.projectFilter.value = currentProject;
+    }
+
+    function projectCell(task) {
+      const projects = taskProjects(task);
+      if (!projects.length) return '<span class="muted">未识别</span>';
+      return `<div class="project-cell">
+        ${projects.map((project) => `<span class="project-badge" title="${escapeHtml(project)}">${escapeHtml(project)}</span>`).join("")}
+      </div>`;
     }
 
     function validateState(candidate) {
@@ -927,11 +1272,14 @@
     }
 
     function taskMatches(task) {
+      if (currentFilter === "pending" && task.status !== "PENDING") return false;
       if (currentFilter === "active" && !ACTIVE_STATUSES.has(task.status)) return false;
       if (currentFilter === "attention" && !ATTENTION_STATUSES.has(task.status) && !isHeartbeatLate(task)) return false;
       if (currentFilter === "closed" && !CLOSED_STATUSES.has(task.status)) return false;
+      if (currentFilter === "archived" && task.status !== "CONFIRMED") return false;
+      if (currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;
       if (!currentQuery) return true;
-      return [task.id, task.title, task.description, task.assigned_agent]
+      return [task.id, task.title, task.description, ...taskProjects(task)]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("zh-CN").includes(currentQuery));
     }
@@ -966,9 +1314,9 @@
       [...elements.distribution.children].forEach((child, index) => { child.style.width = widths[index]; });
       elements.distribution.setAttribute("aria-label", `任务状态分布：完成 ${succeeded}，执行中 ${running}，需关注 ${human + blocked}，失败 ${failed}，其他 ${queued}`);
 
-      elements.workspaceName.innerHTML = `<strong>${escapeHtml(state.workspace.name)}</strong> · revision ${escapeHtml(state.workspace.revision)} · ${escapeHtml(state.workspace.writer)}`;
       elements.workspaceUpdated.textContent = `更新时间：${formatDate(state.workspace.updated_at)} · ${escapeHtml(state.workspace.timezone)}`;
 
+      renderProjectFilter(tasks);
       renderTasks(tasks);
       renderAlerts(tasks);
       renderAgents(state.agents ?? []);
@@ -990,9 +1338,12 @@
             <span class="task-title">${escapeHtml(task.title)}</span>
             <span class="task-id">${escapeHtml(task.id)}</span>
           </td>
-          <td data-label="状态"><span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span></td>
+          <td class="status-cell" data-label="状态"><div class="status-stack">
+            <span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span>
+            ${renderConflictIndicator(task, tasks)}
+          </div></td>
           <td data-label="优先级"><span class="priority-badge priority-${escapeHtml(task.priority)}">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></td>
-          <td data-label="Agent"><span>${escapeHtml(task.assigned_agent ?? "未分配")}</span></td>
+          <td data-label="项目">${projectCell(task)}</td>
           <td data-label="进度">
             <div class="progress-cell">
               <div class="progress-track" aria-hidden="true"><div class="progress-fill" style="width: ${task.progress.percent}%"></div></div>
@@ -1035,14 +1386,14 @@
     }
 
     function renderAgents(agents) {
-      elements.agentCount.textContent = `${agents.length} 个`;
+      elements.agentCount.textContent = `${agents.length} 项`;
       elements.agentList.innerHTML = agents.length ? agents.map((agent) => `
         <li class="agent-item">
           <span class="agent-dot ${escapeHtml(agent.status.toLowerCase())}" aria-hidden="true"></span>
-          <span class="agent-name">${escapeHtml(agent.id)}</span>
-          <span class="agent-role">${escapeHtml(agent.role)} · ${escapeHtml(agent.status)}</span>
+          <span class="agent-name" title="${escapeHtml(agent.id)}">${escapeHtml(agent.current_task_id ?? "未知任务")}</span>
+          <span class="agent-role">执行中 · ${escapeHtml(formatDate(agent.last_seen_at, false))}</span>
         </li>
-      `).join("") : '<li class="muted">暂无 Agent</li>';
+      `).join("") : '<li class="muted">暂无活动执行</li>';
     }
 
     function renderActivity(tasks) {
@@ -1064,9 +1415,40 @@
         : `<p class="muted">${escapeHtml(emptyText)}</p>`}</section>`;
     }
 
+    function attachmentImageUrl(taskId, path) {
+      const parameters = new URLSearchParams({ task_id: taskId, path });
+      return `/api/attachment?${parameters.toString()}`;
+    }
+
+    function renderAttachments(task) {
+      const attachments = Array.isArray(task.attachments) ? task.attachments : [];
+      if (!attachments.length) return '<section class="detail-block"><h3>附件</h3><p class="muted">无</p></section>';
+      const images = attachments.filter((attachment) => {
+        const extension = String(attachment.path ?? "").split(".").pop().toLowerCase();
+        return IMAGE_EXTENSIONS.has(extension);
+      });
+      const files = attachments.filter((attachment) => !images.includes(attachment));
+      const gallery = images.length ? `<ul class="attachment-gallery">${images.map((attachment) => {
+        const path = String(attachment.path ?? "");
+        const role = String(attachment.role ?? "source");
+        const imageUrl = attachmentImageUrl(task.id, path);
+        return `<li class="attachment-item">
+          <a class="attachment-link" href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener" aria-label="查看附件原图：${escapeHtml(path)}">
+            <img class="attachment-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(task.title)} · ${escapeHtml(role)}" loading="lazy">
+          </a>
+          <div class="attachment-meta"><span class="attachment-role">${escapeHtml(role)}</span><span class="attachment-path">${escapeHtml(path)}</span></div>
+        </li>`;
+      }).join("")}</ul>` : "";
+      const fileList = files.length
+        ? `<ul class="attachment-files">${files.map((attachment) => `<li>${escapeHtml(attachment.role)}: ${escapeHtml(attachment.path)}</li>`).join("")}</ul>`
+        : "";
+      return `<section class="detail-block"><h3>附件</h3>${gallery}${fileList}</section>`;
+    }
+
     function openTask(taskId) {
       const task = state?.tasks?.find((candidate) => candidate.id === taskId);
       if (!task) return;
+      const projects = taskProjects(task);
       elements.dialogTitle.textContent = task.title;
       elements.dialogSubtitle.textContent = `${task.id} · ${STATUS_LABELS[task.status]} · revision ${state.workspace.revision}`;
       const intervention = task.human_intervention?.required
@@ -1081,7 +1463,7 @@
       elements.dialogBody.innerHTML = `
         <div class="detail-grid">
           <div class="detail-field"><span class="detail-label">状态</span><span class="detail-value">${escapeHtml(STATUS_LABELS[task.status])}</span></div>
-          <div class="detail-field"><span class="detail-label">Agent</span><span class="detail-value">${escapeHtml(task.assigned_agent ?? "未分配")}</span></div>
+          <div class="detail-field"><span class="detail-label">项目</span><span class="detail-value">${escapeHtml(projects.join("、") || "未识别")}</span></div>
           <div class="detail-field"><span class="detail-label">尝试次数</span><span class="detail-value">${escapeHtml(task.attempt)}</span></div>
           <div class="detail-field"><span class="detail-label">开始时间</span><span class="detail-value">${escapeHtml(formatDate(task.started_at))}</span></div>
           <div class="detail-field"><span class="detail-label">最后心跳</span><span class="detail-value">${escapeHtml(formatDate(task.heartbeat_at))}</span></div>
@@ -1089,12 +1471,14 @@
         </div>
         <section class="detail-block"><h3>任务描述</h3><p>${escapeHtml(task.description || "无")}</p></section>
         <section class="detail-block"><h3>当前进展 · ${escapeHtml(task.progress.percent)}%</h3><p>${escapeHtml(task.progress.summary || "暂无进展摘要")}</p></section>
+        ${task.assigned_agent ? `<section class="detail-block"><h3>技术信息</h3><p>执行实例：${escapeHtml(task.assigned_agent)}</p></section>` : ""}
         ${listBlock("已完成", task.progress.completed)}
         ${listBlock("验收条件", task.acceptance)}
         ${intervention}
         ${result}
+        ${renderConflictDetails(task, state.tasks)}
         ${listBlock("验证记录", task.result?.verification)}
-        ${listBlock("附件", (task.attachments ?? []).map((attachment) => `${attachment.role}: ${attachment.path}`))}
+        ${renderAttachments(task)}
         <section class="detail-block"><h3>状态历史</h3><ul class="timeline">${timeline}</ul></section>
       `;
       elements.taskDialog.showModal();
@@ -1106,6 +1490,10 @@
       currentQuery = event.target.value.trim().toLocaleLowerCase("zh-CN");
       if (state) renderTasks(state.tasks);
     });
+    elements.projectFilter.addEventListener("change", (event) => {
+      currentProject = event.target.value;
+      if (state) renderTasks(state.tasks);
+    });
     document.querySelectorAll("[data-filter]").forEach((button) => {
       button.addEventListener("click", () => {
         currentFilter = button.dataset.filter;
@@ -1114,10 +1502,12 @@
       });
     });
     elements.taskRows.addEventListener("click", (event) => {
+      if (event.target.closest(".conflict-summary")) return;
       const row = event.target.closest("tr[data-task-id]");
       if (row) openTask(row.dataset.taskId);
     });
     elements.taskRows.addEventListener("keydown", (event) => {
+      if (event.target.closest(".conflict-summary")) return;
       if (!["Enter", " "].includes(event.key)) return;
       const row = event.target.closest("tr[data-task-id]");
       if (!row) return;

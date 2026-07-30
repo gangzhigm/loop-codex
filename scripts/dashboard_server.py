@@ -10,7 +10,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 sys.dont_write_bytecode = True
 
@@ -21,10 +21,63 @@ from loopdb import (
     SCHEMA_VERSION,
     connect,
     load_initialization_config,
-    metadata,
     now_shanghai,
+    schema_version,
     state_payload,
 )
+
+
+HEALTH_STATE = BASE_DIR / "runtime" / "health-state.json"
+IMAGE_CONTENT_TYPES = {
+    ".avif": "image/avif",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
+
+def runtime_health() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if not HEALTH_STATE.exists():
+        return [], []
+    try:
+        value = json.loads(HEALTH_STATE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], []
+    service = {
+        key: value.get(key)
+        for key in ("component", "status", "pid", "checked_at", "consecutive_failures", "message")
+    }
+    services = [service] if service.get("component") else []
+    events = [item for item in (value.get("events") or []) if isinstance(item, dict)][:12]
+    return services, events
+
+
+def resolve_attachment_image(
+    database: sqlite3.Connection,
+    task_id: str,
+    attachment_path: str,
+    base_dir: Path = BASE_DIR,
+) -> tuple[Path, str]:
+    registered = database.execute(
+        "SELECT 1 FROM task_attachments WHERE task_id=? AND path=?",
+        (task_id, attachment_path),
+    ).fetchone()
+    if registered is None:
+        raise FileNotFoundError("attachment not found")
+
+    task_root = (base_dir / "assets" / task_id).resolve()
+    image_path = (base_dir / attachment_path).resolve()
+    if not image_path.is_relative_to(task_root):
+        raise PermissionError("attachment path is outside the task asset directory")
+
+    content_type = IMAGE_CONTENT_TYPES.get(image_path.suffix.lower())
+    if content_type is None:
+        raise ValueError("attachment is not a supported image")
+    if not image_path.is_file():
+        raise FileNotFoundError("attachment file not found")
+    return image_path, content_type
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -64,7 +117,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_bytes(status, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        request = urlparse(self.path)
+        path = request.path
         if path in {"/", "/dashboard.html"}:
             try:
                 self.send_bytes(HTTPStatus.OK, "text/html; charset=utf-8", self.server.dashboard_path.read_bytes())
@@ -75,7 +129,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 database = connect(self.server.database_path)
                 try:
-                    payload = state_payload(database)
+                    payload = state_payload(database, self.server.runtime_config)
+                    payload["services"], payload["health_events"] = runtime_health()
                     payload["runtime_config"] = self.server.runtime_config
                     self.send_json(HTTPStatus.OK, payload)
                 finally:
@@ -83,11 +138,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except (sqlite3.Error, OSError, ValueError) as error:
                 self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
             return
+        if path == "/api/attachment":
+            parameters = parse_qs(request.query, keep_blank_values=True)
+            task_ids = parameters.get("task_id", [])
+            attachment_paths = parameters.get("path", [])
+            if len(task_ids) != 1 or len(attachment_paths) != 1 or not task_ids[0] or not attachment_paths[0]:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "task_id and path are required"})
+                return
+            try:
+                database = connect(self.server.database_path)
+                try:
+                    image_path, content_type = resolve_attachment_image(
+                        database,
+                        task_ids[0],
+                        attachment_paths[0],
+                    )
+                    body = image_path.read_bytes()
+                finally:
+                    database.close()
+                self.send_bytes(HTTPStatus.OK, content_type, body)
+            except FileNotFoundError as error:
+                self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": str(error)})
+            except PermissionError as error:
+                self.send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": str(error)})
+            except ValueError as error:
+                self.send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"ok": False, "error": str(error)})
+            except (sqlite3.Error, OSError) as error:
+                self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
+            return
         if path == "/healthz":
             try:
                 database = connect(self.server.database_path)
                 try:
-                    schema = metadata(database, "schema_version")
+                    schema = schema_version(database)
                     active = database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0]
                     tasks = database.execute("SELECT count(*) FROM tasks").fetchone()[0]
                     if schema != SCHEMA_VERSION:

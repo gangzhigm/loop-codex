@@ -1,21 +1,5 @@
 PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS metadata (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value_json TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS projects (
-  path TEXT PRIMARY KEY,
-  description TEXT NOT NULL DEFAULT '',
-  exists_on_disk INTEGER NOT NULL DEFAULT 1 CHECK (exists_on_disk IN (0, 1)),
-  updated_at TEXT NOT NULL
-);
+PRAGMA user_version = 30000;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -138,34 +122,6 @@ CREATE TABLE IF NOT EXISTS task_conflicts (
   blocker_execution_id TEXT NOT NULL,
   detected_at TEXT NOT NULL,
   PRIMARY KEY (task_id, scope_key, blocker_execution_id)
-);
-
-CREATE TABLE IF NOT EXISTS change_requests (
-  id TEXT PRIMARY KEY,
-  action TEXT NOT NULL,
-  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-  reason TEXT NOT NULL,
-  requested_at TEXT NOT NULL,
-  status TEXT NOT NULL,
-  payload_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS health_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  at TEXT NOT NULL,
-  component TEXT NOT NULL,
-  status TEXT NOT NULL,
-  message TEXT NOT NULL,
-  details_json TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS service_state (
-  component TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  pid INTEGER,
-  checked_at TEXT NOT NULL,
-  consecutive_failures INTEGER NOT NULL DEFAULT 0,
-  message TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_queue

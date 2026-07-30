@@ -1,15 +1,46 @@
 {
-  "config_version": "1.0.0",
+  "config_version": "2.0.0",
+  "workspace": {
+    "name": "Cross-Project Local Agent Loop",
+    "timezone": "Asia/Shanghai",
+    "task_root": "E:\\code",
+    "project_registry": "E:\\code\\根目录清单.md"
+  },
+  "database": {
+    "path": "data/loop-agent.sqlite3",
+    "schema_version": "3.0.0"
+  },
+  "prompts": {
+    "operator": "prompts/operator.md",
+    "worker": "prompts/worker.md"
+  },
+  "task_execution": {
+    "heartbeat_interval_seconds": 30,
+    "stalled_after_seconds": 300,
+    "task_lease_seconds": 3600,
+    "max_attempts": 2,
+    "max_parallel_tasks": 6,
+    "scope_conflict_mode": "project",
+    "require_human_approval_for": [
+      "delete",
+      "publish",
+      "git_commit",
+      "external_message",
+      "credential_access"
+    ]
+  },
   "dashboard": {
     "host": "127.0.0.1",
     "port": 4178,
     "poll_interval_ms": 2000
   },
   "automations": {
-    "worker_interval_minutes": 10,
-    "health_interval_minutes": 30
+    "worker_interval_minutes": 10
   },
   "health": {
+    "scheduler": "windows_task_scheduler",
+    "task_name": "Local Agent Loop Health",
+    "interval_minutes": 10,
     "failure_threshold": 3
   }
 }
