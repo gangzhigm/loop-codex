@@ -236,6 +236,25 @@
 
     .metric:last-child { border-right: 0; }
 
+    .metric-filter {
+      width: 100%;
+      border: 0;
+      color: inherit;
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }
+
+    .metric-filter:hover,
+    .metric-filter:focus-visible,
+    .metric-filter[aria-pressed="true"] {
+      background: var(--accent-soft);
+      box-shadow: inset 0 -2px 0 var(--accent);
+    }
+
+    .metric-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
     .metric-label {
       color: var(--muted);
       font-size: 11px;
@@ -300,7 +319,7 @@
     }
 
     .section-header h2,
-    .side-block h2 {
+    .side-block .side-title {
       margin: 0;
       font-size: 15px;
       line-height: 1.3;
@@ -333,9 +352,7 @@
       overscroll-behavior-inline: contain;
     }
 
-    .search-input,
-    .project-select,
-    .profile-select {
+    .search-input {
       height: 34px;
       border: 1px solid var(--line-strong);
       border-radius: 6px;
@@ -349,15 +366,6 @@
       width: 220px;
       min-width: 140px;
       max-width: 220px;
-    }
-
-    .project-select,
-    .profile-select {
-      flex: 1 1 150px;
-      width: 190px;
-      min-width: 130px;
-      max-width: 190px;
-      font-size: 12px;
     }
 
     .segments {
@@ -393,6 +401,21 @@
       box-shadow: 0 1px 3px rgba(24, 33, 43, 0.12);
     }
 
+    .segments button[data-filter="confirmation"] {
+      flex-basis: 82px;
+      width: 82px;
+    }
+
+    .search-input,
+    .segments button,
+    .header-filter-button,
+    .header-filter-option {
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: normal;
+    }
+
     .task-section {
       display: flex;
       flex-direction: column;
@@ -413,6 +436,9 @@
     }
 
     th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
       height: 38px;
       padding: 7px 12px;
       border-bottom: 1px solid var(--line);
@@ -423,12 +449,105 @@
       text-align: left;
     }
 
+    .table-header-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    .header-filter-button {
+      display: inline-grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .header-filter-button::before {
+      width: 12px;
+      height: 10px;
+      background: currentColor;
+      clip-path: polygon(0 0, 100% 0, 64% 45%, 64% 100%, 36% 100%, 36% 45%);
+      content: "";
+    }
+
+    .header-filter-button:hover,
+    .header-filter-button:focus-visible,
+    .header-filter-button.is-active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .header-filter-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+    .header-filter-menu {
+      position: fixed;
+      z-index: 20;
+      display: grid;
+      gap: 3px;
+      width: max-content;
+      min-width: 166px;
+      max-width: min(280px, calc(100vw - 24px));
+      max-height: min(320px, calc(100vh - 24px));
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      padding: 5px;
+      background: var(--surface);
+      box-shadow: 0 8px 20px rgba(24, 33, 43, 0.18);
+    }
+
+    .header-filter-option {
+      width: 100%;
+      min-height: 30px;
+      border: 0;
+      border-radius: 4px;
+      padding: 6px 8px;
+      color: var(--ink);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .header-filter-option:hover,
+    .header-filter-option:focus-visible,
+    .header-filter-option[aria-checked="true"] { background: var(--accent-soft); color: var(--accent); }
+    .header-filter-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
     td {
       padding: 13px 12px;
       border-bottom: 1px solid var(--line);
       vertical-align: middle;
       font-size: 13px;
     }
+
+    .task-time-info {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    .task-time-row {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      align-items: baseline;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .task-time-label { color: var(--muted); font-size: 10px; }
+    .task-time-value { min-width: 0; overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .task-time-value.is-placeholder { color: var(--muted); font-weight: 500; }
 
     tbody tr { cursor: pointer; }
     tbody tr:hover { background: #f7fbfb; }
@@ -721,7 +840,6 @@
       scrollbar-gutter: stable;
     }
 
-    .side-block { padding: 16px; }
     .side-block + .side-block { border-top: 1px solid var(--line); }
 
     .side-heading {
@@ -729,10 +847,67 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 12px;
+      width: 100%;
+      min-height: 58px;
+      border: 0;
+      padding: 14px 16px;
+      color: var(--ink);
+      background: var(--surface);
+      cursor: pointer;
+      text-align: left;
     }
 
-    .side-heading span { color: var(--muted); font-size: 11px; }
+    .side-heading-group {
+      display: flex;
+      align-items: baseline;
+      min-width: 0;
+      gap: 8px;
+    }
+
+    .side-heading-summary {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.3;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .side-heading::after {
+      flex: 0 0 auto;
+    }
+
+    .side-heading:hover { background: var(--surface-subtle); }
+    .side-heading:focus-visible { outline-offset: -3px; }
+
+    .side-heading::after {
+      width: 8px;
+      height: 8px;
+      margin-left: 4px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      content: "";
+      transform: rotate(45deg) translateY(-2px);
+      transition: transform 160ms ease;
+    }
+
+    .side-heading[aria-expanded="true"]::after { transform: rotate(225deg) translateY(-2px); }
+
+    .side-content {
+      overflow: hidden;
+      max-height: 0;
+      padding: 0 16px;
+      opacity: 0;
+      transition: max-height 180ms ease, padding 180ms ease, opacity 140ms ease;
+    }
+
+    .side-content.is-expanded {
+      max-height: 900px;
+      padding: 0 16px 16px;
+      opacity: 1;
+    }
 
     .alert-list,
     .agent-list,
@@ -992,8 +1167,8 @@
       .task-section { display: block; overflow: hidden; }
       .table-wrap { min-height: auto; overflow-x: auto; overflow-y: visible; }
       .empty-state { min-height: 280px; }
-      .side-section { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
-      .side-block + .side-block { border-top: 0; border-left: 1px solid var(--line); }
+      .side-section { display: block; overflow: visible; }
+      .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
       .profile-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
@@ -1021,8 +1196,6 @@
       .task-section { overflow: hidden; }
       .task-tools { justify-content: flex-start; padding-bottom: 4px; scrollbar-width: thin; }
       .search-input { flex: 0 0 180px; width: 180px; }
-      .project-select { flex: 0 0 150px; width: 150px; }
-      .profile-select { flex: 0 0 142px; width: 142px; }
       .table-wrap { width: 100%; overflow: visible; }
       table, thead, tbody { display: block; width: 100%; min-width: 0; }
       table { table-layout: auto; }
@@ -1039,6 +1212,8 @@
       .status-cell { overflow: visible; }
       .status-stack { width: 100%; justify-items: start; }
       .conflict-summary { width: min(240px, 100%); }
+      .task-time-info { width: 100%; }
+      .task-time-row { grid-template-columns: 30px minmax(0, 1fr); }
       .conflict-popover { right: auto; left: 0; }
       .progress-cell { width: min(200px, 100%); }
       .project-cell { width: 100%; align-items: flex-start; }
@@ -1069,10 +1244,10 @@
     <div class="header-status">
       <section class="summary-band" aria-label="任务总览">
         <div class="metric"><div class="metric-label">当前任务</div><div id="metricTotal" class="metric-value">0</div></div>
-        <div class="metric"><div class="metric-label">待执行</div><div id="metricPending" class="metric-value">0</div></div>
-        <div class="metric"><div class="metric-label">执行中</div><div id="metricRunning" class="metric-value">0</div></div>
-        <div class="metric"><div class="metric-label">需要关注</div><div id="metricAttention" class="metric-value warning">0</div></div>
-        <div class="metric"><div class="metric-label">待确认/归档</div><div id="metricConfirmation" class="metric-value success">0</div></div>
+        <button class="metric metric-filter" type="button" data-filter="pending" aria-pressed="false"><span class="metric-label">待执行</span><span id="metricPending" class="metric-value">0</span></button>
+        <button class="metric metric-filter" type="button" data-filter="active" aria-pressed="false"><span class="metric-label">执行中</span><span id="metricRunning" class="metric-value">0</span></button>
+        <button class="metric metric-filter" type="button" data-filter="attention" aria-pressed="false"><span class="metric-label">需要关注</span><span id="metricAttention" class="metric-value warning">0</span></button>
+        <button class="metric metric-filter" type="button" data-filter="confirmation" aria-pressed="false"><span class="metric-label">待确认/归档</span><span id="metricConfirmation" class="metric-value success">0</span></button>
         <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
       </section>
       <div id="distribution" class="distribution" aria-label="任务状态分布">
@@ -1107,17 +1282,12 @@
           <div class="section-title"><h2>任务</h2><span id="taskViewCount" class="view-count">当前 0 项</span></div>
           <div class="task-tools">
             <input id="search" class="search-input" type="search" placeholder="搜索 ID、标题或项目" aria-label="搜索任务">
-            <select id="projectFilter" class="project-select" aria-label="按项目筛选任务">
-              <option value="all">全部项目</option>
-            </select>
-            <select id="profileFilter" class="profile-select" aria-label="按执行档位筛选任务">
-              <option value="all">全部档位</option>
-            </select>
             <div class="segments" aria-label="任务筛选">
               <button type="button" data-filter="all" aria-pressed="true">全部</button>
               <button type="button" data-filter="pending" aria-pressed="false">待执行</button>
               <button type="button" data-filter="active" aria-pressed="false">执行中</button>
               <button type="button" data-filter="attention" aria-pressed="false">需关注</button>
+              <button type="button" data-filter="confirmation" aria-pressed="false">待确认/归档</button>
               <button type="button" data-filter="closed" aria-pressed="false">已结束</button>
               <button type="button" data-filter="archived" aria-pressed="false">已归档</button>
             </div>
@@ -1130,10 +1300,10 @@
                 <th style="width: 27%">任务</th>
                 <th style="width: 13%">状态</th>
                 <th style="width: 9%">优先级</th>
-                <th style="width: 11%">执行档位</th>
-                <th style="width: 13%">项目</th>
+                <th style="width: 11%"><span class="table-header-label">执行档位 <button id="profileFilter" class="header-filter-button" type="button" aria-label="筛选执行档位" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选执行档位"></button></span></th>
+                <th style="width: 13%"><span class="table-header-label">项目 <button id="projectFilter" class="header-filter-button" type="button" aria-label="筛选项目" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选项目"></button></span></th>
                 <th style="width: 16%">进度</th>
-                <th style="width: 11%">耗时</th>
+                <th style="width: 11%">时间</th>
               </tr>
             </thead>
             <tbody id="taskRows"></tbody>
@@ -1142,24 +1312,25 @@
         <div id="taskEmpty" class="empty-state">
           <div><strong>正在载入任务</strong><span>等待 SQLite 状态服务响应</span></div>
         </div>
+        <div id="headerFilterMenu" class="header-filter-menu" role="menu" hidden></div>
       </section>
 
       <aside class="side-section" aria-label="运行详情">
         <section class="side-block">
-          <div class="side-heading"><h2>需要关注</h2><span id="alertCount">0 项</span></div>
-          <ul id="alertList" class="alert-list"><li class="muted">暂无异常</li></ul>
+          <button class="side-heading" type="button" aria-expanded="false" aria-controls="alertContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">需要关注</span><span id="alertCount" class="side-heading-summary">0 项</span></span></button>
+          <div id="alertContent" class="side-content" hidden><ul id="alertList" class="alert-list"><li class="muted">暂无异常</li></ul></div>
         </section>
         <section class="side-block">
-          <div class="side-heading"><h2>活动执行</h2><span id="agentCount">0 项</span></div>
-          <ul id="agentList" class="agent-list"><li class="muted">暂无活动执行</li></ul>
+          <button class="side-heading" type="button" aria-expanded="false" aria-controls="agentContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">活动执行</span><span id="agentCount" class="side-heading-summary">0 项</span></span></button>
+          <div id="agentContent" class="side-content" hidden><ul id="agentList" class="agent-list"><li class="muted">暂无活动执行</li></ul></div>
         </section>
         <section class="side-block">
-          <div class="side-heading"><h2>执行档位</h2><span id="profileCount">0 档活动</span></div>
-          <ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul>
+          <button class="side-heading" type="button" aria-expanded="false" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">执行档位</span><span id="profileCount" class="side-heading-summary">0 档活动</span></span></button>
+          <div id="profileContent" class="side-content" hidden><ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul></div>
         </section>
         <section class="side-block">
-          <div class="side-heading"><h2>最近活动</h2><span>状态变更</span></div>
-          <ul id="activityList" class="activity-list"><li class="muted">暂无活动</li></ul>
+          <button class="side-heading" type="button" aria-expanded="true" aria-controls="activityContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">最近活动</span><span class="side-heading-summary">状态变更</span></span></button>
+          <div id="activityContent" class="side-content is-expanded"><ul id="activityList" class="activity-list"><li class="muted">暂无活动</li></ul></div>
         </section>
       </aside>
     </div>
@@ -1215,6 +1386,7 @@
       search: document.querySelector("#search"),
       projectFilter: document.querySelector("#projectFilter"),
       profileFilter: document.querySelector("#profileFilter"),
+      headerFilterMenu: document.querySelector("#headerFilterMenu"),
       taskTable: document.querySelector("#taskTable"),
       taskEmpty: document.querySelector("#taskEmpty"),
       taskRows: document.querySelector("#taskRows"),
@@ -1247,6 +1419,8 @@
     let currentProject = "all";
     let currentProfile = "all";
     let currentQuery = "";
+    let activeHeaderFilter = null;
+    let availableProjects = [];
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -1321,6 +1495,40 @@
       const hours = Math.floor(minutes / 60);
       if (hours < 24) return `${hours}小时 ${minutes % 60}分`;
       return `${Math.floor(hours / 24)}天 ${hours % 24}小时`;
+    }
+
+    function formatTaskTime(value) {
+      if (!value) return "--";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "时间无效";
+      return new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).format(date);
+    }
+
+    function formatTaskDuration(task) {
+      const startTime = new Date(task?.started_at).getTime();
+      if (!Number.isFinite(startTime)) return "--";
+      if (task.status === "RUNNING") return formatDuration(task.started_at, null);
+      const completedTime = new Date(task?.completed_at).getTime();
+      return Number.isFinite(completedTime) ? formatDuration(task.started_at, task.completed_at) : "--";
+    }
+
+    function taskTimeValue(value) {
+      const formatted = formatTaskTime(value);
+      return `<span class="task-time-value${formatted === "--" ? " is-placeholder" : ""}">${escapeHtml(formatted)}</span>`;
+    }
+
+    function taskDurationValue(task) {
+      const formatted = formatTaskDuration(task);
+      return `<span class="task-time-value${formatted === "--" ? " is-placeholder" : ""}">${escapeHtml(formatted)}</span>`;
     }
 
     function formatConflictDetectedAt(value) {
@@ -1421,14 +1629,10 @@
     }
 
     function renderProjectFilter(tasks) {
-      const projects = [...new Set(tasks.flatMap(taskProjects))]
+      availableProjects = [...new Set(tasks.flatMap(taskProjects))]
         .sort((left, right) => left.localeCompare(right, "zh-CN"));
-      if (currentProject !== "all" && !projects.includes(currentProject)) currentProject = "all";
-      elements.projectFilter.innerHTML = [
-        '<option value="all">全部项目</option>',
-        ...projects.map((project) => `<option value="${escapeHtml(project)}">${escapeHtml(project)}</option>`)
-      ].join("");
-      elements.projectFilter.value = currentProject;
+      if (currentProject !== "all" && !availableProjects.includes(currentProject)) currentProject = "all";
+      renderHeaderFilterButtons();
     }
 
     function projectCell(task) {
@@ -1452,11 +1656,72 @@
 
     function renderProfileFilter() {
       if (currentProfile !== "all" && !EXECUTION_PROFILES.includes(currentProfile)) currentProfile = "all";
-      elements.profileFilter.innerHTML = [
-        '<option value="all">全部档位</option>',
-        ...EXECUTION_PROFILES.map((profile) => `<option value="${profile}">${escapeHtml(PROFILE_LABELS[profile])}</option>`)
-      ].join("");
-      elements.profileFilter.value = currentProfile;
+      renderHeaderFilterButtons();
+    }
+
+    function headerFilterOptions(kind) {
+      if (kind === "project") return [["all", "全部项目"], ...availableProjects.map((project) => [project, project])];
+      return [["all", "全部档位"], ...EXECUTION_PROFILES.map((profile) => [profile, PROFILE_LABELS[profile]] )];
+    }
+
+    function selectedHeaderFilterValue(kind) {
+      return kind === "project" ? currentProject : currentProfile;
+    }
+
+    function renderHeaderFilterButtons() {
+      [["project", elements.projectFilter], ["profile", elements.profileFilter]].forEach(([kind, button]) => {
+        const active = selectedHeaderFilterValue(kind) !== "all";
+        button.classList.toggle("is-active", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
+      if (activeHeaderFilter) renderHeaderFilterMenu();
+    }
+
+    function positionHeaderFilterMenu(trigger) {
+      const rect = trigger.getBoundingClientRect();
+      const menu = elements.headerFilterMenu;
+      menu.style.left = `${Math.max(12, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 12))}px`;
+      menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 12)}px`;
+    }
+
+    function renderHeaderFilterMenu() {
+      if (!activeHeaderFilter) return;
+      const trigger = activeHeaderFilter === "project" ? elements.projectFilter : elements.profileFilter;
+      const selected = selectedHeaderFilterValue(activeHeaderFilter);
+      elements.headerFilterMenu.innerHTML = headerFilterOptions(activeHeaderFilter).map(([value, label]) => `
+        <button class="header-filter-option" type="button" role="menuitemradio" aria-checked="${value === selected}" data-header-filter-kind="${activeHeaderFilter}" data-header-filter-value="${escapeHtml(value)}">${escapeHtml(label)}</button>`).join("");
+      elements.headerFilterMenu.hidden = false;
+      positionHeaderFilterMenu(trigger);
+    }
+
+    function closeHeaderFilterMenu({ restoreFocus = false } = {}) {
+      if (!activeHeaderFilter) return;
+      const trigger = activeHeaderFilter === "project" ? elements.projectFilter : elements.profileFilter;
+      activeHeaderFilter = null;
+      elements.headerFilterMenu.hidden = true;
+      elements.projectFilter.setAttribute("aria-expanded", "false");
+      elements.profileFilter.setAttribute("aria-expanded", "false");
+      if (restoreFocus) trigger.focus();
+    }
+
+    function openHeaderFilter(kind) {
+      if (activeHeaderFilter === kind) {
+        closeHeaderFilterMenu({ restoreFocus: true });
+        return;
+      }
+      activeHeaderFilter = kind;
+      elements.projectFilter.setAttribute("aria-expanded", String(kind === "project"));
+      elements.profileFilter.setAttribute("aria-expanded", String(kind === "profile"));
+      renderHeaderFilterMenu();
+      elements.headerFilterMenu.querySelector(".header-filter-option[aria-checked=\"true\"]")?.focus();
+    }
+
+    function setHeaderFilter(kind, value) {
+      if (kind === "project") currentProject = value;
+      else currentProfile = value;
+      closeHeaderFilterMenu({ restoreFocus: true });
+      renderHeaderFilterButtons();
+      if (state) renderTasks(state.tasks);
     }
 
     function validateState(candidate) {
@@ -1527,6 +1792,7 @@
       if (currentFilter === "pending" && task.status !== "PENDING") return false;
       if (currentFilter === "active" && !ACTIVE_STATUSES.has(task.status)) return false;
       if (currentFilter === "attention" && !needsAttention(task)) return false;
+      if (currentFilter === "confirmation" && !["SUCCEEDED", "CONFIRMED"].includes(task.status)) return false;
       if (currentFilter === "closed" && !CLOSED_STATUSES.has(task.status)) return false;
       if (currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;
       if (currentProfile !== "all" && task.execution_profile !== currentProfile) return false;
@@ -1627,7 +1893,11 @@
               <span>${task.progress.percent}%</span>
             </div>
           </td>
-          <td data-label="耗时"><span>${escapeHtml(formatDuration(task.started_at, task.completed_at))}</span></td>
+          <td data-label="时间"><div class="task-time-info">
+            <div class="task-time-row"><span class="task-time-label">开始</span>${taskTimeValue(task.started_at)}</div>
+            <div class="task-time-row"><span class="task-time-label">完成</span>${taskTimeValue(task.completed_at)}</div>
+            <div class="task-time-row"><span class="task-time-label">耗时</span>${taskDurationValue(task)}</div>
+          </div></td>
         </tr>
       `).join("");
 
@@ -1707,6 +1977,18 @@
           <span class="activity-copy"><strong>${escapeHtml(event.taskId)}</strong> ${escapeHtml(STATUS_LABELS[event.to] ?? event.to)} · ${escapeHtml(event.reason)}</span>
         </li>
       `).join("") : '<li class="muted">暂无活动</li>';
+    }
+
+    function setExpandedSidePanel(button) {
+      const shouldExpand = button.getAttribute("aria-expanded") !== "true";
+      document.querySelectorAll(".side-heading").forEach((candidate) => {
+        const content = document.querySelector(`#${candidate.getAttribute("aria-controls")}`);
+        const expanded = shouldExpand && candidate === button;
+        candidate.setAttribute("aria-expanded", String(expanded));
+        content.hidden = false;
+        content.classList.toggle("is-expanded", expanded);
+        if (!expanded) window.setTimeout(() => { if (candidate.getAttribute("aria-expanded") === "false") content.hidden = true; }, 180);
+      });
     }
 
     function listBlock(title, values, emptyText = "无") {
@@ -1795,20 +2077,37 @@
       currentQuery = event.target.value.trim().toLocaleLowerCase("zh-CN");
       if (state) renderTasks(state.tasks);
     });
-    elements.projectFilter.addEventListener("change", (event) => {
-      currentProject = event.target.value;
-      if (state) renderTasks(state.tasks);
+    elements.projectFilter.addEventListener("click", () => openHeaderFilter("project"));
+    elements.profileFilter.addEventListener("click", () => openHeaderFilter("profile"));
+    elements.headerFilterMenu.addEventListener("click", (event) => {
+      const option = event.target.closest(".header-filter-option");
+      if (option) setHeaderFilter(option.dataset.headerFilterKind, option.dataset.headerFilterValue);
     });
-    elements.profileFilter.addEventListener("change", (event) => {
-      currentProfile = event.target.value;
-      if (state) renderTasks(state.tasks);
+    elements.headerFilterMenu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeHeaderFilterMenu({ restoreFocus: true });
+      }
     });
-    document.querySelectorAll("[data-filter]").forEach((button) => {
-      button.addEventListener("click", () => {
-        currentFilter = button.dataset.filter;
-        document.querySelectorAll("[data-filter]").forEach((candidate) => candidate.setAttribute("aria-pressed", String(candidate === button)));
-        if (state) renderTasks(state.tasks);
+    document.addEventListener("pointerdown", (event) => {
+      if (activeHeaderFilter && !elements.headerFilterMenu.contains(event.target) && !event.target.closest(".header-filter-button")) closeHeaderFilterMenu();
+    });
+    window.addEventListener("resize", () => {
+      if (activeHeaderFilter) renderHeaderFilterMenu();
+    });
+    elements.taskTable.addEventListener("scroll", () => {
+      if (activeHeaderFilter) renderHeaderFilterMenu();
+    });
+    function setTaskFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll("[data-filter]").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.filter === currentFilter));
       });
+      if (state) renderTasks(state.tasks);
+    }
+
+    document.querySelectorAll("[data-filter]").forEach((button) => {
+      button.addEventListener("click", () => setTaskFilter(button.dataset.filter));
     });
     elements.taskRows.addEventListener("click", (event) => {
       const copyButton = event.target.closest(".task-copy-button");
@@ -1829,6 +2128,10 @@
       if (!row) return;
       event.preventDefault();
       openTask(row.dataset.taskId);
+    });
+    document.querySelector(".side-section").addEventListener("click", (event) => {
+      const heading = event.target.closest(".side-heading");
+      if (heading) setExpandedSidePanel(heading);
     });
     elements.closeDialog.addEventListener("click", () => elements.taskDialog.close());
     elements.taskDialog.addEventListener("click", (event) => {
