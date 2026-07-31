@@ -35,10 +35,16 @@
 
     [hidden] { display: none !important; }
 
+    html,
+    body { height: 100%; }
+
     body {
       margin: 0;
       min-width: 320px;
-      min-height: 100vh;
+      min-height: 100dvh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
       background: var(--canvas);
     }
 
@@ -54,6 +60,7 @@
     }
 
     .app-header {
+      flex: 0 0 auto;
       min-height: 78px;
       display: grid;
       grid-template-columns: minmax(230px, auto) minmax(420px, 1fr) auto;
@@ -178,9 +185,13 @@
     .secondary-button:hover { background: var(--surface-subtle); }
 
     .main {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
       width: min(1480px, 100%);
       margin: 0 auto;
-      padding: 16px 28px 40px;
+      padding: 16px 28px;
     }
 
     .notice {
@@ -261,15 +272,18 @@
     .distribution .queued { background: #98a2ad; }
 
     .content-grid {
+      flex: 1 1 auto;
+      min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 2.2fr) minmax(290px, 0.8fr);
+      grid-template-columns: minmax(0, 1.85fr) minmax(360px, 1fr);
       gap: 22px;
-      align-items: start;
+      align-items: stretch;
     }
 
     .task-section,
     .side-section {
       min-width: 0;
+      min-height: 0;
       background: var(--surface);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -379,7 +393,18 @@
       box-shadow: 0 1px 3px rgba(24, 33, 43, 0.12);
     }
 
-    .table-wrap { overflow-x: auto; }
+    .task-section {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .table-wrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
 
     table {
       width: 100%;
@@ -676,7 +701,8 @@
 
     .empty-state {
       display: grid;
-      min-height: 280px;
+      flex: 1 1 auto;
+      min-height: 0;
       place-items: center;
       padding: 30px;
       color: var(--muted);
@@ -690,7 +716,10 @@
       font-size: 15px;
     }
 
-    .side-section { overflow: hidden; }
+    .side-section {
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
 
     .side-block { padding: 16px; }
     .side-block + .side-block { border-top: 1px solid var(--line); }
@@ -714,6 +743,58 @@
       margin: 0;
       padding: 0;
       list-style: none;
+    }
+
+    .profile-list {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .profile-card {
+      display: grid;
+      grid-template-columns: 9px minmax(0, 1fr);
+      grid-template-rows: minmax(17px, auto) auto;
+      align-items: start;
+      column-gap: 8px;
+      row-gap: 4px;
+      min-width: 0;
+      min-height: 76px;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-subtle);
+    }
+
+    .profile-card .agent-dot { margin-top: 3px; }
+    .profile-card .agent-name { min-width: 0; }
+    .profile-card .agent-role {
+      grid-column: 2;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      min-width: 0;
+      line-height: 1.3;
+    }
+
+    .profile-card .profile-stats {
+      display: grid;
+      gap: 1px;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .profile-card .profile-stat-value {
+      color: var(--ink);
+      font-size: 15px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 760;
+      line-height: 1.15;
+    }
+
+    .profile-card .profile-stat-label {
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.2;
     }
 
     .alert-item {
@@ -898,12 +979,22 @@
     }
 
     @media (max-width: 1080px) {
+      body {
+        min-height: 100vh;
+        overflow: auto;
+        display: block;
+      }
+      .main { display: block; }
       .summary-band { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .metric:nth-child(3) { border-right: 0; }
       .metric:nth-child(-n + 3) { border-bottom: 1px solid var(--line); }
-      .content-grid { grid-template-columns: minmax(0, 1fr); }
-      .side-section { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .content-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
+      .task-section { display: block; overflow: hidden; }
+      .table-wrap { min-height: auto; overflow-x: auto; overflow-y: visible; }
+      .empty-state { min-height: 280px; }
+      .side-section { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; }
       .side-block + .side-block { border-top: 0; border-left: 1px solid var(--line); }
+      .profile-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 760px) {
@@ -953,6 +1044,7 @@
       .project-cell { width: 100%; align-items: flex-start; }
       .side-section { grid-template-columns: minmax(0, 1fr); }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
+      .profile-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
@@ -961,6 +1053,7 @@
       .header-actions { align-items: stretch; flex-direction: column; }
       .primary-button { width: 100%; }
       .detail-grid { grid-template-columns: minmax(0, 1fr); }
+      .profile-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -976,11 +1069,11 @@
     <div class="header-status">
       <section class="summary-band" aria-label="任务总览">
         <div class="metric"><div class="metric-label">当前任务</div><div id="metricTotal" class="metric-value">0</div></div>
-        <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
+        <div class="metric"><div class="metric-label">待执行</div><div id="metricPending" class="metric-value">0</div></div>
         <div class="metric"><div class="metric-label">执行中</div><div id="metricRunning" class="metric-value">0</div></div>
-        <div class="metric"><div class="metric-label">等待人工</div><div id="metricHuman" class="metric-value warning">0</div></div>
-        <div class="metric"><div class="metric-label">卡顿或阻塞</div><div id="metricBlocked" class="metric-value warning">0</div></div>
-        <div class="metric"><div class="metric-label">失败</div><div id="metricFailed" class="metric-value danger">0</div></div>
+        <div class="metric"><div class="metric-label">需要关注</div><div id="metricAttention" class="metric-value warning">0</div></div>
+        <div class="metric"><div class="metric-label">待确认/归档</div><div id="metricConfirmation" class="metric-value success">0</div></div>
+        <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
       </section>
       <div id="distribution" class="distribution" aria-label="任务状态分布">
         <span class="done" style="width: 0"></span>
@@ -1024,7 +1117,6 @@
               <button type="button" data-filter="all" aria-pressed="true">全部</button>
               <button type="button" data-filter="pending" aria-pressed="false">待执行</button>
               <button type="button" data-filter="active" aria-pressed="false">执行中</button>
-              <button type="button" data-filter="human" aria-pressed="false">需人工</button>
               <button type="button" data-filter="attention" aria-pressed="false">需关注</button>
               <button type="button" data-filter="closed" aria-pressed="false">已结束</button>
               <button type="button" data-filter="archived" aria-pressed="false">已归档</button>
@@ -1105,7 +1197,6 @@
     };
     const EXECUTION_PROFILES = Object.keys(PROFILE_LABELS);
     const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"]);
-    const HUMAN_STATUSES = new Set(["DRAFT", "WAITING_HUMAN"]);
     const ATTENTION_STATUSES = new Set(["DRAFT", "WAITING_CONFLICT", "WAITING_HUMAN", "BLOCKED", "STALLED", "FAILED"]);
     const CLOSED_STATUSES = new Set(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
     const PRIORITY_ORDER = { blocker: 0, critical: 1, high: 2, medium: 3, low: 4 };
@@ -1129,11 +1220,11 @@
       taskRows: document.querySelector("#taskRows"),
       taskViewCount: document.querySelector("#taskViewCount"),
       metricTotal: document.querySelector("#metricTotal"),
-      metricRate: document.querySelector("#metricRate"),
+      metricPending: document.querySelector("#metricPending"),
       metricRunning: document.querySelector("#metricRunning"),
-      metricHuman: document.querySelector("#metricHuman"),
-      metricBlocked: document.querySelector("#metricBlocked"),
-      metricFailed: document.querySelector("#metricFailed"),
+      metricAttention: document.querySelector("#metricAttention"),
+      metricConfirmation: document.querySelector("#metricConfirmation"),
+      metricRate: document.querySelector("#metricRate"),
       distribution: document.querySelector("#distribution"),
       workspaceUpdated: document.querySelector("#workspaceUpdated"),
       alertList: document.querySelector("#alertList"),
@@ -1435,8 +1526,7 @@
       }
       if (currentFilter === "pending" && task.status !== "PENDING") return false;
       if (currentFilter === "active" && !ACTIVE_STATUSES.has(task.status)) return false;
-      if (currentFilter === "human" && !HUMAN_STATUSES.has(task.status)) return false;
-      if (currentFilter === "attention" && !ATTENTION_STATUSES.has(task.status) && !isHeartbeatLate(task)) return false;
+      if (currentFilter === "attention" && !needsAttention(task)) return false;
       if (currentFilter === "closed" && !CLOSED_STATUSES.has(task.status)) return false;
       if (currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;
       if (currentProfile !== "all" && task.execution_profile !== currentProfile) return false;
@@ -1456,6 +1546,10 @@
       return Date.now() - new Date(task.heartbeat_at).getTime() > threshold;
     }
 
+    function needsAttention(task) {
+      return ATTENTION_STATUSES.has(task.status) || isHeartbeatLate(task);
+    }
+
     function render() {
       const tasks = state?.tasks ?? [];
       const currentTasks = tasks.filter((task) => !isArchived(task));
@@ -1465,28 +1559,30 @@
       }, {});
       const succeeded = (counts.SUCCEEDED ?? 0) + (counts.CONFIRMED ?? 0);
       const running = (counts.RUNNING ?? 0) + (counts.CLAIMED ?? 0);
-      const blocked = (counts.WAITING_CONFLICT ?? 0) + (counts.BLOCKED ?? 0) + (counts.STALLED ?? 0);
       const failed = counts.FAILED ?? 0;
-      const human = (counts.DRAFT ?? 0) + (counts.WAITING_HUMAN ?? 0);
+      const attentionTasks = currentTasks.filter(needsAttention);
+      const attention = attentionTasks.length;
+      const pending = counts.PENDING ?? 0;
+      const confirmation = (counts.SUCCEEDED ?? 0) + (counts.CONFIRMED ?? 0);
       const queued = (counts.DRAFT ?? 0) + (counts.PENDING ?? 0) + (counts.CANCELLED ?? 0);
       const total = currentTasks.length;
 
       elements.metricTotal.textContent = total;
-      elements.metricRate.textContent = total ? `${Math.round((succeeded / total) * 100)}%` : "0%";
+      elements.metricPending.textContent = pending;
       elements.metricRunning.textContent = running;
-      elements.metricHuman.textContent = human;
-      elements.metricBlocked.textContent = blocked;
-      elements.metricFailed.textContent = failed;
-      const widths = [succeeded, running, human + blocked, failed, queued].map((value) => total ? `${(value / total) * 100}%` : "0%");
+      elements.metricAttention.textContent = attention;
+      elements.metricConfirmation.textContent = confirmation;
+      elements.metricRate.textContent = total ? `${Math.round((succeeded / total) * 100)}%` : "0%";
+      const widths = [succeeded, running, attention, failed, queued].map((value) => total ? `${(value / total) * 100}%` : "0%");
       [...elements.distribution.children].forEach((child, index) => { child.style.width = widths[index]; });
-      elements.distribution.setAttribute("aria-label", `任务状态分布：完成 ${succeeded}，执行中 ${running}，需关注 ${human + blocked}，失败 ${failed}，其他 ${queued}`);
+      elements.distribution.setAttribute("aria-label", `任务状态分布：完成 ${succeeded}，执行中 ${running}，需关注 ${attention}，失败 ${failed}，其他 ${queued}`);
 
       elements.workspaceUpdated.textContent = `更新时间：${formatDate(state.workspace.updated_at)} · ${escapeHtml(state.workspace.timezone)}`;
 
       renderProjectFilter(tasks);
       renderProfileFilter();
       renderTasks(tasks);
-      renderAlerts(currentTasks);
+      renderAlerts(attentionTasks);
       renderAgents(state.agents ?? []);
       renderProfiles(currentTasks, state.agents ?? []);
       renderActivity(tasks);
@@ -1546,7 +1642,7 @@
 
     function renderAlerts(tasks) {
       const alerts = [];
-      for (const task of tasks) {
+      for (const task of tasks.filter(needsAttention)) {
         if (task.status === "DRAFT") {
           alerts.push({ kind: "human", task, title: "等待补充需求", detail: task.progress?.next_step ?? "任务定义尚未完成" });
         } else if (task.status === "WAITING_HUMAN") {
@@ -1570,7 +1666,8 @@
 
     function renderAgents(agents) {
       elements.agentCount.textContent = `${agents.length} 项`;
-      elements.agentList.innerHTML = agents.length ? agents.map((agent) => `
+      const visibleAgents = agents.slice(0, 1);
+      elements.agentList.innerHTML = visibleAgents.length ? visibleAgents.map((agent) => `
         <li class="agent-item">
           <span class="agent-dot ${escapeHtml(agent.status.toLowerCase())}" aria-hidden="true"></span>
           <span class="agent-name" title="${escapeHtml(agent.id)}">${escapeHtml(agent.current_task_id ?? "未知任务")}</span>
@@ -1589,11 +1686,13 @@
       elements.profileList.innerHTML = EXECUTION_PROFILES.map((profile) => {
         const config = profileConfig(profile);
         const limit = state?.settings?.profile_parallel_limits?.[profile] ?? "--";
-        const scheduling = config?.scheduled ? `${state?.runtime_config?.automations?.worker_interval_minutes ?? "--"} 分钟` : "按需";
-        return `<li class="agent-item">
+        return `<li class="profile-card">
           <span class="agent-dot ${activeCounts[profile] ? "running" : "idle"}" aria-hidden="true"></span>
           <span class="agent-name" title="${escapeHtml(config?.model ?? "配置不可用")}">${escapeHtml(PROFILE_LABELS[profile])} · ${taskCounts[profile]} 项</span>
-          <span class="agent-role">${activeCounts[profile]}/${escapeHtml(limit)} · ${escapeHtml(scheduling)}</span>
+          <span class="agent-role">
+            <span class="profile-stats"><strong class="profile-stat-value">${activeCounts[profile]}</strong><span class="profile-stat-label">活动</span></span>
+            <span class="profile-stats"><strong class="profile-stat-value">${escapeHtml(limit)}</strong><span class="profile-stat-label">上限</span></span>
+          </span>
         </li>`;
       }).join("");
     }

@@ -7,7 +7,7 @@
 - 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.2.0）
 - 初始化配置：`config/initialization.json`
 - 项目清单：`E:\code\根目录清单.md`
-- Worker：五个普通档位各有一条定时自动化，默认每 10 分钟唤起一次；`exceptional` 仅人工批准后一次性执行
+- Worker：五个普通档位各有一条定时自动化，默认每 20 分钟唤起一次；`exceptional` 仅人工批准后一次性执行
 - 并发：全局最多 6 个活动 execution，并同时受各档位上限约束
 - Windows 健康任务：默认每 30 分钟运行一次，连续 3 次恢复失败告警
 - scope 冲突：默认按项目加锁

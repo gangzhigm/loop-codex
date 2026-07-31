@@ -7,7 +7,7 @@
 - 数据库：`data/loop-agent.sqlite3`
 - Schema：`3.2.0`
 - 项目清单：`E:\code\根目录清单.md`
-- Worker：五个普通档位各一条定时自动化，默认每 10 分钟，每轮最多领取一个匹配档位任务
+- Worker：五个普通档位各一条定时自动化，默认每 20 分钟，每轮最多领取一个匹配档位任务
 - 并发：全局上限 6，并同时受各档位上限约束
 - `exceptional`：无定时自动化，仅人工批准后一次性执行
 - Windows 健康任务：默认每 30 分钟，连续失败阈值 3
@@ -22,11 +22,11 @@
 
 | 档位 | 模型 | 思考程度 | 定时 | 并发上限 |
 |---|---|---|---:|---:|
-| `routine` | `gpt-5.6-luna` | `medium` | 每 10 分钟，偏移 0 分钟 | 2 |
-| `standard` | `gpt-5.6-terra` | `medium` | 每 10 分钟，偏移 2 分钟 | 3 |
-| `advanced` | `gpt-5.6-terra` | `high` | 每 10 分钟，偏移 4 分钟 | 2 |
-| `deep` | `gpt-5.6-terra` | `xhigh` | 每 10 分钟，偏移 6 分钟 | 1 |
-| `complex` | `gpt-5.6-sol` | `high` | 每 10 分钟，偏移 8 分钟 | 1 |
+| `routine` | `gpt-5.6-luna` | `medium` | 每 20 分钟，偏移 0 分钟 | 2 |
+| `standard` | `gpt-5.6-terra` | `medium` | 每 20 分钟，偏移 2 分钟 | 3 |
+| `advanced` | `gpt-5.6-terra` | `high` | 每 20 分钟，偏移 4 分钟 | 2 |
+| `deep` | `gpt-5.6-terra` | `xhigh` | 每 20 分钟，偏移 6 分钟 | 1 |
+| `complex` | `gpt-5.6-sol` | `high` | 每 20 分钟，偏移 8 分钟 | 1 |
 | `exceptional` | `gpt-5.6-sol` | `xhigh` | 不定时，人工批准后一次性执行 | 1 |
 
 这些上限不能相加理解为总容量；全局最多仍为 6 个活动 execution。
@@ -68,7 +68,7 @@ node .\scripts\check-dashboard.mjs .\dashboard.html
 - `prompts/operator.md`：任务管理对话的查重、增删改、附件、状态和独立归档流程。
 - `prompts/worker.md`：Worker 自动化的完整执行提示词。
 
-五条普通 Worker 默认每 10 分钟错峰运行。真实 Worker 自动化的入口提示只允许要求读取并执行 `prompts/worker.md` 并提供当前档位；不得在自动化配置、初始化文档或其他文件维护第二份正文。入口模板以 `config/initialization.json` 的 `automations.entry_prompt_template` 为准。
+五条普通 Worker 默认每 20 分钟错峰运行。真实 Worker 自动化的入口提示只允许要求读取并执行 `prompts/worker.md` 并提供当前档位；不得在自动化配置、初始化文档或其他文件维护第二份正文。入口模板以 `config/initialization.json` 的 `automations.entry_prompt_template` 为准。
 
 PowerShell 示例：
 
@@ -92,7 +92,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_health
 1. 暂停旧 Worker，确认没有活动 execution，备份 `data/loop-agent.sqlite3`。
 2. 使用 `loopctl.py migrate` 迁移数据库到 Schema 3.2.0；现有任务默认回填 `standard`，随后按已确认清单重分类需人工任务，并运行数据库与回归测试。
 3. 运行 `install_health_task.ps1 -StartNow`，检查 Windows 健康任务、`/healthz` 和 `/api/state`。
-4. 读取初始化配置，逐一检查 `routine`、`standard`、`advanced`、`deep`、`complex` 五条 Worker 自动化的 ID、模型、思考程度、10 分钟周期、错峰和入口提示。
+4. 读取初始化配置，逐一检查 `routine`、`standard`、`advanced`、`deep`、`complex` 五条 Worker 自动化的 ID、模型、思考程度、20 分钟周期、错峰和入口提示。
 5. 删除旧 Health Codex 自动化，确保健康检查只由 Windows 任务计划程序执行。
 6. 对缺失的普通 Worker 创建，对已有 Worker 更新；不得创建定时 `exceptional` 或重复项。
 7. 删除旧单 Worker 自动化，启用五条普通 Worker，并逐一复核状态。

@@ -54,7 +54,7 @@ RUNNING --租约过期且达到上限--> FAILED
 
 候选在各自执行档位内按 `blocker`、`critical`、`high`、`medium`、`low`，再按 `created_at` 和 id 排序。仅 `PENDING` 且依赖完成的任务可领取。优先级和执行档位相互独立，高优先级不会自动升高模型档位。`NO_TASK`、`SLOT_FULL` 或 `CONFLICT` 都应立即结束。
 
-五个普通档位各由一条 Codex 定时自动化驱动，默认每 10 分钟错峰运行；`exceptional` 没有定时自动化，只能由 Operator 在人工明确批准后创建一次性执行。Codex 自动化不能可靠地暂停或恢复自身或其他自动化，因此本阶段不做无任务自动暂停；`NO_TASK` 只结束当前轮次，Worker 不读取或修改自动化状态。
+五个普通档位各由一条 Codex 定时自动化驱动，默认每 20 分钟错峰运行；`exceptional` 没有定时自动化，只能由 Operator 在人工明确批准后创建一次性执行。Codex 自动化不能可靠地暂停或恢复自身或其他自动化，因此本阶段不做无任务自动暂停；`NO_TASK` 只结束当前轮次，Worker 不读取或修改自动化状态。
 
 默认心跳超时 300 秒、租约 3600 秒。Worker 在阅读完成后、编辑前以及长命令前后调用 `heartbeat`。后续 `claim` 会回收心跳超时或租约过期的 execution，释放其 scope 锁，并按最大尝试次数重排或失败。正常结束将 UTF-8 JSON 通过 stdin 交给 `finish`；`finish` 在同一事务中保存结果、释放 scope 锁并重新排队已解除冲突的任务，不生成 report 文件，也不自动归档任务。
 

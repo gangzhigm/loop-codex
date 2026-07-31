@@ -55,7 +55,7 @@
     "poll_interval_ms": 2000
   },
   "automations": {
-    "worker_interval_minutes": 10,
+    "worker_interval_minutes": 20,
     "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；当前执行档位为 {profile}。",
     "profiles": {
       "routine": {
