@@ -1,5 +1,5 @@
 {
-  "config_version": "2.0.0",
+  "config_version": "3.0.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -8,7 +8,7 @@
   },
   "database": {
     "path": "data/loop-agent.sqlite3",
-    "schema_version": "3.0.0"
+    "schema_version": "3.2.0"
   },
   "prompts": {
     "operator": "prompts/operator.md",
@@ -20,6 +20,14 @@
     "task_lease_seconds": 3600,
     "max_attempts": 2,
     "max_parallel_tasks": 6,
+    "profile_parallel_limits": {
+      "routine": 2,
+      "standard": 3,
+      "advanced": 2,
+      "deep": 1,
+      "complex": 1,
+      "exceptional": 1
+    },
     "scope_conflict_mode": "project",
     "require_human_approval_for": [
       "delete",
@@ -29,18 +37,81 @@
       "credential_access"
     ]
   },
+  "priority_policy": {
+    "levels": [
+      "blocker",
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ],
+    "project_defaults": {
+      "local-agent-loop": "critical"
+    }
+  },
   "dashboard": {
     "host": "127.0.0.1",
     "port": 4178,
     "poll_interval_ms": 2000
   },
   "automations": {
-    "worker_interval_minutes": 10
+    "worker_interval_minutes": 10,
+    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；当前执行档位为 {profile}。",
+    "profiles": {
+      "routine": {
+        "automation_id": "loop-agent-worker-routine",
+        "name": "Loop Agent Worker · Routine",
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "medium",
+        "scheduled": true,
+        "offset_minutes": 0
+      },
+      "standard": {
+        "automation_id": "loop-agent-worker-standard",
+        "name": "Loop Agent Worker · Standard",
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "scheduled": true,
+        "offset_minutes": 2
+      },
+      "advanced": {
+        "automation_id": "loop-agent-worker-advanced",
+        "name": "Loop Agent Worker · Advanced",
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "high",
+        "scheduled": true,
+        "offset_minutes": 4
+      },
+      "deep": {
+        "automation_id": "loop-agent-worker-deep",
+        "name": "Loop Agent Worker · Deep",
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "xhigh",
+        "scheduled": true,
+        "offset_minutes": 6
+      },
+      "complex": {
+        "automation_id": "loop-agent-worker-complex",
+        "name": "Loop Agent Worker · Complex",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "scheduled": true,
+        "offset_minutes": 8
+      },
+      "exceptional": {
+        "automation_id": null,
+        "name": "Loop Agent Worker · Exceptional",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "scheduled": false,
+        "offset_minutes": null
+      }
+    }
   },
   "health": {
     "scheduler": "windows_task_scheduler",
     "task_name": "Local Agent Loop Health",
-    "interval_minutes": 10,
+    "interval_minutes": 30,
     "failure_threshold": 3
   }
 }

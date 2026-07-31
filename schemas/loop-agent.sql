@@ -1,5 +1,5 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 30000;
+PRAGMA user_version = 30200;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -9,13 +9,17 @@ CREATE TABLE IF NOT EXISTS tasks (
     'DRAFT', 'PENDING', 'RUNNING', 'WAITING_CONFLICT', 'WAITING_HUMAN',
     'SUCCEEDED', 'CONFIRMED', 'FAILED', 'CANCELLED'
   )),
-  priority TEXT NOT NULL CHECK (priority IN ('critical', 'high', 'medium', 'low')),
+  priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),
+  execution_profile TEXT NOT NULL DEFAULT 'standard' CHECK (execution_profile IN (
+    'routine', 'standard', 'advanced', 'deep', 'complex', 'exceptional'
+  )),
   assigned_agent TEXT,
   created_at TEXT NOT NULL,
   started_at TEXT,
   updated_at TEXT NOT NULL,
   heartbeat_at TEXT,
   completed_at TEXT,
+  archived_at TEXT,
   attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
   progress_percent INTEGER NOT NULL DEFAULT 0 CHECK (progress_percent BETWEEN 0 AND 100),
   progress_summary TEXT NOT NULL DEFAULT '',
@@ -125,4 +129,7 @@ CREATE TABLE IF NOT EXISTS task_conflicts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_queue
-  ON tasks(status, priority, created_at, id);
+  ON tasks(status, execution_profile, priority, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_archived
+  ON tasks(archived_at, status, updated_at);

@@ -1,5 +1,7 @@
 # Supervisor 迁移任务计划
 
+> 后续阶段草案，不属于当前 Codex 客户端内的初始化或运行链路。当前权威架构见 `architecture.md`，当前初始化不得创建 Supervisor、Codex CLI Runner 或外部 Worker 调度器。
+
 ## 目标
 
 在不影响当前 Loop Agent 运行链路的前提下，逐步形成以下架构：
@@ -22,7 +24,7 @@ Operator 继续使用 Codex 客户端负责任务管理、人工确认和重新�
 
 ## 不变边界
 
-- 当前 Codex 客户端自动化继续运行，不提前停止或替换。
+- 当前五条普通档位 Codex 客户端自动化继续运行，不由本计划提前停止或替换。
 - 现有 SQLite 任务模型、`claim`、`heartbeat`、`finish`、优先级、依赖和 scope 锁优先复用。
 - 新 Supervisor 在灰度前不得对当前生产队列执行 `claim`。
 - 开发和验证优先使用独立配置、独立测试数据库和独立日志目录。

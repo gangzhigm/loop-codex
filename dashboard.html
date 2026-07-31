@@ -293,6 +293,20 @@
       letter-spacing: 0;
     }
 
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .view-count,
+    .archive-time {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0;
+    }
+
     .task-tools {
       display: flex;
       align-items: center;
@@ -306,7 +320,8 @@
     }
 
     .search-input,
-    .project-select {
+    .project-select,
+    .profile-select {
       height: 34px;
       border: 1px solid var(--line-strong);
       border-radius: 6px;
@@ -322,7 +337,8 @@
       max-width: 220px;
     }
 
-    .project-select {
+    .project-select,
+    .profile-select {
       flex: 1 1 150px;
       width: 190px;
       min-width: 130px;
@@ -395,6 +411,14 @@
 
     .task-cell { min-width: 0; }
 
+    .task-title-line {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 28px;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+
     .task-title {
       display: block;
       overflow: hidden;
@@ -404,6 +428,47 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
+    .task-copy-button {
+      position: relative;
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .task-copy-button:hover { color: var(--accent); background: var(--accent-soft); }
+    .task-copy-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .task-copy-button:active { color: #075f68; background: #cceff0; transform: translateY(1px); }
+    .task-copy-button[data-copy-state="success"] { color: var(--success); background: var(--success-soft); }
+    .task-copy-button[data-copy-state="failed"] { color: var(--danger); background: var(--danger-soft); }
+    .copy-icon { font-size: 17px; line-height: 1; }
+    .copy-feedback {
+      position: absolute;
+      z-index: 2;
+      top: -29px;
+      left: 50%;
+      min-width: max-content;
+      transform: translateX(-50%);
+      border-radius: 4px;
+      padding: 3px 6px;
+      color: #fff;
+      background: #26333d;
+      box-shadow: 0 2px 6px rgba(24, 33, 43, 0.18);
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.2;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 140ms ease;
+    }
+    .task-copy-button[data-copy-state] .copy-feedback { opacity: 1; }
 
     .task-id {
       display: block;
@@ -535,9 +600,30 @@
     }
 
     .priority-critical { background: var(--danger-soft); color: var(--danger); }
+    .priority-blocker { background: #7f1d1d; color: #fff; }
     .priority-high { background: var(--warning-soft); color: var(--warning); }
     .priority-medium { background: var(--accent-soft); color: #056a74; }
     .priority-low { background: var(--neutral-soft); color: var(--muted); }
+
+    .profile-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 3px 7px;
+      background: var(--surface-subtle);
+      color: #3f4c58;
+      font-size: 10px;
+      font-weight: 730;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .profile-routine { border-color: #cad8ce; background: #eff6f1; color: #315d3d; }
+    .profile-standard { border-color: #c9d9dc; background: #f2f8f8; color: #315c62; }
+    .profile-advanced { border-color: #d7cfaa; background: #f8f5e8; color: #66591b; }
+    .profile-deep { border-color: #d2c4da; background: #f5eff7; color: #654773; }
+    .profile-complex, .profile-exceptional { border-color: #ddc4c4; background: #faeeee; color: #7c3030; }
 
     .project-cell {
       display: flex;
@@ -621,6 +707,7 @@
 
     .alert-list,
     .agent-list,
+    .profile-list,
     .activity-list {
       display: grid;
       gap: 9px;
@@ -820,6 +907,7 @@
     }
 
     @media (max-width: 760px) {
+      body { overflow-x: hidden; }
       .app-header {
         grid-template-columns: minmax(0, 1fr);
         grid-template-areas:
@@ -839,24 +927,30 @@
       .metric:nth-last-child(-n + 2) { border-bottom: 0; }
       .metric:nth-child(3) { border-right: 1px solid var(--line); }
       .section-header { grid-template-columns: minmax(0, 1fr); align-items: stretch; padding: 12px; }
-      .task-tools { justify-content: flex-start; }
+      .task-section { overflow: hidden; }
+      .task-tools { justify-content: flex-start; padding-bottom: 4px; scrollbar-width: thin; }
       .search-input { flex: 0 0 180px; width: 180px; }
       .project-select { flex: 0 0 150px; width: 150px; }
-      .table-wrap { overflow: visible; }
-      table, thead, tbody, tr, td { display: block; }
+      .profile-select { flex: 0 0 142px; width: 142px; }
+      .table-wrap { width: 100%; overflow: visible; }
+      table, thead, tbody { display: block; width: 100%; min-width: 0; }
+      table { table-layout: auto; }
       thead { display: none; }
-      tbody tr { padding: 13px; border-bottom: 1px solid var(--line); }
+      tbody tr { display: grid; width: 100%; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; padding: 13px; border-bottom: 1px solid var(--line); }
       tbody tr:last-child { border-bottom: 0; }
-      td { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; padding: 5px 0; border: 0; }
-      td::before { content: attr(data-label); flex: 0 0 72px; color: var(--muted); font-size: 10px; }
-      td:first-child { display: block; padding-bottom: 9px; }
+      td { display: grid; align-content: start; justify-items: start; gap: 4px; width: auto; max-width: 100%; min-width: 0; min-height: 42px; overflow: hidden; padding: 0; border: 0; }
+      td::before { content: attr(data-label); color: var(--muted); font-size: 10px; line-height: 1.2; }
+      td:first-child { grid-column: 1 / -1; display: block; min-height: 0; padding-bottom: 5px; }
       td:first-child::before { display: none; }
+      td > * { min-width: 0; max-width: 100%; }
       .task-title { white-space: normal; }
+      .task-title-line { width: 100%; align-items: start; }
       .status-cell { overflow: visible; }
-      .status-stack { justify-items: end; max-width: calc(100% - 84px); }
+      .status-stack { width: 100%; justify-items: start; }
       .conflict-summary { width: min(240px, 100%); }
-      .conflict-popover { right: 0; left: auto; }
+      .conflict-popover { right: auto; left: 0; }
       .progress-cell { width: min(200px, 100%); }
+      .project-cell { width: 100%; align-items: flex-start; }
       .side-section { grid-template-columns: minmax(0, 1fr); }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
       .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -881,7 +975,7 @@
     </div>
     <div class="header-status">
       <section class="summary-band" aria-label="任务总览">
-        <div class="metric"><div class="metric-label">全部任务</div><div id="metricTotal" class="metric-value">0</div></div>
+        <div class="metric"><div class="metric-label">当前任务</div><div id="metricTotal" class="metric-value">0</div></div>
         <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
         <div class="metric"><div class="metric-label">执行中</div><div id="metricRunning" class="metric-value">0</div></div>
         <div class="metric"><div class="metric-label">等待人工</div><div id="metricHuman" class="metric-value warning">0</div></div>
@@ -917,16 +1011,20 @@
     <div class="content-grid">
       <section class="task-section">
         <div class="section-header">
-          <h2>任务</h2>
+          <div class="section-title"><h2>任务</h2><span id="taskViewCount" class="view-count">当前 0 项</span></div>
           <div class="task-tools">
             <input id="search" class="search-input" type="search" placeholder="搜索 ID、标题或项目" aria-label="搜索任务">
             <select id="projectFilter" class="project-select" aria-label="按项目筛选任务">
               <option value="all">全部项目</option>
             </select>
+            <select id="profileFilter" class="profile-select" aria-label="按执行档位筛选任务">
+              <option value="all">全部档位</option>
+            </select>
             <div class="segments" aria-label="任务筛选">
               <button type="button" data-filter="all" aria-pressed="true">全部</button>
               <button type="button" data-filter="pending" aria-pressed="false">待执行</button>
               <button type="button" data-filter="active" aria-pressed="false">执行中</button>
+              <button type="button" data-filter="human" aria-pressed="false">需人工</button>
               <button type="button" data-filter="attention" aria-pressed="false">需关注</button>
               <button type="button" data-filter="closed" aria-pressed="false">已结束</button>
               <button type="button" data-filter="archived" aria-pressed="false">已归档</button>
@@ -937,12 +1035,13 @@
           <table>
             <thead>
               <tr>
-                <th style="width: 31%">任务</th>
-                <th style="width: 15%">状态</th>
-                <th style="width: 10%">优先级</th>
-                <th style="width: 14%">项目</th>
-                <th style="width: 18%">进度</th>
-                <th style="width: 12%">耗时</th>
+                <th style="width: 27%">任务</th>
+                <th style="width: 13%">状态</th>
+                <th style="width: 9%">优先级</th>
+                <th style="width: 11%">执行档位</th>
+                <th style="width: 13%">项目</th>
+                <th style="width: 16%">进度</th>
+                <th style="width: 11%">耗时</th>
               </tr>
             </thead>
             <tbody id="taskRows"></tbody>
@@ -961,6 +1060,10 @@
         <section class="side-block">
           <div class="side-heading"><h2>活动执行</h2><span id="agentCount">0 项</span></div>
           <ul id="agentList" class="agent-list"><li class="muted">暂无活动执行</li></ul>
+        </section>
+        <section class="side-block">
+          <div class="side-heading"><h2>执行档位</h2><span id="profileCount">0 档活动</span></div>
+          <ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul>
         </section>
         <section class="side-block">
           <div class="side-heading"><h2>最近活动</h2><span>状态变更</span></div>
@@ -995,13 +1098,19 @@
       FAILED: "失败",
       CANCELLED: "已取消"
     };
-    const PRIORITY_LABELS = { critical: "紧急", high: "高", medium: "中", low: "低" };
+    const PRIORITY_LABELS = { blocker: "阻断", critical: "紧急", high: "高", medium: "中", low: "低" };
+    const PROFILE_LABELS = {
+      routine: "Routine", standard: "Standard", advanced: "Advanced",
+      deep: "Deep", complex: "Complex", exceptional: "Exceptional"
+    };
+    const EXECUTION_PROFILES = Object.keys(PROFILE_LABELS);
     const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"]);
-    const ATTENTION_STATUSES = new Set(["WAITING_CONFLICT", "WAITING_HUMAN", "BLOCKED", "STALLED", "FAILED"]);
+    const HUMAN_STATUSES = new Set(["DRAFT", "WAITING_HUMAN"]);
+    const ATTENTION_STATUSES = new Set(["DRAFT", "WAITING_CONFLICT", "WAITING_HUMAN", "BLOCKED", "STALLED", "FAILED"]);
     const CLOSED_STATUSES = new Set(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
-    const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+    const PRIORITY_ORDER = { blocker: 0, critical: 1, high: 2, medium: 3, low: 4 };
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
-    const TASK_SCHEMA_VERSION = "3.0.0";
+    const TASK_SCHEMA_VERSION = "3.2.0";
     const STATE_ENDPOINT = "/api/state";
     const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
 
@@ -1014,9 +1123,11 @@
       dismissNotice: document.querySelector("#dismissNotice"),
       search: document.querySelector("#search"),
       projectFilter: document.querySelector("#projectFilter"),
+      profileFilter: document.querySelector("#profileFilter"),
       taskTable: document.querySelector("#taskTable"),
       taskEmpty: document.querySelector("#taskEmpty"),
       taskRows: document.querySelector("#taskRows"),
+      taskViewCount: document.querySelector("#taskViewCount"),
       metricTotal: document.querySelector("#metricTotal"),
       metricRate: document.querySelector("#metricRate"),
       metricRunning: document.querySelector("#metricRunning"),
@@ -1029,6 +1140,8 @@
       alertCount: document.querySelector("#alertCount"),
       agentList: document.querySelector("#agentList"),
       agentCount: document.querySelector("#agentCount"),
+      profileList: document.querySelector("#profileList"),
+      profileCount: document.querySelector("#profileCount"),
       activityList: document.querySelector("#activityList"),
       taskDialog: document.querySelector("#taskDialog"),
       dialogTitle: document.querySelector("#dialogTitle"),
@@ -1041,6 +1154,7 @@
     let pollTimer = null;
     let currentFilter = "all";
     let currentProject = "all";
+    let currentProfile = "all";
     let currentQuery = "";
 
     function escapeHtml(value) {
@@ -1068,6 +1182,25 @@
 
     function hideNotice() {
       elements.notice.classList.remove("is-visible");
+    }
+
+    async function copyTaskId(taskId, button) {
+      const feedback = button.querySelector(".copy-feedback");
+      const setFeedback = (stateName, message) => {
+        button.dataset.copyState = stateName;
+        feedback.textContent = message;
+        window.setTimeout(() => {
+          if (button.dataset.copyState === stateName) delete button.dataset.copyState;
+        }, 1800);
+      };
+
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error("剪贴板不可用");
+        await navigator.clipboard.writeText(taskId);
+        setFeedback("success", "已复制");
+      } catch {
+        setFeedback("failed", "复制失败");
+      }
     }
 
     function formatDate(value, includeDate = true) {
@@ -1215,6 +1348,26 @@
       </div>`;
     }
 
+    function profileConfig(profile) {
+      return state?.runtime_config?.automations?.profiles?.[profile] ?? null;
+    }
+
+    function profileCell(task) {
+      const profile = task.execution_profile;
+      const config = profileConfig(profile);
+      const model = config?.model ? `${config.model} · ${config.reasoning_effort}` : "模型配置不可用";
+      return `<span class="profile-badge profile-${escapeHtml(profile)}" title="${escapeHtml(model)}">${escapeHtml(PROFILE_LABELS[profile] ?? profile)}</span>`;
+    }
+
+    function renderProfileFilter() {
+      if (currentProfile !== "all" && !EXECUTION_PROFILES.includes(currentProfile)) currentProfile = "all";
+      elements.profileFilter.innerHTML = [
+        '<option value="all">全部档位</option>',
+        ...EXECUTION_PROFILES.map((profile) => `<option value="${profile}">${escapeHtml(PROFILE_LABELS[profile])}</option>`)
+      ].join("");
+      elements.profileFilter.value = currentProfile;
+    }
+
     function validateState(candidate) {
       const errors = [];
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) errors.push("根节点必须是对象");
@@ -1229,6 +1382,8 @@
         if (!task?.id || ids.has(task.id)) errors.push(`tasks[${index}].id 缺失或重复`);
         ids.add(task?.id);
         if (!VALID_STATUSES.has(task?.status)) errors.push(`任务 ${task?.id ?? index} 状态无效`);
+        if (!Object.hasOwn(PRIORITY_ORDER, task?.priority)) errors.push(`任务 ${task?.id ?? index} 优先级无效`);
+        if (!EXECUTION_PROFILES.includes(task?.execution_profile)) errors.push(`任务 ${task?.id ?? index} 执行档位无效`);
         if (!Number.isInteger(task?.progress?.percent) || task.progress.percent < 0 || task.progress.percent > 100) {
           errors.push(`任务 ${task?.id ?? index} 进度无效`);
         }
@@ -1272,16 +1427,27 @@
     }
 
     function taskMatches(task) {
+      const archived = isArchived(task);
+      if (currentFilter === "archived") {
+        if (!archived) return false;
+      } else if (archived) {
+        return false;
+      }
       if (currentFilter === "pending" && task.status !== "PENDING") return false;
       if (currentFilter === "active" && !ACTIVE_STATUSES.has(task.status)) return false;
+      if (currentFilter === "human" && !HUMAN_STATUSES.has(task.status)) return false;
       if (currentFilter === "attention" && !ATTENTION_STATUSES.has(task.status) && !isHeartbeatLate(task)) return false;
       if (currentFilter === "closed" && !CLOSED_STATUSES.has(task.status)) return false;
-      if (currentFilter === "archived" && task.status !== "CONFIRMED") return false;
       if (currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;
+      if (currentProfile !== "all" && task.execution_profile !== currentProfile) return false;
       if (!currentQuery) return true;
       return [task.id, task.title, task.description, ...taskProjects(task)]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("zh-CN").includes(currentQuery));
+    }
+
+    function isArchived(task) {
+      return Boolean(task?.archived_at);
     }
 
     function isHeartbeatLate(task) {
@@ -1292,7 +1458,8 @@
 
     function render() {
       const tasks = state?.tasks ?? [];
-      const counts = tasks.reduce((result, task) => {
+      const currentTasks = tasks.filter((task) => !isArchived(task));
+      const counts = currentTasks.reduce((result, task) => {
         result[task.status] = (result[task.status] ?? 0) + 1;
         return result;
       }, {});
@@ -1300,9 +1467,9 @@
       const running = (counts.RUNNING ?? 0) + (counts.CLAIMED ?? 0);
       const blocked = (counts.WAITING_CONFLICT ?? 0) + (counts.BLOCKED ?? 0) + (counts.STALLED ?? 0);
       const failed = counts.FAILED ?? 0;
-      const human = counts.WAITING_HUMAN ?? 0;
+      const human = (counts.DRAFT ?? 0) + (counts.WAITING_HUMAN ?? 0);
       const queued = (counts.DRAFT ?? 0) + (counts.PENDING ?? 0) + (counts.CANCELLED ?? 0);
-      const total = tasks.length;
+      const total = currentTasks.length;
 
       elements.metricTotal.textContent = total;
       elements.metricRate.textContent = total ? `${Math.round((succeeded / total) * 100)}%` : "0%";
@@ -1317,9 +1484,11 @@
       elements.workspaceUpdated.textContent = `更新时间：${formatDate(state.workspace.updated_at)} · ${escapeHtml(state.workspace.timezone)}`;
 
       renderProjectFilter(tasks);
+      renderProfileFilter();
       renderTasks(tasks);
-      renderAlerts(tasks);
+      renderAlerts(currentTasks);
       renderAgents(state.agents ?? []);
+      renderProfiles(currentTasks, state.agents ?? []);
       renderActivity(tasks);
     }
 
@@ -1332,17 +1501,29 @@
           return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
         });
 
+      elements.taskViewCount.textContent = currentFilter === "archived"
+        ? `已归档 ${visible.length} 项`
+        : `当前 ${visible.length} 项`;
+
       elements.taskRows.innerHTML = visible.map((task) => `
         <tr tabindex="0" data-task-id="${escapeHtml(task.id)}" aria-label="查看任务 ${escapeHtml(task.title)}">
           <td class="task-cell">
-            <span class="task-title">${escapeHtml(task.title)}</span>
+            <div class="task-title-line">
+              <span class="task-title">${escapeHtml(task.title)}</span>
+              <button class="task-copy-button" type="button" data-copy-task-id="${escapeHtml(task.id)}" aria-label="复制任务 ID" title="复制任务 ID">
+                <span class="copy-icon" aria-hidden="true">⧉</span>
+                <span class="copy-feedback" aria-live="polite"></span>
+              </button>
+            </div>
             <span class="task-id">${escapeHtml(task.id)}</span>
           </td>
           <td class="status-cell" data-label="状态"><div class="status-stack">
             <span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span>
+            ${isArchived(task) ? `<span class="archive-time">归档于 ${escapeHtml(formatDate(task.archived_at, false))}</span>` : ""}
             ${renderConflictIndicator(task, tasks)}
           </div></td>
           <td data-label="优先级"><span class="priority-badge priority-${escapeHtml(task.priority)}">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></td>
+          <td data-label="执行档位">${profileCell(task)}</td>
           <td data-label="项目">${projectCell(task)}</td>
           <td data-label="进度">
             <div class="progress-cell">
@@ -1366,8 +1547,10 @@
     function renderAlerts(tasks) {
       const alerts = [];
       for (const task of tasks) {
-        if (task.status === "WAITING_HUMAN") {
-          alerts.push({ kind: "human", task, title: "等待人工决定", detail: task.human_intervention?.question ?? task.progress?.next_step ?? "需要人工介入" });
+        if (task.status === "DRAFT") {
+          alerts.push({ kind: "human", task, title: "等待补充需求", detail: task.progress?.next_step ?? "任务定义尚未完成" });
+        } else if (task.status === "WAITING_HUMAN") {
+          alerts.push({ kind: "human", task, title: "执行中等待人工", detail: task.human_intervention?.question ?? task.progress?.next_step ?? "需要人工介入" });
         } else if (task.status === "FAILED") {
           alerts.push({ kind: "danger", task, title: "任务失败", detail: task.result?.error ?? "未记录失败原因" });
         } else if (["WAITING_CONFLICT", "BLOCKED", "STALLED"].includes(task.status)) {
@@ -1377,7 +1560,7 @@
         }
       }
       elements.alertCount.textContent = `${alerts.length} 项`;
-      elements.alertList.innerHTML = alerts.length ? alerts.slice(0, 6).map((alert) => `
+      elements.alertList.innerHTML = alerts.length ? alerts.slice(0, 1).map((alert) => `
         <li class="alert-item ${escapeHtml(alert.kind)}">
           <strong>${escapeHtml(alert.task.id)} · ${escapeHtml(alert.title)}</strong>
           <span>${escapeHtml(alert.detail)}</span>
@@ -1391,9 +1574,28 @@
         <li class="agent-item">
           <span class="agent-dot ${escapeHtml(agent.status.toLowerCase())}" aria-hidden="true"></span>
           <span class="agent-name" title="${escapeHtml(agent.id)}">${escapeHtml(agent.current_task_id ?? "未知任务")}</span>
-          <span class="agent-role">执行中 · ${escapeHtml(formatDate(agent.last_seen_at, false))}</span>
+          <span class="agent-role">${escapeHtml(PROFILE_LABELS[agent.execution_profile] ?? agent.execution_profile ?? "未知档位")} · ${escapeHtml(formatDate(agent.last_seen_at, false))}</span>
         </li>
       `).join("") : '<li class="muted">暂无活动执行</li>';
+    }
+
+    function renderProfiles(tasks, agents) {
+      const taskCounts = Object.fromEntries(EXECUTION_PROFILES.map((profile) => [profile, 0]));
+      const activeCounts = Object.fromEntries(EXECUTION_PROFILES.map((profile) => [profile, 0]));
+      tasks.forEach((task) => { taskCounts[task.execution_profile] = (taskCounts[task.execution_profile] ?? 0) + 1; });
+      agents.forEach((agent) => { activeCounts[agent.execution_profile] = (activeCounts[agent.execution_profile] ?? 0) + 1; });
+      const activeProfiles = EXECUTION_PROFILES.filter((profile) => activeCounts[profile] > 0).length;
+      elements.profileCount.textContent = `${activeProfiles} 档活动`;
+      elements.profileList.innerHTML = EXECUTION_PROFILES.map((profile) => {
+        const config = profileConfig(profile);
+        const limit = state?.settings?.profile_parallel_limits?.[profile] ?? "--";
+        const scheduling = config?.scheduled ? `${state?.runtime_config?.automations?.worker_interval_minutes ?? "--"} 分钟` : "按需";
+        return `<li class="agent-item">
+          <span class="agent-dot ${activeCounts[profile] ? "running" : "idle"}" aria-hidden="true"></span>
+          <span class="agent-name" title="${escapeHtml(config?.model ?? "配置不可用")}">${escapeHtml(PROFILE_LABELS[profile])} · ${taskCounts[profile]} 项</span>
+          <span class="agent-role">${activeCounts[profile]}/${escapeHtml(limit)} · ${escapeHtml(scheduling)}</span>
+        </li>`;
+      }).join("");
     }
 
     function renderActivity(tasks) {
@@ -1463,6 +1665,10 @@
       elements.dialogBody.innerHTML = `
         <div class="detail-grid">
           <div class="detail-field"><span class="detail-label">状态</span><span class="detail-value">${escapeHtml(STATUS_LABELS[task.status])}</span></div>
+          <div class="detail-field"><span class="detail-label">优先级</span><span class="detail-value">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></div>
+          <div class="detail-field"><span class="detail-label">执行档位</span><span class="detail-value">${escapeHtml(PROFILE_LABELS[task.execution_profile] ?? task.execution_profile)}</span></div>
+          <div class="detail-field"><span class="detail-label">模型</span><span class="detail-value">${escapeHtml(profileConfig(task.execution_profile)?.model ?? "配置不可用")} · ${escapeHtml(profileConfig(task.execution_profile)?.reasoning_effort ?? "--")}</span></div>
+          <div class="detail-field"><span class="detail-label">归档时间</span><span class="detail-value">${escapeHtml(formatDate(task.archived_at))}</span></div>
           <div class="detail-field"><span class="detail-label">项目</span><span class="detail-value">${escapeHtml(projects.join("、") || "未识别")}</span></div>
           <div class="detail-field"><span class="detail-label">尝试次数</span><span class="detail-value">${escapeHtml(task.attempt)}</span></div>
           <div class="detail-field"><span class="detail-label">开始时间</span><span class="detail-value">${escapeHtml(formatDate(task.started_at))}</span></div>
@@ -1494,6 +1700,10 @@
       currentProject = event.target.value;
       if (state) renderTasks(state.tasks);
     });
+    elements.profileFilter.addEventListener("change", (event) => {
+      currentProfile = event.target.value;
+      if (state) renderTasks(state.tasks);
+    });
     document.querySelectorAll("[data-filter]").forEach((button) => {
       button.addEventListener("click", () => {
         currentFilter = button.dataset.filter;
@@ -1502,11 +1712,18 @@
       });
     });
     elements.taskRows.addEventListener("click", (event) => {
+      const copyButton = event.target.closest(".task-copy-button");
+      if (copyButton) {
+        event.stopPropagation();
+        copyTaskId(copyButton.dataset.copyTaskId, copyButton);
+        return;
+      }
       if (event.target.closest(".conflict-summary")) return;
       const row = event.target.closest("tr[data-task-id]");
       if (row) openTask(row.dataset.taskId);
     });
     elements.taskRows.addEventListener("keydown", (event) => {
+      if (event.target.closest(".task-copy-button")) return;
       if (event.target.closest(".conflict-summary")) return;
       if (!["Enter", " "].includes(event.key)) return;
       const row = event.target.closest("tr[data-task-id]");

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -7,11 +8,19 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from dashboard_server import resolve_attachment_image
+from dashboard_server import DashboardServer, resolve_attachment_image
+from health_run import process_alive
 from loopdb import connect, initialize_schema, insert_task, now_shanghai
 
 
 class AttachmentImageTests(unittest.TestCase):
+    def test_dashboard_server_disallows_shared_listener(self) -> None:
+        self.assertFalse(DashboardServer.allow_reuse_address)
+
+    def test_current_process_is_detected_as_alive(self) -> None:
+        self.assertTrue(process_alive(os.getpid()))
+        self.assertFalse(process_alive(2_147_483_647))
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base_dir = Path(self.temporary.name)

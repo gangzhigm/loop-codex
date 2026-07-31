@@ -12,11 +12,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB = BASE_DIR / "data" / "loop-agent.sqlite3"
 SCHEMA_PATH = BASE_DIR / "schemas" / "loop-agent.sql"
 CONFIG_PATH = BASE_DIR / "config" / "initialization.json"
-SCHEMA_VERSION = "3.0.0"
-SCHEMA_USER_VERSION = 30000
+SCHEMA_VERSION = "3.2.0"
+SCHEMA_USER_VERSION = 30200
+ARCHIVE_SCHEMA_USER_VERSION = 30100
+LEGACY_SCHEMA_USER_VERSION = 30000
 SHANGHAI = timezone(timedelta(hours=8))
 FINAL_EXECUTION_STATUSES = {"SUCCEEDED", "FAILED", "WAITING_HUMAN"}
 DEPENDENCY_COMPLETE_STATUSES = {"SUCCEEDED", "CONFIRMED"}
+ARCHIVABLE_STATUSES = {"CONFIRMED", "FAILED", "CANCELLED"}
+PRIORITIES = ("blocker", "critical", "high", "medium", "low")
+EXECUTION_PROFILES = ("routine", "standard", "advanced", "deep", "complex", "exceptional")
 FORBIDDEN_SCOPE_ROOTS = {"$CODEX_HOME", ".reasonix", ".env"}
 ALLOWED_TABLES = {
     "tasks",
@@ -31,6 +36,42 @@ ALLOWED_TABLES = {
     "scope_locks",
     "task_conflicts",
 }
+
+TASKS_TABLE_SQL = """
+CREATE TABLE tasks_new (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN (
+    'DRAFT', 'PENDING', 'RUNNING', 'WAITING_CONFLICT', 'WAITING_HUMAN',
+    'SUCCEEDED', 'CONFIRMED', 'FAILED', 'CANCELLED'
+  )),
+  priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),
+  execution_profile TEXT NOT NULL DEFAULT 'standard' CHECK (execution_profile IN (
+    'routine', 'standard', 'advanced', 'deep', 'complex', 'exceptional'
+  )),
+  assigned_agent TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  updated_at TEXT NOT NULL,
+  heartbeat_at TEXT,
+  completed_at TEXT,
+  archived_at TEXT,
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  progress_percent INTEGER NOT NULL DEFAULT 0 CHECK (progress_percent BETWEEN 0 AND 100),
+  progress_summary TEXT NOT NULL DEFAULT '',
+  progress_next_step TEXT,
+  result_summary TEXT,
+  result_error TEXT,
+  human_required INTEGER NOT NULL DEFAULT 0 CHECK (human_required IN (0, 1)),
+  human_question TEXT,
+  human_options_json TEXT NOT NULL DEFAULT '[]',
+  human_requested_at TEXT,
+  human_responded_at TEXT,
+  human_response TEXT,
+  row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version >= 1)
+)
+"""
 
 
 class LoopError(RuntimeError):
@@ -47,11 +88,29 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     database = config.get("database") or {}
     prompts = config.get("prompts") or {}
     execution = config.get("task_execution") or {}
+    priority_policy = config.get("priority_policy") or {}
     dashboard = config.get("dashboard") or {}
     automations = config.get("automations") or {}
     health = config.get("health") or {}
+    limits = execution.get("profile_parallel_limits") or {}
+    profiles = automations.get("profiles") or {}
+    project_defaults = priority_policy.get("project_defaults") or {}
+    valid_profile_config = set(profiles) == set(EXECUTION_PROFILES) and all(
+        isinstance(profiles[profile], dict)
+        and isinstance(profiles[profile].get("name"), str)
+        and isinstance(profiles[profile].get("model"), str)
+        and profiles[profile].get("reasoning_effort") in {"low", "medium", "high", "xhigh"}
+        and isinstance(profiles[profile].get("scheduled"), bool)
+        and (
+            (profiles[profile]["scheduled"] and isinstance(profiles[profile].get("automation_id"), str)
+             and isinstance(profiles[profile].get("offset_minutes"), int))
+            or (not profiles[profile]["scheduled"] and profiles[profile].get("automation_id") is None
+                and profiles[profile].get("offset_minutes") is None)
+        )
+        for profile in EXECUTION_PROFILES
+    )
     valid = (
-        config.get("config_version") == "2.0.0"
+        config.get("config_version") == "3.0.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -72,8 +131,12 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and execution["max_attempts"] >= 1
         and isinstance(execution.get("max_parallel_tasks"), int)
         and execution["max_parallel_tasks"] >= 1
+        and set(limits) == set(EXECUTION_PROFILES)
+        and all(isinstance(limits[profile], int) and limits[profile] >= 1 for profile in EXECUTION_PROFILES)
         and execution.get("scope_conflict_mode") == "project"
         and isinstance(execution.get("require_human_approval_for"), list)
+        and priority_policy.get("levels") == list(PRIORITIES)
+        and all(priority in PRIORITIES for priority in project_defaults.values())
         and isinstance(dashboard.get("host"), str)
         and isinstance(dashboard.get("port"), int)
         and 1 <= dashboard["port"] <= 65535
@@ -81,6 +144,9 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and dashboard["poll_interval_ms"] >= 500
         and isinstance(automations.get("worker_interval_minutes"), int)
         and automations["worker_interval_minutes"] >= 1
+        and isinstance(automations.get("entry_prompt_template"), str)
+        and "{profile}" in automations["entry_prompt_template"]
+        and valid_profile_config
         and health.get("scheduler") == "windows_task_scheduler"
         and isinstance(health.get("task_name"), str)
         and bool(health["task_name"].strip())
@@ -131,6 +197,91 @@ def initialize_schema(database: sqlite3.Connection) -> None:
     database.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
+def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
+    current = int(database.execute("PRAGMA user_version").fetchone()[0])
+    if current == SCHEMA_USER_VERSION:
+        return {
+            "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
+            "archived": 0, "profiles_backfilled": 0,
+        }
+    if current not in {LEGACY_SCHEMA_USER_VERSION, ARCHIVE_SCHEMA_USER_VERSION}:
+        raise LoopError(
+            "不支持的 Schema 迁移: "
+            f"user_version={current}, expected={LEGACY_SCHEMA_USER_VERSION} or {ARCHIVE_SCHEMA_USER_VERSION}"
+        )
+    active = int(database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0])
+    if active:
+        raise LoopError(f"Schema 迁移要求没有活动 execution，当前为 {active}")
+
+    source_version = "3.0.0" if current == LEGACY_SCHEMA_USER_VERSION else "3.1.0"
+    database.execute("PRAGMA foreign_keys = OFF")
+    try:
+        transaction(database)
+        columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "archived_at" not in columns:
+            database.execute("ALTER TABLE tasks ADD COLUMN archived_at TEXT")
+        confirmed = database.execute(
+            "SELECT id, status, COALESCE(completed_at, updated_at, created_at) AS archived_at "
+            "FROM tasks WHERE status='CONFIRMED' AND archived_at IS NULL"
+        ).fetchall() if current == LEGACY_SCHEMA_USER_VERSION else []
+        reason = "Schema 3.1.0 迁移：按旧版 CONFIRMED 等同已归档的语义设置 archived_at。"
+        for task in confirmed:
+            database.execute(
+                "UPDATE tasks SET archived_at=?, row_version=row_version+1 WHERE id=?",
+                (task["archived_at"], task["id"]),
+            )
+            database.execute(
+                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+                "VALUES(?, ?, ?, ?, 'schema-migration', ?)",
+                (task["id"], now_shanghai(), task["status"], task["status"], reason),
+            )
+
+        task_count = int(database.execute("SELECT count(*) FROM tasks").fetchone()[0])
+        database.execute(TASKS_TABLE_SQL)
+        database.execute(
+            """INSERT INTO tasks_new(
+              id, title, description, status, priority, execution_profile, assigned_agent,
+              created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
+              progress_percent, progress_summary, progress_next_step, result_summary, result_error,
+              human_required, human_question, human_options_json, human_requested_at,
+              human_responded_at, human_response, row_version
+            ) SELECT
+              id, title, description, status, priority, 'standard', assigned_agent,
+              created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
+              progress_percent, progress_summary, progress_next_step, result_summary, result_error,
+              human_required, human_question, human_options_json, human_requested_at,
+              human_responded_at, human_response, row_version
+            FROM tasks"""
+        )
+        database.execute("DROP TABLE tasks")
+        database.execute("ALTER TABLE tasks_new RENAME TO tasks")
+        database.execute(
+            "CREATE INDEX idx_tasks_queue ON tasks(status, execution_profile, priority, created_at, id)"
+        )
+        database.execute(
+            "CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)"
+        )
+        database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
+        foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise LoopError(f"Schema 迁移产生外键错误: {len(foreign_key_errors)}")
+        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise LoopError("Schema 迁移后 quick_check 失败")
+        commit(database)
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+    return {
+        "from": source_version,
+        "to": SCHEMA_VERSION,
+        "migrated": True,
+        "archived": len(confirmed),
+        "profiles_backfilled": task_count,
+    }
+
+
 def schema_version(database: sqlite3.Connection) -> str:
     value = int(database.execute("PRAGMA user_version").fetchone()[0])
     return SCHEMA_VERSION if value == SCHEMA_USER_VERSION else str(value)
@@ -152,6 +303,13 @@ def rollback(database: sqlite3.Connection) -> None:
 def execution_setting(key: str, default: Any = None, config: dict[str, Any] | None = None) -> Any:
     value = config or load_initialization_config()
     return value.get("task_execution", {}).get(key, default)
+
+
+def profile_parallel_limit(profile: str, config: dict[str, Any] | None = None) -> int:
+    if profile not in EXECUTION_PROFILES:
+        raise LoopError(f"执行档位无效: {profile}")
+    limits = execution_setting("profile_parallel_limits", {}, config)
+    return int(limits[profile])
 
 
 def parse_project_registry(path: Path) -> list[dict[str, Any]]:
@@ -210,6 +368,70 @@ def task_exists(database: sqlite3.Connection, task_id: str) -> bool:
     return database.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone() is not None
 
 
+def dependency_cycle_path(
+    database: sqlite3.Connection,
+    replacement_task_id: str | None = None,
+    replacement_dependencies: Iterable[str] | None = None,
+) -> list[str] | None:
+    graph: dict[str, list[str]] = {
+        row[0]: [] for row in database.execute("SELECT id FROM tasks ORDER BY id").fetchall()
+    }
+    for row in database.execute(
+        "SELECT task_id, dependency_id FROM task_dependencies ORDER BY task_id, dependency_id"
+    ).fetchall():
+        graph.setdefault(row["task_id"], []).append(row["dependency_id"])
+    if replacement_task_id is not None:
+        graph[replacement_task_id] = list(replacement_dependencies or [])
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    stack: list[str] = []
+
+    def visit(task_id: str) -> list[str] | None:
+        visiting.add(task_id)
+        stack.append(task_id)
+        for dependency in graph.get(task_id, []):
+            if dependency in visiting:
+                start = stack.index(dependency)
+                return stack[start:] + [dependency]
+            if dependency not in visited:
+                cycle = visit(dependency)
+                if cycle:
+                    return cycle
+        stack.pop()
+        visiting.remove(task_id)
+        visited.add(task_id)
+        return None
+
+    for task_id in sorted(graph):
+        if task_id not in visited:
+            cycle = visit(task_id)
+            if cycle:
+                return cycle
+    return None
+
+
+def set_task_dependencies(
+    database: sqlite3.Connection, task_id: str, dependencies: Iterable[str]
+) -> None:
+    values = [str(dependency) for dependency in dependencies]
+    if len(values) != len(set(values)):
+        raise LoopError("任务依赖不能重复")
+    if task_id in values:
+        raise LoopError(f"任务不能依赖自身: {task_id} -> {task_id}")
+    missing = [dependency for dependency in values if not task_exists(database, dependency)]
+    if missing:
+        raise LoopError("依赖任务不存在: " + ", ".join(missing))
+    cycle = dependency_cycle_path(database, task_id, values)
+    if cycle:
+        raise LoopError("循环依赖: " + " -> ".join(cycle))
+    database.execute("DELETE FROM task_dependencies WHERE task_id=?", (task_id,))
+    database.executemany(
+        "INSERT INTO task_dependencies(task_id, dependency_id) VALUES(?, ?)",
+        [(task_id, dependency) for dependency in values],
+    )
+
+
 def insert_task(
     database: sqlite3.Connection,
     task: dict[str, Any],
@@ -222,6 +444,12 @@ def insert_task(
     if task_exists(database, task_id):
         raise LoopError(f"任务 id 已存在: {task_id}")
     status = task.get("status", "PENDING")
+    priority = task.get("priority", "medium")
+    execution_profile = task.get("execution_profile", "standard")
+    if priority not in PRIORITIES:
+        raise LoopError(f"任务优先级无效: {priority}")
+    if execution_profile not in EXECUTION_PROFILES:
+        raise LoopError(f"执行档位无效: {execution_profile}")
     stamp = task.get("created_at") or now_shanghai()
     progress = task.get("progress") or {}
     result = task.get("result") or {}
@@ -229,30 +457,27 @@ def insert_task(
     database.execute(
         """
         INSERT INTO tasks(
-          id, title, description, status, priority, assigned_agent,
-          created_at, started_at, updated_at, heartbeat_at, completed_at, attempt,
+          id, title, description, status, priority, execution_profile, assigned_agent,
+          created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
           progress_percent, progress_summary, progress_next_step,
           result_summary, result_error,
           human_required, human_question, human_options_json,
           human_requested_at, human_responded_at, human_response, row_version
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             task_id, str(task.get("title") or task_id), str(task.get("description") or ""),
-            status, task.get("priority", "medium"), task.get("assigned_agent"), stamp,
+            status, priority, execution_profile, task.get("assigned_agent"), stamp,
             task.get("started_at"), task.get("updated_at") or stamp, task.get("heartbeat_at"),
-            task.get("completed_at"), int(task.get("attempt", 0)), int(progress.get("percent", 0)),
+            task.get("completed_at"), task.get("archived_at"), int(task.get("attempt", 0)),
+            int(progress.get("percent", 0)),
             str(progress.get("summary") or ""), progress.get("next_step"), result.get("summary"),
             result.get("error"), int(bool(human.get("required", False))), human.get("question"),
             json_dump(human.get("options") or []), human.get("requested_at"), human.get("responded_at"),
             human.get("response"), int(task.get("row_version", 1)),
         ),
     )
-    for dependency in task.get("depends_on") or []:
-        database.execute(
-            "INSERT INTO task_dependencies(task_id, dependency_id) VALUES(?, ?)",
-            (task_id, dependency),
-        )
+    set_task_dependencies(database, task_id, task.get("depends_on") or [])
     for index, scope in enumerate(task.get("scope") or []):
         database.execute(
             "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) VALUES(?, ?, ?, ?)",
@@ -310,9 +535,11 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     ).fetchall()]
     return {
         "id": task_id, "title": row["title"], "description": row["description"],
-        "status": row["status"], "priority": row["priority"], "assigned_agent": row["assigned_agent"],
+        "status": row["status"], "priority": row["priority"],
+        "execution_profile": row["execution_profile"], "assigned_agent": row["assigned_agent"],
         "created_at": row["created_at"], "started_at": row["started_at"], "updated_at": row["updated_at"],
-        "heartbeat_at": row["heartbeat_at"], "completed_at": row["completed_at"], "attempt": row["attempt"],
+        "heartbeat_at": row["heartbeat_at"], "completed_at": row["completed_at"],
+        "archived_at": row["archived_at"], "attempt": row["attempt"],
         "depends_on": task_children(database, task_id, "task_dependencies", "dependency_id", "dependency_id"),
         "scope": task_children(database, task_id, "task_scopes", "scope"),
         "scope_keys": task_children(database, task_id, "task_scopes", "scope_key"),
@@ -339,8 +566,8 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
 
 def all_tasks(database: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = database.execute(
-        "SELECT * FROM tasks ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
-        "WHEN 'medium' THEN 2 ELSE 3 END, created_at, id"
+        "SELECT * FROM tasks ORDER BY CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 "
+        "WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at, id"
     ).fetchall()
     return [task_dict(database, row) for row in rows]
 
@@ -355,12 +582,15 @@ def current_revision(database: sqlite3.Connection) -> int:
 def state_payload(database: sqlite3.Connection, config: dict[str, Any] | None = None) -> dict[str, Any]:
     value = config or load_initialization_config()
     executions = database.execute(
-        "SELECT execution_id, task_id, heartbeat_at FROM executions WHERE status='RUNNING' ORDER BY started_at"
+        "SELECT e.execution_id, e.task_id, e.heartbeat_at, t.execution_profile "
+        "FROM executions e JOIN tasks t ON t.id=e.task_id "
+        "WHERE e.status='RUNNING' ORDER BY e.started_at"
     ).fetchall()
     agents = [{
         "id": row["execution_id"], "role": "worker", "status": "RUNNING",
         "current_task_id": row["task_id"], "last_seen_at": row["heartbeat_at"],
-        "summary": "Concurrent SQLite worker",
+        "execution_profile": row["execution_profile"],
+        "summary": f"Concurrent SQLite worker · {row['execution_profile']}",
     } for row in executions]
     updated = database.execute("SELECT max(updated_at) FROM tasks").fetchone()[0] or now_shanghai()
     workspace = value["workspace"]
@@ -416,10 +646,45 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
     ).fetchall()
     if invalid_confirmed:
         errors.append("CONFIRMED 缺少 SUCCEEDED 转入历史: " + ",".join(row[0] for row in invalid_confirmed))
+    invalid_archived: list[str] = []
+    for row in database.execute("SELECT id, archived_at FROM tasks WHERE archived_at IS NOT NULL"):
+        try:
+            parsed = datetime.fromisoformat(row["archived_at"])
+            if parsed.utcoffset() is None:
+                raise ValueError("missing timezone")
+        except (TypeError, ValueError):
+            invalid_archived.append(row["id"])
+    if invalid_archived:
+        errors.append("archived_at 不是带时区 ISO 8601: " + ",".join(invalid_archived))
+    invalid_priorities = database.execute(
+        "SELECT id FROM tasks WHERE priority NOT IN ('blocker','critical','high','medium','low')"
+    ).fetchall()
+    if invalid_priorities:
+        errors.append("任务优先级无效: " + ",".join(row[0] for row in invalid_priorities))
+    invalid_profiles = database.execute(
+        "SELECT id FROM tasks WHERE execution_profile NOT IN "
+        "('routine','standard','advanced','deep','complex','exceptional')"
+    ).fetchall()
+    if invalid_profiles:
+        errors.append("任务执行档位无效: " + ",".join(row[0] for row in invalid_profiles))
+    dependency_cycle = dependency_cycle_path(database)
+    if dependency_cycle:
+        errors.append("循环依赖: " + " -> ".join(dependency_cycle))
     active = database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0]
     maximum = int(execution_setting("max_parallel_tasks", 6, value))
     if active > maximum:
         errors.append(f"active_executions={active} exceeds max_parallel_tasks={maximum}")
+    for profile in EXECUTION_PROFILES:
+        profile_active = database.execute(
+            "SELECT count(*) FROM executions e JOIN tasks t ON t.id=e.task_id "
+            "WHERE e.status='RUNNING' AND t.execution_profile=?",
+            (profile,),
+        ).fetchone()[0]
+        profile_maximum = profile_parallel_limit(profile, value)
+        if profile_active > profile_maximum:
+            errors.append(
+                f"profile={profile} active_executions={profile_active} exceeds maximum={profile_maximum}"
+            )
     orphan_running = database.execute(
         """SELECT t.id FROM tasks t WHERE t.status='RUNNING' AND NOT EXISTS (
           SELECT 1 FROM executions e WHERE e.task_id=t.id AND e.status='RUNNING'

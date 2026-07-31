@@ -12,11 +12,14 @@ from typing import Any
 sys.dont_write_bytecode = True
 
 from loopdb import (
+    ARCHIVABLE_STATUSES,
     BASE_DIR,
     CONFIG_PATH,
     DEFAULT_DB,
     DEPENDENCY_COMPLETE_STATUSES,
+    EXECUTION_PROFILES,
     FINAL_EXECUTION_STATUSES,
+    PRIORITIES,
     LoopError,
     all_tasks,
     bump_revision,
@@ -29,11 +32,14 @@ from loopdb import (
     insert_task,
     json_dump,
     load_initialization_config,
+    migrate_schema,
     now_shanghai,
     parse_project_registry,
+    profile_parallel_limit,
     replace_ordered_text,
     resolve_scope_key,
     rollback,
+    set_task_dependencies,
     state_payload,
     task_dict,
     task_exists,
@@ -103,6 +109,10 @@ def normalize_legacy_task(task: dict[str, Any]) -> dict[str, Any]:
                 "actor": "sqlite-migration",
                 "reason": "旧活动或兼容状态在迁移时转换为等待人工。",
             }
+        )
+    if normalized.get("status") == "CONFIRMED" and not normalized.get("archived_at"):
+        normalized["archived_at"] = (
+            normalized.get("completed_at") or normalized.get("updated_at") or normalized.get("created_at")
         )
     return normalized
 
@@ -192,6 +202,18 @@ def command_init(args: argparse.Namespace) -> None:
     except Exception:
         rollback(database)
         raise
+    finally:
+        database.close()
+
+
+def command_migrate(args: argparse.Namespace) -> None:
+    database = connect(args.db)
+    try:
+        result = migrate_schema(database)
+        validation = validate_database(database)
+        if not validation["ok"]:
+            raise LoopError(f"迁移后校验失败: {validation}")
+        output({"outcome": "MIGRATED" if result["migrated"] else "ALREADY_CURRENT", **result})
     finally:
         database.close()
 
@@ -343,13 +365,32 @@ def command_claim(args: argparse.Namespace) -> None:
         maximum = int(execution_setting("max_parallel_tasks", 6))
         if active >= maximum:
             commit(database)
-            output({"outcome": "SLOT_FULL", "active": active, "maximum": maximum, "recovered": recovered})
+            output({
+                "outcome": "SLOT_FULL", "limit_scope": "global", "profile": args.profile,
+                "active": active, "maximum": maximum, "recovered": recovered,
+            })
+            return
+        profile_active = database.execute(
+            "SELECT count(*) FROM executions e JOIN tasks t ON t.id=e.task_id "
+            "WHERE e.status='RUNNING' AND t.execution_profile=?",
+            (args.profile,),
+        ).fetchone()[0]
+        profile_maximum = profile_parallel_limit(args.profile)
+        if profile_active >= profile_maximum:
+            commit(database)
+            output({
+                "outcome": "SLOT_FULL", "limit_scope": "profile", "profile": args.profile,
+                "active": active, "maximum": maximum, "profile_active": profile_active,
+                "profile_maximum": profile_maximum, "recovered": recovered,
+            })
             return
         if database.execute("SELECT 1 FROM executions WHERE execution_id=?", (args.execution_id,)).fetchone():
             raise LoopError("execution-id 已存在")
         candidates = database.execute(
-            "SELECT * FROM tasks WHERE status='PENDING' ORDER BY "
-            "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at, id"
+            "SELECT * FROM tasks WHERE status='PENDING' AND execution_profile=? ORDER BY "
+            "CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
+            "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id",
+            (args.profile,),
         ).fetchall()
         task_row = None
         scopes: list[sqlite3.Row] = []
@@ -384,7 +425,10 @@ def command_claim(args: argparse.Namespace) -> None:
                 )
                 return
             commit(database)
-            output({"outcome": "NO_TASK", "active": active, "recovered": recovered, "requeued": requeued})
+            output({
+                "outcome": "NO_TASK", "profile": args.profile, "active": active,
+                "recovered": recovered, "requeued": requeued,
+            })
             return
         lease_seconds = int(execution_setting("task_lease_seconds", 3600))
         expiry = expires_at(lease_seconds)
@@ -432,6 +476,9 @@ def command_claim(args: argparse.Namespace) -> None:
                 "lease_expires_at": expiry,
                 "active": active + 1,
                 "maximum": maximum,
+                "profile": args.profile,
+                "profile_active": profile_active + 1,
+                "profile_maximum": profile_maximum,
                 "revision": revision,
                 "deferred_conflicts": deferred_conflicts,
                 "recovered": recovered,
@@ -565,14 +612,16 @@ def command_confirm(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        task = database.execute("SELECT status FROM tasks WHERE id=?", (args.task_id,)).fetchone()
+        task = database.execute("SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)).fetchone()
         if not task or task["status"] != "SUCCEEDED":
             raise LoopError("只有 SUCCEEDED 任务可以人工确认")
+        if task["archived_at"] is not None:
+            raise LoopError("已归档任务必须先取消归档")
         stamp = now_shanghai()
-        reason = args.reason or "人工复核通过，任务已确认归档。"
+        reason = args.reason or "人工复核通过，任务已确认。"
         database.execute(
             "UPDATE tasks SET status='CONFIRMED', updated_at=?, progress_percent=100, "
-            "progress_summary='人工复核通过，任务已确认归档。', progress_next_step=NULL, "
+            "progress_summary='人工复核通过，任务已确认。', progress_next_step=NULL, "
             "row_version=row_version+1 WHERE id=?",
             (stamp, args.task_id),
         )
@@ -584,6 +633,103 @@ def command_confirm(args: argparse.Namespace) -> None:
         revision = bump_revision(database, "human-review")
         commit(database)
         output({"outcome": "CONFIRMED", "task_id": args.task_id, "revision": revision})
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
+def command_archive(args: argparse.Namespace) -> None:
+    database = connect(args.db)
+    try:
+        transaction(database)
+        task = database.execute(
+            "SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)
+        ).fetchone()
+        if not task:
+            raise LoopError("任务不存在")
+        if task["status"] not in ARCHIVABLE_STATUSES:
+            allowed = "、".join(sorted(ARCHIVABLE_STATUSES))
+            raise LoopError(f"只有终态任务可以归档；允许状态：{allowed}")
+        if task["archived_at"] is not None:
+            commit(database)
+            output(
+                {
+                    "outcome": "ALREADY_ARCHIVED",
+                    "task_id": args.task_id,
+                    "status": task["status"],
+                    "archived_at": task["archived_at"],
+                    "revision": bump_revision(database, "task-manager"),
+                }
+            )
+            return
+        stamp = now_shanghai()
+        reason = args.reason or "人工归档任务。"
+        database.execute("UPDATE tasks SET archived_at=? WHERE id=?", (stamp, args.task_id))
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES(?, ?, ?, ?, 'task-manager', ?)",
+            (args.task_id, stamp, task["status"], task["status"], reason),
+        )
+        revision = bump_revision(database, "task-manager")
+        commit(database)
+        output(
+            {
+                "outcome": "ARCHIVED",
+                "task_id": args.task_id,
+                "status": task["status"],
+                "archived_at": stamp,
+                "revision": revision,
+            }
+        )
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
+def command_unarchive(args: argparse.Namespace) -> None:
+    database = connect(args.db)
+    try:
+        transaction(database)
+        task = database.execute(
+            "SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)
+        ).fetchone()
+        if not task:
+            raise LoopError("任务不存在")
+        if task["archived_at"] is None:
+            commit(database)
+            output(
+                {
+                    "outcome": "ALREADY_UNARCHIVED",
+                    "task_id": args.task_id,
+                    "status": task["status"],
+                    "archived_at": None,
+                    "revision": bump_revision(database, "task-manager"),
+                }
+            )
+            return
+        stamp = now_shanghai()
+        reason = args.reason or "人工取消归档。"
+        database.execute("UPDATE tasks SET archived_at=NULL WHERE id=?", (args.task_id,))
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES(?, ?, ?, ?, 'task-manager', ?)",
+            (args.task_id, stamp, task["status"], task["status"], reason),
+        )
+        revision = bump_revision(database, "task-manager")
+        commit(database)
+        output(
+            {
+                "outcome": "UNARCHIVED",
+                "task_id": args.task_id,
+                "status": task["status"],
+                "archived_at": None,
+                "revision": revision,
+            }
+        )
     except Exception:
         rollback(database)
         raise
@@ -636,22 +782,28 @@ def command_enqueue(args: argparse.Namespace) -> None:
 
 def command_update(args: argparse.Namespace) -> None:
     patch = read_json(Path(args.file).resolve())
-    allowed = {"title", "description", "priority"}
+    allowed = {"title", "description", "priority", "execution_profile"}
     unknown = set(patch) - allowed - {"scope", "depends_on", "acceptance"}
     if unknown:
         raise LoopError("不支持的更新字段: " + ", ".join(sorted(unknown)))
     database = connect(args.db)
     try:
         transaction(database)
-        task = database.execute("SELECT status FROM tasks WHERE id=?", (args.task_id,)).fetchone()
+        task = database.execute("SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)).fetchone()
         if not task:
             raise LoopError("任务不存在")
         if task["status"] == "RUNNING":
             raise LoopError("RUNNING 任务不能修改")
+        if task["archived_at"] is not None:
+            raise LoopError("已归档任务必须先取消归档")
+        if "priority" in patch and patch["priority"] not in PRIORITIES:
+            raise LoopError(f"任务优先级无效: {patch['priority']}")
+        if "execution_profile" in patch and patch["execution_profile"] not in EXECUTION_PROFILES:
+            raise LoopError(f"执行档位无效: {patch['execution_profile']}")
         stamp = now_shanghai()
         assignments: list[str] = []
         values: list[Any] = []
-        for field in ("title", "description", "priority"):
+        for field in ("title", "description", "priority", "execution_profile"):
             if field in patch:
                 assignments.append(f"{field}=?")
                 values.append(patch[field])
@@ -669,11 +821,7 @@ def command_update(args: argparse.Namespace) -> None:
         if "acceptance" in patch:
             replace_ordered_text(database, "task_acceptance", args.task_id, patch["acceptance"])
         if "depends_on" in patch:
-            database.execute("DELETE FROM task_dependencies WHERE task_id=?", (args.task_id,))
-            database.executemany(
-                "INSERT INTO task_dependencies(task_id, dependency_id) VALUES(?, ?)",
-                [(args.task_id, dependency) for dependency in patch["depends_on"]],
-            )
+            set_task_dependencies(database, args.task_id, patch["depends_on"])
         if not assignments:
             database.execute(
                 "UPDATE tasks SET updated_at=?, row_version=row_version+1 WHERE id=?",
@@ -693,7 +841,7 @@ def command_requeue(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        row = database.execute("SELECT status FROM tasks WHERE id=?", (args.task_id,)).fetchone()
+        row = database.execute("SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)).fetchone()
         if not row or row["status"] not in {
             "DRAFT",
             "WAITING_HUMAN",
@@ -702,6 +850,8 @@ def command_requeue(args: argparse.Namespace) -> None:
             "FAILED",
         }:
             raise LoopError("只有草稿、等待、成功或失败任务可以重新排队")
+        if row["archived_at"] is not None:
+            raise LoopError("已归档任务必须先取消归档")
         stamp = now_shanghai()
         database.execute("DELETE FROM task_conflicts WHERE task_id=?", (args.task_id,))
         database.execute(
@@ -730,11 +880,13 @@ def command_cancel(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        row = database.execute("SELECT status FROM tasks WHERE id=?", (args.task_id,)).fetchone()
+        row = database.execute("SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)).fetchone()
         if not row:
             raise LoopError("任务不存在")
         if row["status"] == "RUNNING":
             raise LoopError("RUNNING 任务不能取消")
+        if row["archived_at"] is not None:
+            raise LoopError("已归档任务必须先取消归档")
         stamp = now_shanghai()
         database.execute(
             "UPDATE tasks SET status='CANCELLED', updated_at=?, progress_next_step=NULL, "
@@ -786,12 +938,16 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--force", action="store_true")
     init.set_defaults(handler=command_init)
 
+    migrate = commands.add_parser("migrate")
+    migrate.set_defaults(handler=command_migrate)
+
     validate = commands.add_parser("validate")
     validate.set_defaults(handler=command_validate)
     state = commands.add_parser("state")
     state.set_defaults(handler=command_state)
     claim = commands.add_parser("claim")
     claim.add_argument("execution_id")
+    claim.add_argument("--profile", required=True, choices=EXECUTION_PROFILES)
     claim.set_defaults(handler=command_claim)
     heartbeat = commands.add_parser("heartbeat")
     heartbeat.add_argument("execution_id")
@@ -806,6 +962,14 @@ def parser() -> argparse.ArgumentParser:
     confirm.add_argument("task_id")
     confirm.add_argument("--reason")
     confirm.set_defaults(handler=command_confirm)
+    archive = commands.add_parser("archive")
+    archive.add_argument("task_id")
+    archive.add_argument("--reason")
+    archive.set_defaults(handler=command_archive)
+    unarchive = commands.add_parser("unarchive")
+    unarchive.add_argument("task_id")
+    unarchive.add_argument("--reason")
+    unarchive.set_defaults(handler=command_unarchive)
     enqueue = commands.add_parser("enqueue")
     enqueue.add_argument("file")
     enqueue.set_defaults(handler=command_enqueue)

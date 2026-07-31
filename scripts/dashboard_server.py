@@ -82,6 +82,7 @@ def resolve_attachment_image(
 
 class DashboardServer(ThreadingHTTPServer):
     daemon_threads = True
+    allow_reuse_address = False
 
     def __init__(
         self,
@@ -213,8 +214,8 @@ def main() -> None:
     runtime = BASE_DIR / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     pid_path = runtime / "dashboard-server.pid"
-    pid_path.write_text(str(os.getpid()), encoding="utf-8")
     server = DashboardServer((host, port), database_path, BASE_DIR / "dashboard.html", config)
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
 
     def stop_server(signum: int, frame: object) -> None:
         del signum, frame

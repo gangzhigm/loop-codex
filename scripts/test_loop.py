@@ -7,13 +7,19 @@ import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 
 from loopdb import (
     ALLOWED_TABLES,
+    ARCHIVABLE_STATUSES,
     DEFAULT_DB,
+    EXECUTION_PROFILES,
+    SCHEMA_PATH,
+    SCHEMA_USER_VERSION,
+    all_tasks,
     connect,
     initialize_schema,
     insert_task,
@@ -34,9 +40,15 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(config["prompts"]["worker"], "prompts/worker.md")
         self.assertNotIn("health_interval_minutes", config["automations"])
         self.assertEqual(config["health"]["scheduler"], "windows_task_scheduler")
-        self.assertEqual(config["health"]["interval_minutes"], 10)
+        self.assertEqual(config["health"]["interval_minutes"], 30)
         self.assertEqual(config["dashboard"]["port"], 4178)
         self.assertEqual(config["health"]["failure_threshold"], 3)
+        self.assertEqual(config["priority_policy"]["levels"], ["blocker", "critical", "high", "medium", "low"])
+        self.assertEqual(set(config["automations"]["profiles"]), set(EXECUTION_PROFILES))
+        self.assertEqual(
+            config["task_execution"]["profile_parallel_limits"],
+            {"routine": 2, "standard": 3, "advanced": 2, "deep": 1, "complex": 1, "exceptional": 1},
+        )
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -49,7 +61,13 @@ class LoopConcurrencyTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def add_task(self, task_id: str, project: str, priority: str = "medium") -> None:
+    def add_task(
+        self,
+        task_id: str,
+        project: str,
+        priority: str = "medium",
+        execution_profile: str = "standard",
+    ) -> None:
         database = connect(self.db_path)
         insert_task(
             database,
@@ -59,6 +77,7 @@ class LoopConcurrencyTests(unittest.TestCase):
                 "description": "test",
                 "status": "PENDING",
                 "priority": priority,
+                "execution_profile": execution_profile,
                 "created_at": now_shanghai(),
                 "scope": [f"{project}/file.txt"],
                 "acceptance": ["test"],
@@ -68,7 +87,31 @@ class LoopConcurrencyTests(unittest.TestCase):
         )
         database.close()
 
-    def run_ctl(self, *arguments: str, input_text: str | None = None) -> dict[str, object]:
+    def run_ctl(
+        self,
+        *arguments: str,
+        input_text: str | None = None,
+        db_path: Path | None = None,
+    ) -> dict[str, object]:
+        environment = os.environ.copy()
+        environment["PYTHONIOENCODING"] = "utf-8"
+        completed = subprocess.run(
+            [sys.executable, str(LOOPCTL), "--db", str(db_path or self.db_path), *arguments],
+            cwd=BASE_DIR,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+            input=input_text,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        return json.loads(completed.stdout)
+
+    def claim(self, execution_id: str, profile: str = "standard") -> dict[str, object]:
+        return self.run_ctl("claim", execution_id, "--profile", profile)
+
+    def run_ctl_error(self, *arguments: str) -> dict[str, object]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         completed = subprocess.run(
@@ -79,9 +122,8 @@ class LoopConcurrencyTests(unittest.TestCase):
             text=True,
             encoding="utf-8",
             env=environment,
-            input=input_text,
         )
-        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertNotEqual(completed.returncode, 0, completed.stdout)
         return json.loads(completed.stdout)
 
     def finish(self, execution_id: str, task_id: str) -> dict[str, object]:
@@ -104,21 +146,62 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(tables, ALLOWED_TABLES)
         self.assertEqual(DEFAULT_DB, BASE_DIR / "data" / "loop-agent.sqlite3")
 
+    def test_fresh_schema_has_archived_at_and_current_version(self) -> None:
+        database = connect(self.db_path)
+        columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)").fetchall()}
+        version = database.execute("PRAGMA user_version").fetchone()[0]
+        database.close()
+        self.assertIn("archived_at", columns)
+        self.assertIn("execution_profile", columns)
+        self.assertEqual(version, SCHEMA_USER_VERSION)
+
     def test_six_parallel_claims_and_seventh_slot_full(self) -> None:
-        for index in range(1, 8):
-            self.add_task(f"TASK-{index}", f"project-{index}")
+        profiles = ["routine", "routine", "standard", "standard", "advanced", "deep", "complex"]
+        for index, profile in enumerate(profiles, start=1):
+            self.add_task(f"TASK-{index}", f"project-{index}", execution_profile=profile)
         with ThreadPoolExecutor(max_workers=7) as pool:
-            results = list(pool.map(lambda index: self.run_ctl("claim", f"exec-{index}"), range(1, 8)))
+            results = list(
+                pool.map(
+                    lambda item: self.claim(f"exec-{item[0]}", item[1]),
+                    enumerate(profiles, start=1),
+                )
+            )
         outcomes = [result["outcome"] for result in results]
         self.assertEqual(outcomes.count("CLAIMED"), 6)
         self.assertEqual(outcomes.count("SLOT_FULL"), 1)
+        full = next(result for result in results if result["outcome"] == "SLOT_FULL")
+        self.assertEqual(full["limit_scope"], "global")
+
+    def test_profile_parallel_limit_is_enforced(self) -> None:
+        for index in range(1, 4):
+            self.add_task(f"ROUTINE-{index}", f"project-{index}", execution_profile="routine")
+        self.assertEqual(self.claim("routine-1", "routine")["outcome"], "CLAIMED")
+        self.assertEqual(self.claim("routine-2", "routine")["outcome"], "CLAIMED")
+        full = self.claim("routine-3", "routine")
+        self.assertEqual(full["outcome"], "SLOT_FULL")
+        self.assertEqual(full["limit_scope"], "profile")
+        self.assertEqual(full["profile_active"], 2)
+        self.assertEqual(full["profile_maximum"], 2)
+
+    def test_claim_isolated_by_execution_profile(self) -> None:
+        self.add_task("STANDARD-BLOCKER", "project-1", "blocker", "standard")
+        self.add_task("ROUTINE-LOW", "project-2", "low", "routine")
+        result = self.claim("routine-only", "routine")
+        self.assertEqual(result["task"]["id"], "ROUTINE-LOW")
+        self.assertEqual(result["task"]["execution_profile"], "routine")
+
+    def test_blocker_is_first_priority_within_profile(self) -> None:
+        self.add_task("OLDER-CRITICAL", "project-1", "critical")
+        self.add_task("NEWER-BLOCKER", "project-2", "blocker")
+        result = self.claim("priority-order")
+        self.assertEqual(result["task"]["id"], "NEWER-BLOCKER")
 
     def test_conflict_waits_then_requeues_after_blocker_finishes(self) -> None:
         self.add_task("BLOCKER", "project-1", "critical")
         self.add_task("CONFLICT", "project-1", "high")
-        first = self.run_ctl("claim", "exec-blocker")
+        first = self.claim("exec-blocker")
         self.assertEqual(first["task"]["id"], "BLOCKER")
-        second = self.run_ctl("claim", "exec-conflict")
+        second = self.claim("exec-conflict")
         self.assertEqual(second["outcome"], "CONFLICT")
         self.assertEqual(second["task_id"], "CONFLICT")
         finished = self.finish("exec-blocker", "BLOCKER")
@@ -132,9 +215,9 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.add_task("BLOCKER", "project-1", "critical")
         self.add_task("CONFLICT", "project-1", "high")
         self.add_task("RUNNABLE", "project-2", "medium")
-        self.run_ctl("claim", "exec-blocker")
+        self.claim("exec-blocker")
 
-        result = self.run_ctl("claim", "exec-runnable")
+        result = self.claim("exec-runnable")
 
         self.assertEqual(result["outcome"], "CLAIMED")
         self.assertEqual(result["task"]["id"], "RUNNABLE")
@@ -164,7 +247,7 @@ class LoopConcurrencyTests(unittest.TestCase):
             project_paths=self.project_paths,
         )
         database.close()
-        result = self.run_ctl("claim", "exec-multi")
+        result = self.claim("exec-multi")
         self.assertEqual(result["outcome"], "CLAIMED")
         database = connect(self.db_path)
         lock_count = database.execute(
@@ -175,19 +258,19 @@ class LoopConcurrencyTests(unittest.TestCase):
 
     def test_expired_lease_is_recovered_and_reclaimed(self) -> None:
         self.add_task("LEASE", "project-1")
-        self.run_ctl("claim", "exec-old")
+        self.claim("exec-old")
         database = connect(self.db_path)
         database.execute("UPDATE executions SET lease_expires_at='2000-01-01T00:00:00+08:00' WHERE execution_id='exec-old'")
         database.execute("UPDATE scope_locks SET lease_expires_at='2000-01-01T00:00:00+08:00' WHERE execution_id='exec-old'")
         database.close()
-        result = self.run_ctl("claim", "exec-new")
+        result = self.claim("exec-new")
         self.assertEqual(result["outcome"], "CLAIMED")
         self.assertEqual(result["task"]["id"], "LEASE")
         self.assertEqual(result["task"]["attempt"], 2)
 
     def test_stalled_heartbeat_is_recovered_before_lease_expiry(self) -> None:
         self.add_task("STALLED", "project-1")
-        self.run_ctl("claim", "exec-stalled")
+        self.claim("exec-stalled")
         database = connect(self.db_path)
         database.execute(
             "UPDATE executions SET heartbeat_at='2000-01-01T00:00:00+08:00', "
@@ -198,7 +281,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         )
         database.close()
 
-        result = self.run_ctl("claim", "exec-recovered")
+        result = self.claim("exec-recovered")
 
         self.assertEqual(result["outcome"], "CLAIMED")
         self.assertEqual(result["task"]["id"], "STALLED")
@@ -209,8 +292,8 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.add_task("BLOCKER", "project-1", "critical")
         self.add_task("CONFLICT-1", "project-1", "high")
         self.add_task("CONFLICT-2", "project-1", "high")
-        self.run_ctl("claim", "exec-blocker")
-        conflict_result = self.run_ctl("claim", "exec-conflicts")
+        self.claim("exec-blocker")
+        conflict_result = self.claim("exec-conflicts")
         self.assertEqual(conflict_result["outcome"], "CONFLICT")
         self.assertEqual(
             [item["task_id"] for item in conflict_result["deferred_conflicts"]],
@@ -225,7 +308,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         database.execute("UPDATE tasks SET attempt=2 WHERE id='BLOCKER'")
         database.close()
 
-        result = self.run_ctl("claim", "exec-next")
+        result = self.claim("exec-next")
 
         self.assertEqual(result["outcome"], "CLAIMED")
         self.assertEqual(result["recovered"][0]["outcome"], "HEARTBEAT_STALLED")
@@ -242,7 +325,7 @@ class LoopConcurrencyTests(unittest.TestCase):
 
     def test_succeeded_requires_manual_confirmation(self) -> None:
         self.add_task("CONFIRM", "project-1")
-        self.run_ctl("claim", "exec-confirm")
+        self.claim("exec-confirm")
         self.finish("exec-confirm", "CONFIRM")
         result = self.run_ctl("confirm", "CONFIRM", "--reason", "人工复核通过")
         self.assertEqual(result["outcome"], "CONFIRMED")
@@ -250,12 +333,194 @@ class LoopConcurrencyTests(unittest.TestCase):
         history = database.execute(
             "SELECT from_status, to_status FROM task_history WHERE task_id='CONFIRM' ORDER BY id DESC LIMIT 1"
         ).fetchone()
+        archived_at = database.execute(
+            "SELECT archived_at FROM tasks WHERE id='CONFIRM'"
+        ).fetchone()[0]
+        payload = next(task for task in all_tasks(database) if task["id"] == "CONFIRM")
         database.close()
         self.assertEqual(tuple(history), ("SUCCEEDED", "CONFIRMED"))
+        self.assertIsNone(archived_at)
+        self.assertIn("archived_at", payload)
+        self.assertIsNone(payload["archived_at"])
+
+    def test_archive_and_unarchive_are_idempotent_and_preserve_task_data(self) -> None:
+        for status in sorted(ARCHIVABLE_STATUSES):
+            task_id = f"ARCHIVE-{status}"
+            self.add_task(task_id, "project-1")
+            database = connect(self.db_path)
+            database.execute(
+                "UPDATE tasks SET status=?, attempt=2, result_summary='kept', result_error='kept-error' "
+                "WHERE id=?",
+                (status, task_id),
+            )
+            database.close()
+            result = self.run_ctl("archive", task_id, "--reason", f"archive {status}")
+            self.assertEqual(result["outcome"], "ARCHIVED")
+            self.assertEqual(result["status"], status)
+            self.assertIsNotNone(result["archived_at"])
+
+        task_id = "ARCHIVE-FAILED"
+        database = connect(self.db_path)
+        before = database.execute(
+            "SELECT status, attempt, result_summary, result_error FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()
+        history_before_repeat = database.execute(
+            "SELECT count(*) FROM task_history WHERE task_id=?", (task_id,)
+        ).fetchone()[0]
+        archived_at = database.execute(
+            "SELECT archived_at FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()[0]
+        database.close()
+        self.assertIsNotNone(datetime.fromisoformat(archived_at).utcoffset())
+
+        repeated = self.run_ctl("archive", task_id, "--reason", "must not duplicate")
+        self.assertEqual(repeated["outcome"], "ALREADY_ARCHIVED")
+        database = connect(self.db_path)
+        self.assertEqual(
+            database.execute("SELECT count(*) FROM task_history WHERE task_id=?", (task_id,)).fetchone()[0],
+            history_before_repeat,
+        )
+        unarchived = self.run_ctl("unarchive", task_id, "--reason", "return to current view")
+        self.assertEqual(unarchived["outcome"], "UNARCHIVED")
+        history_after_unarchive = database.execute(
+            "SELECT count(*) FROM task_history WHERE task_id=?", (task_id,)
+        ).fetchone()[0]
+        database.close()
+        repeated_unarchive = self.run_ctl("unarchive", task_id, "--reason", "must not duplicate")
+        self.assertEqual(repeated_unarchive["outcome"], "ALREADY_UNARCHIVED")
+
+        database = connect(self.db_path)
+        after = database.execute(
+            "SELECT status, attempt, result_summary, result_error FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()
+        final_history = database.execute(
+            "SELECT count(*) FROM task_history WHERE task_id=?", (task_id,)
+        ).fetchone()[0]
+        archive_events = database.execute(
+            "SELECT from_status, to_status, actor, reason FROM task_history "
+            "WHERE task_id=? AND actor='task-manager' ORDER BY id",
+            (task_id,),
+        ).fetchall()
+        database.close()
+        self.assertEqual(tuple(after), tuple(before))
+        self.assertEqual(final_history, history_after_unarchive)
+        self.assertEqual(
+            [(row["from_status"], row["to_status"]) for row in archive_events],
+            [("FAILED", "FAILED"), ("FAILED", "FAILED")],
+        )
+
+    def test_archive_rejects_nonterminal_statuses(self) -> None:
+        statuses = ["DRAFT", "PENDING", "RUNNING", "WAITING_CONFLICT", "WAITING_HUMAN", "SUCCEEDED"]
+        for index, status in enumerate(statuses):
+            task_id = f"NOT-ARCHIVABLE-{index}"
+            self.add_task(task_id, "project-1")
+            database = connect(self.db_path)
+            database.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+            database.close()
+            with self.subTest(status=status):
+                result = self.run_ctl_error("archive", task_id, "--reason", "must fail")
+                self.assertEqual(result["outcome"], "ERROR")
+                self.assertIn("只有终态任务可以归档", result["message"])
+
+    def test_migrate_legacy_confirmed_tasks_only(self) -> None:
+        legacy_path = Path(self.temporary.name) / "legacy.sqlite3"
+        legacy_schema = self.legacy_schema(30000)
+        legacy_schema = legacy_schema.replace("  archived_at TEXT,\n", "")
+        legacy_schema = legacy_schema.replace(
+            "\nCREATE INDEX IF NOT EXISTS idx_tasks_archived\n  ON tasks(archived_at, status, updated_at);\n",
+            "\n",
+        )
+        database = connect(legacy_path)
+        database.executescript(legacy_schema)
+        stamp = "2026-07-30T12:34:56.000+08:00"
+        database.executemany(
+            "INSERT INTO tasks(id, title, description, status, priority, created_at, updated_at, "
+            "completed_at, progress_summary) VALUES(?, ?, '', ?, 'medium', ?, ?, ?, '')",
+            [
+                ("OLD-CONFIRMED", "old confirmed", "CONFIRMED", stamp, stamp, stamp),
+                ("OLD-CANCELLED", "old cancelled", "CANCELLED", stamp, stamp, stamp),
+            ],
+        )
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES('OLD-CONFIRMED', ?, 'SUCCEEDED', 'CONFIRMED', 'human-review', 'legacy confirm')",
+            (stamp,),
+        )
+        database.close()
+
+        migrated = self.run_ctl("migrate", db_path=legacy_path)
+        self.assertEqual(migrated["outcome"], "MIGRATED")
+        self.assertEqual(migrated["archived"], 1)
+        self.assertEqual(migrated["profiles_backfilled"], 2)
+        database = connect(legacy_path)
+        rows = dict(database.execute("SELECT id, archived_at FROM tasks ORDER BY id").fetchall())
+        migration_events = database.execute(
+            "SELECT count(*) FROM task_history WHERE actor='schema-migration'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(rows["OLD-CONFIRMED"], stamp)
+        self.assertIsNone(rows["OLD-CANCELLED"])
+        self.assertEqual(migration_events, 1)
+
+        repeated = self.run_ctl("migrate", db_path=legacy_path)
+        self.assertEqual(repeated["outcome"], "ALREADY_CURRENT")
+        database = connect(legacy_path)
+        self.assertEqual(
+            database.execute("SELECT count(*) FROM task_history WHERE actor='schema-migration'").fetchone()[0],
+            migration_events,
+        )
+        database.close()
+
+    def test_migrate_schema_31_backfills_standard_profile(self) -> None:
+        legacy_path = Path(self.temporary.name) / "schema-31.sqlite3"
+        database = connect(legacy_path)
+        database.executescript(self.legacy_schema(30100))
+        stamp = "2026-07-30T12:34:56.000+08:00"
+        database.execute(
+            "INSERT INTO tasks(id, title, description, status, priority, created_at, updated_at) "
+            "VALUES('SCHEMA-31', 'schema 31', '', 'PENDING', 'high', ?, ?)",
+            (stamp, stamp),
+        )
+        database.close()
+
+        migrated = self.run_ctl("migrate", db_path=legacy_path)
+        self.assertEqual(migrated["from"], "3.1.0")
+        self.assertEqual(migrated["to"], "3.2.0")
+        self.assertEqual(migrated["archived"], 0)
+        self.assertEqual(migrated["profiles_backfilled"], 1)
+        database = connect(legacy_path)
+        row = database.execute(
+            "SELECT priority, execution_profile FROM tasks WHERE id='SCHEMA-31'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(row), ("high", "standard"))
+
+    def test_update_profile_is_exposed_by_state(self) -> None:
+        self.add_task("PROFILE-UPDATE", "project-1")
+        patch_path = Path(self.temporary.name) / "profile-patch.json"
+        patch_path.write_text('{"execution_profile":"advanced"}', encoding="utf-8")
+        self.run_ctl("update", "PROFILE-UPDATE", str(patch_path))
+        state = self.run_ctl("state")
+        task = next(item for item in state["tasks"] if item["id"] == "PROFILE-UPDATE")
+        self.assertEqual(task["execution_profile"], "advanced")
+
+    def test_update_rejects_dependency_cycle_with_full_path(self) -> None:
+        for index in range(1, 4):
+            self.add_task(f"CYCLE-{index}", f"project-{index}")
+        patch_path = Path(self.temporary.name) / "dependency-patch.json"
+        for task_id, dependency_id in (("CYCLE-1", "CYCLE-2"), ("CYCLE-2", "CYCLE-3")):
+            patch_path.write_text(
+                json.dumps({"depends_on": [dependency_id]}, ensure_ascii=False), encoding="utf-8"
+            )
+            self.run_ctl("update", task_id, str(patch_path))
+        patch_path.write_text('{"depends_on":["CYCLE-1"]}', encoding="utf-8")
+        error = self.run_ctl_error("update", "CYCLE-3", str(patch_path))
+        self.assertEqual(error["outcome"], "ERROR")
+        self.assertIn("CYCLE-1 -> CYCLE-2 -> CYCLE-3 -> CYCLE-1", error["message"])
 
     def test_succeeded_can_be_reopened_by_operator(self) -> None:
         self.add_task("REOPEN", "project-1")
-        self.run_ctl("claim", "exec-reopen")
+        self.claim("exec-reopen")
         self.finish("exec-reopen", "REOPEN")
         result = self.run_ctl("requeue", "REOPEN", "--reason", "人工要求重新执行")
         self.assertEqual(result["outcome"], "REQUEUED")
@@ -277,6 +542,28 @@ class LoopConcurrencyTests(unittest.TestCase):
         status = database.execute("SELECT status FROM tasks WHERE id='DRAFT-TASK'").fetchone()[0]
         database.close()
         self.assertEqual(status, "PENDING")
+
+    @staticmethod
+    def legacy_schema(user_version: int) -> str:
+        schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        schema = schema.replace("PRAGMA user_version = 30200;", f"PRAGMA user_version = {user_version};")
+        schema = schema.replace(
+            "  priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),\n",
+            "  priority TEXT NOT NULL CHECK (priority IN ('critical', 'high', 'medium', 'low')),\n",
+        )
+        schema = schema.replace(
+            "  execution_profile TEXT NOT NULL DEFAULT 'standard' CHECK (execution_profile IN (\n"
+            "    'routine', 'standard', 'advanced', 'deep', 'complex', 'exceptional'\n"
+            "  )),\n",
+            "",
+        )
+        schema = schema.replace(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_queue\n"
+            "  ON tasks(status, execution_profile, priority, created_at, id);",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_queue\n"
+            "  ON tasks(status, priority, created_at, id);",
+        )
+        return schema
 
 
 if __name__ == "__main__":

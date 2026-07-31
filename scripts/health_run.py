@@ -86,6 +86,22 @@ def health_request(url: str, timeout: float = 3.0) -> dict[str, Any] | None:
 
 
 def process_alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True
@@ -93,25 +109,117 @@ def process_alive(pid: int) -> bool:
         return False
 
 
-def stop_previous_process() -> None:
-    if not PID_PATH.exists():
-        return
-    try:
-        pid = int(PID_PATH.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        PID_PATH.unlink(missing_ok=True)
-        return
-    if process_alive(pid):
+def windows_powershell(command: str) -> str:
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
+def listener_pids(port: int) -> set[int]:
+    if os.name != "nt":
+        return set()
+    completed = subprocess.run(
+        ["netstat.exe", "-ano", "-p", "tcp"],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    result: set[int] = set()
+    if completed.returncode != 0:
+        return result
+    for line in completed.stdout.splitlines():
+        columns = line.split()
+        if len(columns) < 5 or columns[0].upper() != "TCP" or columns[3].upper() != "LISTENING":
+            continue
+        if columns[1].rsplit(":", 1)[-1] != str(port):
+            continue
         try:
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(1.0)
+            result.add(int(columns[4]))
+        except ValueError:
+            continue
+    return result
+
+
+def is_dashboard_process(pid: int) -> bool:
+    if not process_alive(pid):
+        return False
+    if os.name != "nt":
+        return True
+    command_line = windows_powershell(
+        f'(Get-CimInstance Win32_Process -Filter "ProcessId = {pid}").CommandLine'
+    )
+    dashboard_script = str(BASE_DIR / "scripts" / "dashboard_server.py")
+    return dashboard_script.casefold() in command_line.casefold()
+
+
+def recorded_pid() -> int | None:
+    if not PID_PATH.exists():
+        return None
+    try:
+        return int(PID_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def dashboard_topology_is_clean(port: int) -> bool:
+    if os.name != "nt":
+        return True
+    listeners = listener_pids(port)
+    pid = recorded_pid()
+    return len(listeners) == 1 and pid in listeners and all(
+        is_dashboard_process(item) for item in listeners
+    )
+
+
+def stop_previous_process(port: int) -> None:
+    pid = recorded_pid()
+    listeners = listener_pids(port)
+    targets = {item for item in listeners if is_dashboard_process(item)}
+    foreign_listeners = listeners - targets
+    if foreign_listeners:
+        raise RuntimeError(
+            "Dashboard 端口被非本项目进程占用: "
+            + ", ".join(str(item) for item in sorted(foreign_listeners))
+        )
+    if pid is not None and is_dashboard_process(pid):
+        targets.add(pid)
+    for target in targets:
+        try:
+            os.kill(target, signal.SIGTERM)
         except OSError:
             pass
+    deadline = time.monotonic() + 5.0
+    while any(process_alive(target) for target in targets) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    remaining = sorted(target for target in targets if process_alive(target))
+    if remaining:
+        raise RuntimeError(
+            "Dashboard Server 进程未在停止信号后退出: "
+            + ", ".join(str(item) for item in remaining)
+        )
+    for _ in range(20):
+        try:
+            PID_PATH.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(0.1)
     PID_PATH.unlink(missing_ok=True)
 
 
-def start_server(database_path: Path, config_path: Path) -> int:
-    stop_previous_process()
+def start_server(database_path: Path, config_path: Path, port: int) -> int:
+    stop_previous_process(port)
     log_stream = SERVER_LOG.open("a", encoding="utf-8", newline="\n")
     creation_flags = 0
     if os.name == "nt":
@@ -187,25 +295,29 @@ def main() -> None:
         threshold = int(config["health"]["failure_threshold"])
         url = f"http://{host}:{port}/healthz"
         current = health_request(url)
-        if current and current.get("ok"):
+        if current and current.get("ok") and dashboard_topology_is_clean(port):
             pid = int(PID_PATH.read_text(encoding="utf-8")) if PID_PATH.exists() else None
             record("HEALTHY", "Dashboard Server 正常。", 0, pid)
             output({"outcome": "HEALTHY", "url": url, "health": current, "pid": pid})
 
         state = read_state()
         failures = int(state.get("consecutive_failures", 0)) + 1
-        if failures > threshold:
-            record("NEEDS_ATTENTION", "Dashboard Server 连续恢复失败。", failures)
+        try:
+            pid = start_server(database_path, config_path, port)
+        except (OSError, RuntimeError) as error:
+            status = "NEEDS_ATTENTION" if failures >= threshold else "UNHEALTHY"
+            message = f"Dashboard Server 恢复启动失败：{error}"
+            record(status, message, failures)
             output(
                 {
-                    "outcome": "NEEDS_ATTENTION",
+                    "outcome": status,
                     "url": url,
+                    "message": message,
                     "consecutive_failures": failures,
                     "threshold": threshold,
                 },
-                2,
+                2 if status == "NEEDS_ATTENTION" else 1,
             )
-        pid = start_server(database_path, config_path)
         recovered = None
         for _ in range(20):
             time.sleep(0.5)
