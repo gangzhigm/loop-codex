@@ -958,75 +958,153 @@
 
     .profile-list {
       display: grid;
-      gap: 9px;
+      gap: 0;
       margin: 0;
       padding: 0;
       list-style: none;
     }
 
-    .profile-list {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 8px;
+    #profileCount {
+      display: none;
     }
 
-    .profile-card {
+    .profile-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: minmax(17px, auto) auto;
-      align-items: start;
-      row-gap: 4px;
+      gap: 8px;
       min-width: 0;
-      min-height: 64px;
-      padding: 7px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line);
+      border-left: 4px solid var(--line);
       color: #24313b;
     }
 
-    .profile-card.profile-level-routine { border-color: #acd5b2; background: #e8f5ea; }
-    .profile-card.profile-level-standard { border-color: #bed88d; background: #eff7df; }
-    .profile-card.profile-level-advanced { border-color: #e6cf78; background: #fff5cf; }
-    .profile-card.profile-level-deep { border-color: #e9b778; background: #ffead0; }
-    .profile-card.profile-level-complex { border-color: #df987e; background: #fbe0d4; }
-    .profile-card.profile-level-exceptional { border-color: #d57f7f; background: #f6d2d2; }
+    .profile-row.profile-level-routine { border-left-color: #68a873; }
+    .profile-row.profile-level-standard { border-left-color: #9cba55; }
+    .profile-row.profile-level-advanced { border-left-color: #d0aa35; }
+    .profile-row.profile-level-deep { border-left-color: #d98239; }
+    .profile-row.profile-level-complex { border-left-color: #c9654b; }
+    .profile-row.profile-level-exceptional { border-left-color: #b94b4b; }
 
-    .profile-card .agent-name { min-width: 0; }
-    .profile-card .profile-codex-label {
-      display: block;
+    .profile-heading-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+      padding-left: 10px;
+    }
+
+    .profile-codex-label {
       color: #24313b;
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 800;
       line-height: 1.15;
     }
 
-    .profile-card .agent-role {
+    .profile-limit {
+      color: var(--muted);
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+    }
+
+    .profile-channels {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px;
       min-width: 0;
-      line-height: 1.3;
+      padding-left: 10px;
     }
 
-    .profile-card .profile-stats {
+    .profile-channel {
       display: grid;
-      gap: 1px;
-      overflow: hidden;
+      grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: 7px;
+      row-gap: 2px;
       min-width: 0;
+      padding: 5px 0;
+      border-top: 1px solid #e6e9ed;
     }
 
-    .profile-card .profile-stat-value {
+    .profile-channel-name {
+      min-width: 0;
+      color: #364553;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .profile-channel-active {
       color: var(--ink);
-      font-size: 15px;
+      font-size: 12px;
       font-variant-numeric: tabular-nums;
       font-weight: 760;
-      line-height: 1.15;
+      line-height: 1.25;
     }
 
-    .profile-card .profile-stat-label {
+    .profile-channel-mode {
       color: var(--muted);
+      grid-column: 1 / -1;
       font-size: 10px;
       line-height: 1.2;
     }
+
+    /* The profile matrix is intentionally visual-only: twelve channel tiles in two columns. */
+    #profileContent {
+      display: block;
+    }
+
+    #profileList {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
+    }
+
+    #profileList > .profile-row,
+    .profile-channels {
+      display: contents;
+    }
+
+    .profile-heading-row {
+      display: none;
+    }
+
+    .profile-channel {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      width: 100%;
+      height: 30px;
+      min-width: 0;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 4px;
+      overflow: hidden;
+      color: transparent;
+      font-size: 0;
+      line-height: 0;
+      text-align: left;
+    }
+
+    .profile-channel-active,
+    .profile-channel-mode {
+      display: none;
+    }
+
+    .profile-channel-name { color: #24313b; }
+
+    .profile-level-routine .profile-channel:nth-child(1) { background: #c3e5c9; }
+    .profile-level-routine .profile-channel:nth-child(2) { background: #aedab6; }
+    .profile-level-standard .profile-channel:nth-child(1) { background: #d9e9ad; }
+    .profile-level-standard .profile-channel:nth-child(2) { background: #c7df8a; }
+    .profile-level-advanced .profile-channel:nth-child(1) { background: #f0dfa1; }
+    .profile-level-advanced .profile-channel:nth-child(2) { background: #e5cf78; }
+    .profile-level-deep .profile-channel:nth-child(1) { background: #f5c999; }
+    .profile-level-deep .profile-channel:nth-child(2) { background: #efb475; }
+    .profile-level-complex .profile-channel:nth-child(1) { background: #efb6a5; }
+    .profile-level-complex .profile-channel:nth-child(2) { background: #e69a83; }
+    .profile-level-exceptional .profile-channel:nth-child(1) { background: #e8a4a4; }
+    .profile-level-exceptional .profile-channel:nth-child(2) { background: #db8585; }
 
     .agent-dot {
       width: 9px;
@@ -1237,7 +1315,7 @@
       .empty-state { min-height: 280px; }
       .side-section { display: block; overflow: visible; }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
-      .profile-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .profile-channels { grid-template-columns: minmax(0, 1fr); }
     }
 
     @media (max-width: 760px) {
@@ -1289,7 +1367,7 @@
       td.task-action-cell:empty::before { display: none; }
       .side-section { grid-template-columns: minmax(0, 1fr); }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
-      .profile-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .profile-row { padding-block: 10px; }
       .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
@@ -1298,7 +1376,7 @@
       .header-actions { align-items: stretch; flex-direction: column; }
       .primary-button { width: 100%; }
       .detail-grid { grid-template-columns: minmax(0, 1fr); }
-      .profile-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .profile-heading-row { align-items: flex-start; flex-direction: column; gap: 3px; }
     }
   </style>
 </head>
@@ -1386,7 +1464,7 @@
 
       <aside class="side-section" aria-label="运行详情">
         <section class="side-block">
-          <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">任务档位</span><span id="profileCount" class="side-heading-summary">0 档活动</span></span></button>
+          <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">任务档位</span><span id="profileCount" class="side-heading-summary">0 通道活动</span></span></button>
           <div id="profileContent" class="side-content is-expanded"><ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul></div>
         </section>
       </aside>
@@ -1763,6 +1841,36 @@
 
     function profileConfig(profile) {
       return state?.runtime_config?.automations?.profiles?.[profile] ?? null;
+    }
+
+    function codexCliProfileConfig(profile) {
+      return state?.runtime_config?.codex_cli?.profiles?.[profile] ?? null;
+    }
+
+    function includesProfile(values, profile) {
+      return Array.isArray(values) && values.includes(profile);
+    }
+
+    function automationChannelConfig(profile) {
+      if (profile === "exceptional") return { mode: "人工", config: profileConfig(profile) };
+      const config = profileConfig(profile);
+      return { mode: config?.scheduled === true ? "定时配置" : "未配置", config };
+    }
+
+    function cliChannelConfig(profile) {
+      if (profile === "exceptional") return { mode: "人工", config: codexCliProfileConfig(profile) };
+      const cli = state?.runtime_config?.codex_cli;
+      const configured = includesProfile(cli?.supported_execution_profiles, profile)
+        && includesProfile(cli?.dispatcher?.supported_execution_profiles, profile);
+      return { mode: configured ? "Dispatcher 配置" : "未配置", config: codexCliProfileConfig(profile) };
+    }
+
+    function channelDisplayLabel(environment, channel) {
+      const platform = environment === "codex_automation" ? "Codex.APP" : "Codex.CLI";
+      const modelParts = String(channel.config?.model ?? "unknown").split("-");
+      const model = modelParts[modelParts.length - 1] || "unknown";
+      const reasoning = channel.config?.reasoning_effort ?? "unknown";
+      return `${platform}·${model}·${reasoning}`;
     }
 
     function profileCell(task) {
@@ -2142,22 +2250,30 @@
     }
 
     function renderProfiles(tasks, agents) {
-      const activeCounts = Object.fromEntries(EXECUTION_PROFILES.map((profile) => [profile, 0]));
-      agents.forEach((agent) => { activeCounts[agent.execution_profile] = (activeCounts[agent.execution_profile] ?? 0) + 1; });
-      const activeProfiles = EXECUTION_PROFILES.filter((profile) => activeCounts[profile] > 0).length;
-      elements.profileCount.textContent = `${activeProfiles} 档活动`;
+      const channelEnvironments = ["codex_automation", "codex_cli"];
+      const activeCounts = Object.fromEntries(EXECUTION_PROFILES.map((profile) => [profile, Object.fromEntries(channelEnvironments.map((environment) => [environment, 0]))]));
+      agents.forEach((agent) => {
+        if (activeCounts[agent.execution_profile]?.[agent.runtime_environment] !== undefined) {
+          activeCounts[agent.execution_profile][agent.runtime_environment] += 1;
+        }
+      });
+      const activeChannels = EXECUTION_PROFILES.flatMap((profile) => channelEnvironments.map((environment) => activeCounts[profile][environment])).filter((count) => count > 0).length;
+      elements.profileCount.textContent = `${activeChannels} 通道活动`;
       elements.profileList.innerHTML = EXECUTION_PROFILES.map((profile) => {
-        const config = profileConfig(profile);
         const limit = state?.settings?.profile_parallel_limits?.[profile] ?? "--";
-        const label = PROFILE_LABELS[profile] ?? profile;
         const codexLabel = PROFILE_CODEX_LABELS[profile] ?? profile;
-        const accessibleLabel = `${codexLabel} · ${label}`;
-        return `<li class="profile-card profile-level-${escapeHtml(profile)}" role="group" aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(accessibleLabel)}">
-          <span class="agent-name" title="${escapeHtml(config?.model ?? "配置不可用")}"><span class="profile-codex-label">${escapeHtml(codexLabel)}</span></span>
-          <span class="agent-role">
-            <span class="profile-stats"><strong class="profile-stat-value">${activeCounts[profile]}</strong><span class="profile-stat-label">活动</span></span>
-            <span class="profile-stats"><strong class="profile-stat-value">${escapeHtml(limit)}</strong><span class="profile-stat-label">上限</span></span>
-          </span>
+        const automation = automationChannelConfig(profile);
+        const cli = cliChannelConfig(profile);
+        const channels = [
+          ["codex_automation", "Codex 客户端", automation],
+          ["codex_cli", "Codex CLI", cli]
+        ];
+        return `<li class="profile-row profile-level-${escapeHtml(profile)}" role="group" aria-label="${escapeHtml(`${codexLabel} · ${PROFILE_LABELS[profile]} 调度通道`)}">
+          <div class="profile-heading-row"><span class="profile-codex-label">${escapeHtml(codexLabel)} · ${escapeHtml(PROFILE_LABELS[profile])}</span><span class="profile-limit">共享上限 ${escapeHtml(limit)}</span></div>
+          <div class="profile-channels">${channels.map(([environment, name, channel]) => {
+            const model = channel.config?.model && channel.config?.reasoning_effort ? `${channel.config.model} · ${channel.config.reasoning_effort}` : "模型配置不可用";
+            return `<div class="profile-channel" data-runtime-environment="${environment}" title="${escapeHtml(model)}"><span class="profile-channel-name">${escapeHtml(channelDisplayLabel(environment, channel))}</span><strong class="profile-channel-active">${activeCounts[profile][environment]} 活动</strong><span class="profile-channel-mode">${channel.mode}</span></div>`;
+          }).join("")}</div>
         </li>`;
       }).join("");
     }

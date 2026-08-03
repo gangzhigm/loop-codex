@@ -2,11 +2,21 @@
   "component": "dashboard-server",
   "status": "HEALTHY",
   "pid": 22104,
-  "checked_at": "2026-08-03T17:38:39.709+08:00",
-  "last_checked_at": "2026-08-03T17:38:39.709+08:00",
+  "checked_at": "2026-08-03T18:08:35.963+08:00",
+  "last_checked_at": "2026-08-03T18:08:35.963+08:00",
   "consecutive_failures": 0,
   "message": "Dashboard Server 正常。",
   "events": [
+    {
+      "at": "2026-08-03T18:08:35.963+08:00",
+      "component": "dashboard-server",
+      "status": "HEALTHY",
+      "message": "Dashboard Server 正常。",
+      "details": {
+        "pid": 22104,
+        "failures": 0
+      }
+    },
     {
       "at": "2026-08-03T17:38:39.709+08:00",
       "component": "dashboard-server",
@@ -989,16 +999,6 @@
     },
     {
       "at": "2026-07-31T02:38:52.410+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 11888,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-07-31T02:28:52.406+08:00",
       "component": "dashboard-server",
       "status": "HEALTHY",
       "message": "Dashboard Server 正常。",
