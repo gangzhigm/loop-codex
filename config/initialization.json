@@ -8,11 +8,35 @@
   },
   "database": {
     "path": "data/loop-agent.sqlite3",
-    "schema_version": "3.2.0"
+    "schema_version": "3.3.0"
   },
   "prompts": {
     "operator": "prompts/operator.md",
-    "worker": "prompts/worker.md"
+    "worker": "prompts/worker.md",
+    "cli_worker": "prompts/cli-worker.md"
+  },
+  "runtime_environments": {
+    "codex_automation": {
+      "name": "Codex 客户端自动化",
+      "entry": {
+        "type": "codex_automation",
+        "claim_argument": "codex_automation"
+      }
+    },
+    "codex_cli": {
+      "name": "Codex CLI",
+      "entry": {
+        "type": "codex_cli",
+        "claim_argument": "codex_cli"
+      }
+    },
+    "deepseek": {
+      "name": "DeepSeek Agent",
+      "entry": {
+        "type": "deepseek",
+        "claim_argument": "deepseek"
+      }
+    }
   },
   "task_execution": {
     "heartbeat_interval_seconds": 30,
@@ -37,6 +61,89 @@
       "credential_access"
     ]
   },
+  "self_hosted_agent": {
+    "max_steps": 24,
+    "model_timeout_seconds": 120,
+    "tool_timeout_seconds": 120,
+    "max_file_bytes": 524288,
+    "max_tool_output_chars": 50000
+  },
+  "codex_cli": {
+    "executable": "codex",
+    "prompt": "prompts/cli-worker.md",
+    "use_user_config": true,
+    "sandbox": "workspace-write",
+    "timeout_seconds": 3600,
+    "termination_grace_seconds": 5,
+    "max_stdout_chars": 1000000,
+    "max_stderr_chars": 50000,
+    "supported_execution_profiles": [
+      "routine",
+      "standard",
+      "advanced",
+      "deep",
+      "complex",
+      "exceptional"
+    ],
+    "profiles": {
+      "routine": {
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "medium"
+      },
+      "standard": {
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "medium"
+      },
+      "advanced": {
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "high"
+      },
+      "deep": {
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "xhigh"
+      },
+      "complex": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high"
+      },
+      "exceptional": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh"
+      }
+    },
+    "dispatcher": {
+      "interval_minutes": 15,
+      "task_name": "Local Agent Loop Codex CLI Dispatcher",
+      "working_directory": "E:\\code\\local-agent-loop",
+      "run_as_current_user": true,
+      "timeout_seconds": 3610,
+      "log_path": "runtime/codex-cli-dispatcher.log",
+      "hidden": true,
+      "supported_execution_profiles": [
+        "routine",
+        "standard",
+        "advanced",
+        "deep",
+        "complex"
+      ]
+    }
+  },
+  "deepseek": {
+    "api_base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "timeout_seconds": 120,
+    "max_retries": 2,
+    "retry_backoff_seconds": 1,
+    "max_retry_backoff_seconds": 8,
+    "api_key_environment_variable": "DEEPSEEK_API_KEY",
+    "supported_execution_profiles": [
+      "routine",
+      "standard",
+      "advanced",
+      "deep",
+      "complex"
+    ]
+  },
   "priority_policy": {
     "levels": [
       "blocker",
@@ -56,7 +163,8 @@
   },
   "automations": {
     "worker_interval_minutes": 20,
-    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；当前执行档位为 {profile}。",
+    "runtime_environment": "codex_automation",
+    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；当前运行环境为 codex_automation，当前执行档位为 {profile}。",
     "profiles": {
       "routine": {
         "automation_id": "loop-agent-worker-routine",

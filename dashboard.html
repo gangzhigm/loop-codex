@@ -176,6 +176,26 @@
 
     .primary-button:hover { background: #066d78; }
 
+    .settings-button {
+      display: inline-grid;
+      width: 38px;
+      height: 38px;
+      flex: 0 0 38px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .settings-button:hover,
+    .settings-button:focus-visible { background: var(--surface-subtle); }
+
+    .settings-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
     .secondary-button {
       border: 1px solid var(--line-strong);
       background: var(--surface);
@@ -228,6 +248,10 @@
     }
 
     .metric {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
       min-width: 0;
       min-height: 42px;
       padding: 7px 10px;
@@ -256,6 +280,7 @@
     .metric-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
     .metric-label {
+      display: block;
       color: var(--muted);
       font-size: 11px;
       line-height: 1.2;
@@ -263,6 +288,7 @@
     }
 
     .metric-value {
+      display: block;
       margin-top: 4px;
       font-size: 19px;
       line-height: 1;
@@ -294,8 +320,8 @@
       flex: 1 1 auto;
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1.85fr) minmax(360px, 1fr);
-      gap: 22px;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 0.26fr);
+      gap: 16px;
       align-items: stretch;
     }
 
@@ -329,7 +355,7 @@
     .section-title {
       display: flex;
       align-items: baseline;
-      gap: 8px;
+      gap: 6px;
       min-width: 0;
     }
 
@@ -399,11 +425,6 @@
       color: var(--ink);
       background: var(--surface);
       box-shadow: 0 1px 3px rgba(24, 33, 43, 0.12);
-    }
-
-    .segments button[data-filter="confirmation"] {
-      flex-basis: 82px;
-      width: 82px;
     }
 
     .search-input,
@@ -593,6 +614,34 @@
     .task-copy-button[data-copy-state="success"] { color: var(--success); background: var(--success-soft); }
     .task-copy-button[data-copy-state="failed"] { color: var(--danger); background: var(--danger-soft); }
     .copy-icon { font-size: 17px; line-height: 1; }
+
+    .task-action-heading,
+    .task-action-cell { text-align: center; }
+
+    .archive-button {
+      display: inline-flex;
+      width: 62px;
+      height: 32px;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      padding: 0 7px;
+      color: var(--accent);
+      background: var(--surface);
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .archive-button:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .archive-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .archive-button:disabled { cursor: wait; opacity: 0.58; }
+    .archive-button.is-submitting .archive-icon { animation: archive-submit 0.8s linear infinite; }
+    .archive-icon { font-size: 15px; line-height: 1; }
+    @keyframes archive-submit { to { transform: rotate(360deg); } }
     .copy-feedback {
       position: absolute;
       z-index: 2;
@@ -656,6 +705,24 @@
       min-width: 0;
       gap: 5px;
     }
+
+    .status-badge-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .dependency-indicator {
+      flex: 0 0 8px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .dependency-indicator.is-red { background: var(--danger); }
+    .dependency-indicator.is-yellow { background: var(--warning); }
+    .dependency-indicator.is-green { background: var(--success); }
 
     .conflict-summary {
       position: relative;
@@ -749,7 +816,8 @@
     .priority-medium { background: var(--accent-soft); color: #056a74; }
     .priority-low { background: var(--neutral-soft); color: var(--muted); }
 
-    .profile-badge {
+    .profile-badge,
+    .environment-badge {
       display: inline-flex;
       align-items: center;
       min-height: 24px;
@@ -768,6 +836,7 @@
     .profile-advanced { border-color: #d7cfaa; background: #f8f5e8; color: #66591b; }
     .profile-deep { border-color: #d2c4da; background: #f5eff7; color: #654773; }
     .profile-complex, .profile-exceptional { border-color: #ddc4c4; background: #faeeee; color: #7c3030; }
+    .environment-badge { border-color: #c7d0d9; background: #f3f5f7; color: #364553; }
 
     .project-cell {
       display: flex;
@@ -793,28 +862,6 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-
-    .progress-cell {
-      display: grid;
-      grid-template-columns: minmax(58px, 1fr) 34px;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .progress-track {
-      height: 6px;
-      overflow: hidden;
-      border-radius: 3px;
-      background: var(--neutral-soft);
-    }
-
-    .progress-fill {
-      height: 100%;
-      border-radius: inherit;
-      background: var(--accent);
-    }
-
-    .progress-cell span { color: var(--muted); font-size: 11px; text-align: right; }
 
     .muted { color: var(--muted); }
 
@@ -909,10 +956,7 @@
       opacity: 1;
     }
 
-    .alert-list,
-    .agent-list,
-    .profile-list,
-    .activity-list {
+    .profile-list {
       display: grid;
       gap: 9px;
       margin: 0;
@@ -927,26 +971,38 @@
 
     .profile-card {
       display: grid;
-      grid-template-columns: 9px minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(17px, auto) auto;
       align-items: start;
-      column-gap: 8px;
       row-gap: 4px;
       min-width: 0;
-      min-height: 76px;
-      padding: 9px;
+      min-height: 64px;
+      padding: 7px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: var(--surface-subtle);
+      color: #24313b;
     }
 
-    .profile-card .agent-dot { margin-top: 3px; }
+    .profile-card.profile-level-routine { border-color: #acd5b2; background: #e8f5ea; }
+    .profile-card.profile-level-standard { border-color: #bed88d; background: #eff7df; }
+    .profile-card.profile-level-advanced { border-color: #e6cf78; background: #fff5cf; }
+    .profile-card.profile-level-deep { border-color: #e9b778; background: #ffead0; }
+    .profile-card.profile-level-complex { border-color: #df987e; background: #fbe0d4; }
+    .profile-card.profile-level-exceptional { border-color: #d57f7f; background: #f6d2d2; }
+
     .profile-card .agent-name { min-width: 0; }
+    .profile-card .profile-codex-label {
+      display: block;
+      color: #24313b;
+      font-size: 15px;
+      font-weight: 800;
+      line-height: 1.15;
+    }
+
     .profile-card .agent-role {
-      grid-column: 2;
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
+      gap: 6px;
       min-width: 0;
       line-height: 1.3;
     }
@@ -972,26 +1028,6 @@
       line-height: 1.2;
     }
 
-    .alert-item {
-      padding-left: 10px;
-      border-left: 3px solid var(--warning);
-      font-size: 12px;
-      line-height: 1.45;
-    }
-
-    .alert-item.danger { border-color: var(--danger); }
-    .alert-item.human { border-color: var(--human); }
-    .alert-item strong { display: block; color: var(--ink); }
-    .alert-item span { color: var(--muted); }
-
-    .agent-item {
-      display: grid;
-      grid-template-columns: 9px minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 9px;
-      min-height: 37px;
-    }
-
     .agent-dot {
       width: 9px;
       height: 9px;
@@ -1014,18 +1050,6 @@
 
     .agent-role { color: var(--muted); font-size: 11px; }
 
-    .activity-item {
-      display: grid;
-      grid-template-columns: 54px minmax(0, 1fr);
-      gap: 8px;
-      font-size: 11px;
-      line-height: 1.45;
-    }
-
-    .activity-time { color: var(--muted); font-variant-numeric: tabular-nums; }
-    .activity-copy { color: #44505c; }
-    .activity-copy strong { color: var(--ink); }
-
     .detail-dialog {
       width: min(680px, calc(100vw - 32px));
       max-height: min(780px, calc(100vh - 32px));
@@ -1037,6 +1061,50 @@
     }
 
     .detail-dialog::backdrop { background: rgba(24, 33, 43, 0.48); }
+
+    .settings-scrim {
+      position: fixed;
+      z-index: 30;
+      inset: 0;
+      border: 0;
+      background: rgba(24, 33, 43, 0.48);
+      cursor: default;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease;
+    }
+
+    .settings-drawer {
+      position: fixed;
+      z-index: 31;
+      top: 0;
+      right: 0;
+      display: flex;
+      flex-direction: column;
+      width: min(440px, 100vw);
+      height: 100dvh;
+      border-left: 1px solid var(--line-strong);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      transform: translateX(100%);
+      transition: transform 180ms ease;
+      visibility: hidden;
+    }
+
+    .settings-drawer.is-open { transform: translateX(0); visibility: visible; }
+    .settings-scrim.is-visible { opacity: 1; pointer-events: auto; }
+
+    .settings-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .settings-drawer-header h2 { margin: 0; font-size: 16px; letter-spacing: 0; }
+    .settings-drawer-body { flex: 1 1 auto; min-height: 0; }
 
     .dialog-header {
       position: sticky;
@@ -1215,8 +1283,10 @@
       .task-time-info { width: 100%; }
       .task-time-row { grid-template-columns: 30px minmax(0, 1fr); }
       .conflict-popover { right: auto; left: 0; }
-      .progress-cell { width: min(200px, 100%); }
       .project-cell { width: 100%; align-items: flex-start; }
+      td.task-action-cell { align-content: center; justify-items: start; }
+      td.task-action-cell:empty { min-height: 0; }
+      td.task-action-cell:empty::before { display: none; }
       .side-section { grid-template-columns: minmax(0, 1fr); }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
       .profile-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1247,8 +1317,8 @@
         <button class="metric metric-filter" type="button" data-filter="pending" aria-pressed="false"><span class="metric-label">待执行</span><span id="metricPending" class="metric-value">0</span></button>
         <button class="metric metric-filter" type="button" data-filter="active" aria-pressed="false"><span class="metric-label">执行中</span><span id="metricRunning" class="metric-value">0</span></button>
         <button class="metric metric-filter" type="button" data-filter="attention" aria-pressed="false"><span class="metric-label">需要关注</span><span id="metricAttention" class="metric-value warning">0</span></button>
-        <button class="metric metric-filter" type="button" data-filter="confirmation" aria-pressed="false"><span class="metric-label">待确认/归档</span><span id="metricConfirmation" class="metric-value success">0</span></button>
-        <div class="metric"><div class="metric-label">完成率</div><div id="metricRate" class="metric-value success">0%</div></div>
+        <button class="metric metric-filter" type="button" data-filter="closed" aria-pressed="false"><span class="metric-label">待确认</span><span id="metricConfirmation" class="metric-value success">0</span></button>
+        <button class="metric metric-filter" type="button" data-filter="archived" aria-pressed="false"><span class="metric-label">已归档</span><span id="metricArchived" class="metric-value success">0</span></button>
       </section>
       <div id="distribution" class="distribution" aria-label="任务状态分布">
         <span class="done" style="width: 0"></span>
@@ -1262,11 +1332,11 @@
       <div class="connection-meta">
         <div id="connection" class="connection" data-state="idle" role="status" aria-live="polite">
           <span class="connection-dot" aria-hidden="true"></span>
-          <span id="connectionLabel" class="connection-label">正在连接 SQLite 服务</span>
+          <span id="connectionLabel" class="connection-label">正在连接数据库服务</span>
         </div>
-        <span id="workspaceUpdated" class="workspace-updated">更新时间：--</span>
+        <span id="workspaceUpdated" class="workspace-updated">--</span>
       </div>
-      <button id="refreshState" class="primary-button" type="button">刷新</button>
+      <button id="openSettings" class="settings-button" type="button" aria-label="设置" aria-expanded="false" aria-controls="settingsDrawer" title="设置">&#9881;</button>
     </div>
   </header>
 
@@ -1283,11 +1353,9 @@
           <div class="task-tools">
             <input id="search" class="search-input" type="search" placeholder="搜索 ID、标题或项目" aria-label="搜索任务">
             <div class="segments" aria-label="任务筛选">
-              <button type="button" data-filter="all" aria-pressed="true">全部</button>
-              <button type="button" data-filter="pending" aria-pressed="false">待执行</button>
+              <button type="button" data-filter="pending" aria-pressed="true">待执行</button>
               <button type="button" data-filter="active" aria-pressed="false">执行中</button>
               <button type="button" data-filter="attention" aria-pressed="false">需关注</button>
-              <button type="button" data-filter="confirmation" aria-pressed="false">待确认/归档</button>
               <button type="button" data-filter="closed" aria-pressed="false">已结束</button>
               <button type="button" data-filter="archived" aria-pressed="false">已归档</button>
             </div>
@@ -1297,13 +1365,14 @@
           <table>
             <thead>
               <tr>
-                <th style="width: 27%">任务</th>
-                <th style="width: 13%">状态</th>
-                <th style="width: 9%">优先级</th>
-                <th style="width: 11%"><span class="table-header-label">执行档位 <button id="profileFilter" class="header-filter-button" type="button" aria-label="筛选执行档位" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选执行档位"></button></span></th>
-                <th style="width: 13%"><span class="table-header-label">项目 <button id="projectFilter" class="header-filter-button" type="button" aria-label="筛选项目" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选项目"></button></span></th>
-                <th style="width: 16%">进度</th>
-                <th style="width: 11%">时间</th>
+                <th style="width: 19%">任务</th>
+                <th style="width: 11%"><span class="table-header-label">状态 <button id="statusFilter" class="header-filter-button" type="button" aria-label="筛选状态" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选状态"></button></span></th>
+                <th style="width: 8%"><span class="table-header-label">优先级 <button id="priorityFilter" class="header-filter-button" type="button" aria-label="筛选优先级" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选优先级"></button></span></th>
+                <th style="width: 10%"><span class="table-header-label">任务档位 <button id="profileFilter" class="header-filter-button" type="button" aria-label="筛选任务档位" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选任务档位"></button></span></th>
+                <th style="width: 15%"><span class="table-header-label">运行环境 <button id="environmentFilter" class="header-filter-button" type="button" aria-label="筛选运行环境" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选运行环境"></button></span></th>
+                <th style="width: 15%"><span class="table-header-label">项目 <button id="projectFilter" class="header-filter-button" type="button" aria-label="筛选项目" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选项目"></button></span></th>
+                <th style="width: 15%">时间</th>
+                <th class="task-action-heading" style="width: 7%">操作</th>
               </tr>
             </thead>
             <tbody id="taskRows"></tbody>
@@ -1317,20 +1386,8 @@
 
       <aside class="side-section" aria-label="运行详情">
         <section class="side-block">
-          <button class="side-heading" type="button" aria-expanded="false" aria-controls="alertContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">需要关注</span><span id="alertCount" class="side-heading-summary">0 项</span></span></button>
-          <div id="alertContent" class="side-content" hidden><ul id="alertList" class="alert-list"><li class="muted">暂无异常</li></ul></div>
-        </section>
-        <section class="side-block">
-          <button class="side-heading" type="button" aria-expanded="false" aria-controls="agentContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">活动执行</span><span id="agentCount" class="side-heading-summary">0 项</span></span></button>
-          <div id="agentContent" class="side-content" hidden><ul id="agentList" class="agent-list"><li class="muted">暂无活动执行</li></ul></div>
-        </section>
-        <section class="side-block">
-          <button class="side-heading" type="button" aria-expanded="false" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">执行档位</span><span id="profileCount" class="side-heading-summary">0 档活动</span></span></button>
-          <div id="profileContent" class="side-content" hidden><ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul></div>
-        </section>
-        <section class="side-block">
-          <button class="side-heading" type="button" aria-expanded="true" aria-controls="activityContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">最近活动</span><span class="side-heading-summary">状态变更</span></span></button>
-          <div id="activityContent" class="side-content is-expanded"><ul id="activityList" class="activity-list"><li class="muted">暂无活动</li></ul></div>
+          <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">任务档位</span><span id="profileCount" class="side-heading-summary">0 档活动</span></span></button>
+          <div id="profileContent" class="side-content is-expanded"><ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul></div>
         </section>
       </aside>
     </div>
@@ -1343,6 +1400,15 @@
     </div>
     <div id="dialogBody" class="dialog-body"></div>
   </dialog>
+
+  <button id="settingsScrim" class="settings-scrim" type="button" aria-label="关闭设置" aria-hidden="true" tabindex="-1"></button>
+  <aside id="settingsDrawer" class="settings-drawer" aria-hidden="true" aria-labelledby="settingsDrawerTitle">
+    <div class="settings-drawer-header">
+      <h2 id="settingsDrawerTitle">设置</h2>
+      <button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置" title="关闭">×</button>
+    </div>
+    <div class="settings-drawer-body"></div>
+  </aside>
 
   <script>
     "use strict";
@@ -1366,24 +1432,36 @@
       routine: "Routine", standard: "Standard", advanced: "Advanced",
       deep: "Deep", complex: "Complex", exceptional: "Exceptional"
     };
+    const PROFILE_CODEX_LABELS = {
+      routine: "Codex 1", standard: "Codex 2", advanced: "Codex 3", deep: "Codex 4", complex: "Codex 5", exceptional: "Codex 6"
+    };
     const EXECUTION_PROFILES = Object.keys(PROFILE_LABELS);
     const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"]);
     const ATTENTION_STATUSES = new Set(["DRAFT", "WAITING_CONFLICT", "WAITING_HUMAN", "BLOCKED", "STALLED", "FAILED"]);
     const CLOSED_STATUSES = new Set(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
     const PRIORITY_ORDER = { blocker: 0, critical: 1, high: 2, medium: 3, low: 4 };
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
-    const TASK_SCHEMA_VERSION = "3.2.0";
+    const HEADER_FILTER_STATUSES = ["DRAFT", "PENDING", "RUNNING", "WAITING_CONFLICT", "WAITING_HUMAN", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"];
+    const HEADER_FILTER_PRIORITIES = ["blocker", "critical", "high", "medium", "low"];
+    const TASK_SCHEMA_VERSION = "3.3.0";
     const STATE_ENDPOINT = "/api/state";
+    const TASK_ACTION_ENDPOINT = "/api/task-action";
     const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
 
     const elements = {
       connection: document.querySelector("#connection"),
       connectionLabel: document.querySelector("#connectionLabel"),
-      refreshState: document.querySelector("#refreshState"),
+      openSettings: document.querySelector("#openSettings"),
+      closeSettings: document.querySelector("#closeSettings"),
+      settingsDrawer: document.querySelector("#settingsDrawer"),
+      settingsScrim: document.querySelector("#settingsScrim"),
       notice: document.querySelector("#notice"),
       noticeText: document.querySelector("#noticeText"),
       dismissNotice: document.querySelector("#dismissNotice"),
       search: document.querySelector("#search"),
+      statusFilter: document.querySelector("#statusFilter"),
+      priorityFilter: document.querySelector("#priorityFilter"),
+      environmentFilter: document.querySelector("#environmentFilter"),
       projectFilter: document.querySelector("#projectFilter"),
       profileFilter: document.querySelector("#profileFilter"),
       headerFilterMenu: document.querySelector("#headerFilterMenu"),
@@ -1396,16 +1474,11 @@
       metricRunning: document.querySelector("#metricRunning"),
       metricAttention: document.querySelector("#metricAttention"),
       metricConfirmation: document.querySelector("#metricConfirmation"),
-      metricRate: document.querySelector("#metricRate"),
+      metricArchived: document.querySelector("#metricArchived"),
       distribution: document.querySelector("#distribution"),
       workspaceUpdated: document.querySelector("#workspaceUpdated"),
-      alertList: document.querySelector("#alertList"),
-      alertCount: document.querySelector("#alertCount"),
-      agentList: document.querySelector("#agentList"),
-      agentCount: document.querySelector("#agentCount"),
       profileList: document.querySelector("#profileList"),
       profileCount: document.querySelector("#profileCount"),
-      activityList: document.querySelector("#activityList"),
       taskDialog: document.querySelector("#taskDialog"),
       dialogTitle: document.querySelector("#dialogTitle"),
       dialogSubtitle: document.querySelector("#dialogSubtitle"),
@@ -1415,12 +1488,16 @@
 
     let state = null;
     let pollTimer = null;
-    let currentFilter = "all";
+    let currentFilter = "pending";
+    let currentStatus = "all";
+    let currentPriority = "all";
+    let currentEnvironment = "all";
     let currentProject = "all";
     let currentProfile = "all";
     let currentQuery = "";
     let activeHeaderFilter = null;
     let availableProjects = [];
+    let archivingTaskId = null;
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -1483,6 +1560,34 @@
       }).format(date);
     }
 
+    function formatWorkspaceUpdated(value) {
+      if (!value) return "--";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "时间无效";
+      const parts = new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23"
+      }).formatToParts(date);
+      const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+      return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;
+    }
+
+    function setSettingsDrawer(open) {
+      elements.settingsDrawer.classList.toggle("is-open", open);
+      elements.settingsDrawer.setAttribute("aria-hidden", String(!open));
+      elements.settingsScrim.classList.toggle("is-visible", open);
+      elements.settingsScrim.setAttribute("aria-hidden", String(!open));
+      elements.openSettings.setAttribute("aria-expanded", String(open));
+      if (open) elements.closeSettings.focus();
+      else elements.openSettings.focus();
+    }
+
     function formatDuration(start, end) {
       if (!start) return "--";
       const startTime = new Date(start).getTime();
@@ -1501,16 +1606,14 @@
       if (!value) return "--";
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return "时间无效";
-      return new Intl.DateTimeFormat("zh-CN", {
+      const parts = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Shanghai",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
-        second: "2-digit",
-        hour12: false
-      }).format(date);
+        hourCycle: "h23"
+      }).formatToParts(date);
+      const time = Object.fromEntries(parts.map(({ type, value: partValue }) => [type, partValue]));
+      return `${time.hour}:${time.minute}`;
     }
 
     function formatTaskDuration(task) {
@@ -1535,6 +1638,28 @@
       if (!value) return "检测时间未记录";
       const timestamp = new Date(value);
       return Number.isNaN(timestamp.getTime()) ? "检测时间无效" : formatDate(value);
+    }
+
+    function dependencyIndicatorState(task, tasks) {
+      const dependencyIds = Array.isArray(task?.depends_on) ? task.depends_on.filter((id) => typeof id === "string" && id.trim()) : [];
+      if (!dependencyIds.length) return null;
+      const tasksById = new Map((Array.isArray(tasks) ? tasks : [])
+        .filter((candidate) => typeof candidate?.id === "string" && candidate.id)
+        .map((candidate) => [candidate.id, candidate]));
+      const statuses = dependencyIds.map((id) => tasksById.get(id)?.status);
+      if (statuses.some((status) => ["DRAFT", "PENDING", "FAILED", "CANCELLED"].includes(status) || !VALID_STATUSES.has(status))) {
+        return { color: "red", label: "依赖状态：存在未执行、失败、取消、缺失或异常依赖" };
+      }
+      if (statuses.some((status) => !["SUCCEEDED", "CONFIRMED"].includes(status))) {
+        return { color: "yellow", label: "依赖状态：存在执行中或等待中的依赖" };
+      }
+      return { color: "green", label: "依赖状态：全部依赖已成功完成" };
+    }
+
+    function renderDependencyIndicator(task, tasks) {
+      const indicator = dependencyIndicatorState(task, tasks);
+      if (!indicator) return "";
+      return `<span class="dependency-indicator is-${indicator.color}" role="img" aria-label="${escapeHtml(indicator.label)}" title="${escapeHtml(indicator.label)}"></span>`;
     }
 
     function conflictGroups(task, tasks) {
@@ -1628,13 +1753,6 @@
       return [...projectScopes.keys()];
     }
 
-    function renderProjectFilter(tasks) {
-      availableProjects = [...new Set(tasks.flatMap(taskProjects))]
-        .sort((left, right) => left.localeCompare(right, "zh-CN"));
-      if (currentProject !== "all" && !availableProjects.includes(currentProject)) currentProject = "all";
-      renderHeaderFilterButtons();
-    }
-
     function projectCell(task) {
       const projects = taskProjects(task);
       if (!projects.length) return '<span class="muted">未识别</span>';
@@ -1654,22 +1772,59 @@
       return `<span class="profile-badge profile-${escapeHtml(profile)}" title="${escapeHtml(model)}">${escapeHtml(PROFILE_LABELS[profile] ?? profile)}</span>`;
     }
 
-    function renderProfileFilter() {
-      if (currentProfile !== "all" && !EXECUTION_PROFILES.includes(currentProfile)) currentProfile = "all";
-      renderHeaderFilterButtons();
+    function runtimeEnvironmentEntries(candidate = state) {
+      return Object.entries(candidate?.runtime_config?.runtime_environments ?? {});
     }
 
-    function headerFilterOptions(kind) {
-      if (kind === "project") return [["all", "全部项目"], ...availableProjects.map((project) => [project, project])];
-      return [["all", "全部档位"], ...EXECUTION_PROFILES.map((profile) => [profile, PROFILE_LABELS[profile]] )];
+    function runtimeEnvironmentName(environment) {
+      return state?.runtime_config?.runtime_environments?.[environment]?.name ?? environment;
+    }
+
+    function environmentCell(task) {
+      const environment = task.runtime_environment;
+      return `<span class="environment-badge" title="${escapeHtml(environment)}">${escapeHtml(runtimeEnvironmentName(environment))}</span>`;
+    }
+
+    function headerFilterOptions(kind, tasks = state?.tasks ?? []) {
+      const contextualTasks = tasks.filter((task) => taskMatches(task, kind));
+      if (kind === "status") {
+        const values = new Set(contextualTasks.map((task) => task.status));
+        return [["all", "全部状态"], ...HEADER_FILTER_STATUSES.filter((status) => values.has(status)).map((status) => [status, `${STATUS_LABELS[status]} (${status})`])];
+      }
+      if (kind === "priority") {
+        const values = new Set(contextualTasks.map((task) => task.priority));
+        return [["all", "全部优先级"], ...HEADER_FILTER_PRIORITIES.filter((priority) => values.has(priority)).map((priority) => [priority, `${PRIORITY_LABELS[priority]} (${priority})`])];
+      }
+      if (kind === "project") {
+        availableProjects = [...new Set(contextualTasks.flatMap(taskProjects))]
+          .sort((left, right) => left.localeCompare(right, "zh-CN"));
+        return [["all", "全部项目"], ...availableProjects.map((project) => [project, project])];
+      }
+      if (kind === "environment") {
+        const values = new Set(contextualTasks.map((task) => task.runtime_environment));
+        return [["all", "全部环境"], ...runtimeEnvironmentEntries().filter(([environment]) => values.has(environment)).map(([environment, config]) => [environment, config.name])];
+      }
+      const values = new Set(contextualTasks.map((task) => task.execution_profile));
+      return [["all", "全部任务档位"], ...EXECUTION_PROFILES.filter((profile) => values.has(profile)).map((profile) => [profile, PROFILE_LABELS[profile]])];
+    }
+
+    function resetInvalidHeaderFilters(tasks) {
+      ["status", "priority", "environment", "project", "profile"].forEach((kind) => {
+        const selected = selectedHeaderFilterValue(kind);
+        const validValues = new Set(headerFilterOptions(kind, tasks).map(([value]) => value));
+        if (selected !== "all" && !validValues.has(selected)) setHeaderFilterValue(kind, "all");
+      });
     }
 
     function selectedHeaderFilterValue(kind) {
+      if (kind === "status") return currentStatus;
+      if (kind === "priority") return currentPriority;
+      if (kind === "environment") return currentEnvironment;
       return kind === "project" ? currentProject : currentProfile;
     }
 
     function renderHeaderFilterButtons() {
-      [["project", elements.projectFilter], ["profile", elements.profileFilter]].forEach(([kind, button]) => {
+      [["status", elements.statusFilter], ["priority", elements.priorityFilter], ["environment", elements.environmentFilter], ["project", elements.projectFilter], ["profile", elements.profileFilter]].forEach(([kind, button]) => {
         const active = selectedHeaderFilterValue(kind) !== "all";
         button.classList.toggle("is-active", active);
         button.setAttribute("aria-pressed", String(active));
@@ -1686,7 +1841,7 @@
 
     function renderHeaderFilterMenu() {
       if (!activeHeaderFilter) return;
-      const trigger = activeHeaderFilter === "project" ? elements.projectFilter : elements.profileFilter;
+      const trigger = elements[`${activeHeaderFilter}Filter`];
       const selected = selectedHeaderFilterValue(activeHeaderFilter);
       elements.headerFilterMenu.innerHTML = headerFilterOptions(activeHeaderFilter).map(([value, label]) => `
         <button class="header-filter-option" type="button" role="menuitemradio" aria-checked="${value === selected}" data-header-filter-kind="${activeHeaderFilter}" data-header-filter-value="${escapeHtml(value)}">${escapeHtml(label)}</button>`).join("");
@@ -1696,9 +1851,12 @@
 
     function closeHeaderFilterMenu({ restoreFocus = false } = {}) {
       if (!activeHeaderFilter) return;
-      const trigger = activeHeaderFilter === "project" ? elements.projectFilter : elements.profileFilter;
+      const trigger = elements[`${activeHeaderFilter}Filter`];
       activeHeaderFilter = null;
       elements.headerFilterMenu.hidden = true;
+      elements.statusFilter.setAttribute("aria-expanded", "false");
+      elements.priorityFilter.setAttribute("aria-expanded", "false");
+      elements.environmentFilter.setAttribute("aria-expanded", "false");
       elements.projectFilter.setAttribute("aria-expanded", "false");
       elements.profileFilter.setAttribute("aria-expanded", "false");
       if (restoreFocus) trigger.focus();
@@ -1710,16 +1868,27 @@
         return;
       }
       activeHeaderFilter = kind;
+      elements.statusFilter.setAttribute("aria-expanded", String(kind === "status"));
+      elements.priorityFilter.setAttribute("aria-expanded", String(kind === "priority"));
+      elements.environmentFilter.setAttribute("aria-expanded", String(kind === "environment"));
       elements.projectFilter.setAttribute("aria-expanded", String(kind === "project"));
       elements.profileFilter.setAttribute("aria-expanded", String(kind === "profile"));
       renderHeaderFilterMenu();
       elements.headerFilterMenu.querySelector(".header-filter-option[aria-checked=\"true\"]")?.focus();
     }
 
-    function setHeaderFilter(kind, value) {
-      if (kind === "project") currentProject = value;
+    function setHeaderFilterValue(kind, value) {
+      if (kind === "status") currentStatus = value;
+      else if (kind === "priority") currentPriority = value;
+      else if (kind === "environment") currentEnvironment = value;
+      else if (kind === "project") currentProject = value;
       else currentProfile = value;
+    }
+
+    function setHeaderFilter(kind, value) {
+      setHeaderFilterValue(kind, value);
       closeHeaderFilterMenu({ restoreFocus: true });
+      if (state) resetInvalidHeaderFilters(state.tasks);
       renderHeaderFilterButtons();
       if (state) renderTasks(state.tasks);
     }
@@ -1733,15 +1902,35 @@
       if (!candidate?.workspace || !Number.isInteger(candidate.workspace.revision)) errors.push("workspace.revision 无效");
       if (!Array.isArray(candidate?.tasks)) errors.push("tasks 必须是数组");
       if (!Array.isArray(candidate?.agents)) errors.push("agents 必须是数组");
+      const environmentConfig = candidate?.runtime_config?.runtime_environments;
+      if (!environmentConfig || typeof environmentConfig !== "object" || Array.isArray(environmentConfig) || !Object.keys(environmentConfig).length) {
+        errors.push("runtime_config.runtime_environments 无效");
+      }
+      const validRuntimeEnvironments = new Set(Object.keys(environmentConfig ?? {}));
+      for (const [environment, config] of Object.entries(environmentConfig ?? {})) {
+        if (!config || typeof config.name !== "string" || !config.name.trim()) errors.push(`运行环境 ${environment} 配置无效`);
+      }
       const ids = new Set();
       for (const [index, task] of (candidate?.tasks ?? []).entries()) {
         if (!task?.id || ids.has(task.id)) errors.push(`tasks[${index}].id 缺失或重复`);
         ids.add(task?.id);
+        if (!Number.isInteger(task?.row_version) || task.row_version < 1) errors.push(`任务 ${task?.id ?? index} row_version 无效`);
         if (!VALID_STATUSES.has(task?.status)) errors.push(`任务 ${task?.id ?? index} 状态无效`);
         if (!Object.hasOwn(PRIORITY_ORDER, task?.priority)) errors.push(`任务 ${task?.id ?? index} 优先级无效`);
-        if (!EXECUTION_PROFILES.includes(task?.execution_profile)) errors.push(`任务 ${task?.id ?? index} 执行档位无效`);
+        if (!EXECUTION_PROFILES.includes(task?.execution_profile)) errors.push(`任务 ${task?.id ?? index} 任务档位无效`);
+        if (!task?.runtime_environment || !validRuntimeEnvironments.has(task.runtime_environment)) {
+          errors.push(`任务 ${task?.id ?? index} 运行环境缺失或未知`);
+        }
+        if (task?.depends_on !== undefined && (!Array.isArray(task.depends_on) || task.depends_on.some((id) => typeof id !== "string"))) {
+          errors.push(`任务 ${task?.id ?? index} depends_on 无效`);
+        }
         if (!Number.isInteger(task?.progress?.percent) || task.progress.percent < 0 || task.progress.percent > 100) {
           errors.push(`任务 ${task?.id ?? index} 进度无效`);
+        }
+      }
+      for (const [index, agent] of (candidate?.agents ?? []).entries()) {
+        if (!agent?.runtime_environment || !validRuntimeEnvironments.has(agent.runtime_environment)) {
+          errors.push(`活动 execution ${agent?.id ?? index} 运行环境缺失或未知`);
         }
       }
       if (errors.length) throw new Error(errors.join("；"));
@@ -1753,10 +1942,12 @@
         state = validateState(candidate);
         render();
         hideNotice();
-        setConnection("live", `SQLite · revision ${state.workspace.revision}`);
+        setConnection("live", `DB.V.${state.workspace.revision}`);
+        return true;
       } catch (error) {
         setConnection("error", "状态响应无效");
         showNotice(`未应用无效内容，页面保留最后一次有效数据。${error instanceof Error ? error.message : String(error)}`);
+        return false;
       }
     }
 
@@ -1764,10 +1955,11 @@
       try {
         const response = await fetch(STATE_ENDPOINT, { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        applyState(await response.json());
+        return applyState(await response.json());
       } catch (error) {
-        setConnection("error", "SQLite 服务不可用");
+        setConnection("error", "数据库服务不可用");
         showNotice(`无法读取 ${STATE_ENDPOINT}。${error instanceof Error ? error.message : String(error)}`);
+        return false;
       }
     }
 
@@ -1782,7 +1974,7 @@
       pollTimer = null;
     }
 
-    function taskMatches(task) {
+    function taskMatches(task, ignoredHeaderFilter = null) {
       const archived = isArchived(task);
       if (currentFilter === "archived") {
         if (!archived) return false;
@@ -1792,10 +1984,12 @@
       if (currentFilter === "pending" && task.status !== "PENDING") return false;
       if (currentFilter === "active" && !ACTIVE_STATUSES.has(task.status)) return false;
       if (currentFilter === "attention" && !needsAttention(task)) return false;
-      if (currentFilter === "confirmation" && !["SUCCEEDED", "CONFIRMED"].includes(task.status)) return false;
       if (currentFilter === "closed" && !CLOSED_STATUSES.has(task.status)) return false;
-      if (currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;
-      if (currentProfile !== "all" && task.execution_profile !== currentProfile) return false;
+      if (ignoredHeaderFilter !== "status" && currentStatus !== "all" && task.status !== currentStatus) return false;
+      if (ignoredHeaderFilter !== "priority" && currentPriority !== "all" && task.priority !== currentPriority) return false;
+      if (ignoredHeaderFilter !== "environment" && currentEnvironment !== "all" && task.runtime_environment !== currentEnvironment) return false;
+      if (ignoredHeaderFilter !== "project" && currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;
+      if (ignoredHeaderFilter !== "profile" && currentProfile !== "all" && task.execution_profile !== currentProfile) return false;
       if (!currentQuery) return true;
       return [task.id, task.title, task.description, ...taskProjects(task)]
         .filter(Boolean)
@@ -1804,6 +1998,49 @@
 
     function isArchived(task) {
       return Boolean(task?.archived_at);
+    }
+
+    function canArchiveTask(task) {
+      return currentFilter === "closed" && !isArchived(task) && CLOSED_STATUSES.has(task.status);
+    }
+
+    function renderTaskAction(task) {
+      if (!canArchiveTask(task)) return "";
+      const submitting = archivingTaskId === task.id;
+      return `<button class="archive-button${submitting ? " is-submitting" : ""}" type="button" data-archive-task-id="${escapeHtml(task.id)}" aria-label="归档任务 ${escapeHtml(task.id)}" title="归档任务"${submitting ? " disabled aria-busy=\"true\"" : ""}><span class="archive-icon" aria-hidden="true">${submitting ? "↻" : "⇩"}</span><span>归档</span></button>`;
+    }
+
+    async function archiveTask(taskId) {
+      const task = state?.tasks?.find((candidate) => candidate.id === taskId);
+      if (!task || !canArchiveTask(task) || archivingTaskId !== null) return;
+      const confirmation = task.status === "SUCCEEDED"
+        ? `任务 ${task.id} 尚未人工确认。继续将先执行人工确认，再归档该任务。`
+        : `确认归档任务 ${task.id}？任务状态和执行记录将保持不变。`;
+      if (!window.confirm(confirmation)) return;
+
+      archivingTaskId = task.id;
+      renderTasks(state.tasks);
+      try {
+        const response = await fetch(TASK_ACTION_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task_id: task.id, action: "archive", row_version: task.row_version })
+        });
+        let payload = null;
+        try { payload = await response.json(); } catch { /* HTTP 状态提供降级错误。 */ }
+        if (!response.ok || payload?.ok !== true) {
+          throw new Error(payload?.error || `HTTP ${response.status}`);
+        }
+        const refreshed = await refreshState();
+        if (!refreshed) showNotice("归档已完成，但列表刷新失败，请稍后重新加载。");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await refreshState();
+        showNotice(`归档失败：${message}`);
+      } finally {
+        archivingTaskId = null;
+        if (state) renderTasks(state.tasks);
+      }
     }
 
     function isHeartbeatLate(task) {
@@ -1819,6 +2056,7 @@
     function render() {
       const tasks = state?.tasks ?? [];
       const currentTasks = tasks.filter((task) => !isArchived(task));
+      const archived = tasks.filter(isArchived).length;
       const counts = currentTasks.reduce((result, task) => {
         result[task.status] = (result[task.status] ?? 0) + 1;
         return result;
@@ -1838,20 +2076,17 @@
       elements.metricRunning.textContent = running;
       elements.metricAttention.textContent = attention;
       elements.metricConfirmation.textContent = confirmation;
-      elements.metricRate.textContent = total ? `${Math.round((succeeded / total) * 100)}%` : "0%";
+      elements.metricArchived.textContent = archived;
       const widths = [succeeded, running, attention, failed, queued].map((value) => total ? `${(value / total) * 100}%` : "0%");
       [...elements.distribution.children].forEach((child, index) => { child.style.width = widths[index]; });
       elements.distribution.setAttribute("aria-label", `任务状态分布：完成 ${succeeded}，执行中 ${running}，需关注 ${attention}，失败 ${failed}，其他 ${queued}`);
 
-      elements.workspaceUpdated.textContent = `更新时间：${formatDate(state.workspace.updated_at)} · ${escapeHtml(state.workspace.timezone)}`;
+      elements.workspaceUpdated.textContent = formatWorkspaceUpdated(state.workspace.updated_at);
 
-      renderProjectFilter(tasks);
-      renderProfileFilter();
+      resetInvalidHeaderFilters(tasks);
+      renderHeaderFilterButtons();
       renderTasks(tasks);
-      renderAlerts(attentionTasks);
-      renderAgents(state.agents ?? []);
       renderProfiles(currentTasks, state.agents ?? []);
-      renderActivity(tasks);
     }
 
     function renderTasks(tasks) {
@@ -1880,24 +2115,20 @@
             <span class="task-id">${escapeHtml(task.id)}</span>
           </td>
           <td class="status-cell" data-label="状态"><div class="status-stack">
-            <span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span>
+            <div class="status-badge-row"><span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span>${renderDependencyIndicator(task, tasks)}</div>
             ${isArchived(task) ? `<span class="archive-time">归档于 ${escapeHtml(formatDate(task.archived_at, false))}</span>` : ""}
             ${renderConflictIndicator(task, tasks)}
           </div></td>
           <td data-label="优先级"><span class="priority-badge priority-${escapeHtml(task.priority)}">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></td>
-          <td data-label="执行档位">${profileCell(task)}</td>
+          <td data-label="任务档位">${profileCell(task)}</td>
+          <td data-label="运行环境">${environmentCell(task)}</td>
           <td data-label="项目">${projectCell(task)}</td>
-          <td data-label="进度">
-            <div class="progress-cell">
-              <div class="progress-track" aria-hidden="true"><div class="progress-fill" style="width: ${task.progress.percent}%"></div></div>
-              <span>${task.progress.percent}%</span>
-            </div>
-          </td>
           <td data-label="时间"><div class="task-time-info">
             <div class="task-time-row"><span class="task-time-label">开始</span>${taskTimeValue(task.started_at)}</div>
             <div class="task-time-row"><span class="task-time-label">完成</span>${taskTimeValue(task.completed_at)}</div>
             <div class="task-time-row"><span class="task-time-label">耗时</span>${taskDurationValue(task)}</div>
           </div></td>
+          <td class="task-action-cell" data-label="操作">${renderTaskAction(task)}</td>
         </tr>
       `).join("");
 
@@ -1910,73 +2141,25 @@
       }
     }
 
-    function renderAlerts(tasks) {
-      const alerts = [];
-      for (const task of tasks.filter(needsAttention)) {
-        if (task.status === "DRAFT") {
-          alerts.push({ kind: "human", task, title: "等待补充需求", detail: task.progress?.next_step ?? "任务定义尚未完成" });
-        } else if (task.status === "WAITING_HUMAN") {
-          alerts.push({ kind: "human", task, title: "执行中等待人工", detail: task.human_intervention?.question ?? task.progress?.next_step ?? "需要人工介入" });
-        } else if (task.status === "FAILED") {
-          alerts.push({ kind: "danger", task, title: "任务失败", detail: task.result?.error ?? "未记录失败原因" });
-        } else if (["WAITING_CONFLICT", "BLOCKED", "STALLED"].includes(task.status)) {
-          alerts.push({ kind: "warning", task, title: STATUS_LABELS[task.status], detail: task.progress?.next_step ?? task.progress?.summary ?? "等待处理" });
-        } else if (isHeartbeatLate(task)) {
-          alerts.push({ kind: "warning", task, title: "心跳可能超时", detail: `最后心跳 ${formatDate(task.heartbeat_at)}` });
-        }
-      }
-      elements.alertCount.textContent = `${alerts.length} 项`;
-      elements.alertList.innerHTML = alerts.length ? alerts.slice(0, 1).map((alert) => `
-        <li class="alert-item ${escapeHtml(alert.kind)}">
-          <strong>${escapeHtml(alert.task.id)} · ${escapeHtml(alert.title)}</strong>
-          <span>${escapeHtml(alert.detail)}</span>
-        </li>
-      `).join("") : '<li class="muted">暂无异常</li>';
-    }
-
-    function renderAgents(agents) {
-      elements.agentCount.textContent = `${agents.length} 项`;
-      const visibleAgents = agents.slice(0, 1);
-      elements.agentList.innerHTML = visibleAgents.length ? visibleAgents.map((agent) => `
-        <li class="agent-item">
-          <span class="agent-dot ${escapeHtml(agent.status.toLowerCase())}" aria-hidden="true"></span>
-          <span class="agent-name" title="${escapeHtml(agent.id)}">${escapeHtml(agent.current_task_id ?? "未知任务")}</span>
-          <span class="agent-role">${escapeHtml(PROFILE_LABELS[agent.execution_profile] ?? agent.execution_profile ?? "未知档位")} · ${escapeHtml(formatDate(agent.last_seen_at, false))}</span>
-        </li>
-      `).join("") : '<li class="muted">暂无活动执行</li>';
-    }
-
     function renderProfiles(tasks, agents) {
-      const taskCounts = Object.fromEntries(EXECUTION_PROFILES.map((profile) => [profile, 0]));
       const activeCounts = Object.fromEntries(EXECUTION_PROFILES.map((profile) => [profile, 0]));
-      tasks.forEach((task) => { taskCounts[task.execution_profile] = (taskCounts[task.execution_profile] ?? 0) + 1; });
       agents.forEach((agent) => { activeCounts[agent.execution_profile] = (activeCounts[agent.execution_profile] ?? 0) + 1; });
       const activeProfiles = EXECUTION_PROFILES.filter((profile) => activeCounts[profile] > 0).length;
       elements.profileCount.textContent = `${activeProfiles} 档活动`;
       elements.profileList.innerHTML = EXECUTION_PROFILES.map((profile) => {
         const config = profileConfig(profile);
         const limit = state?.settings?.profile_parallel_limits?.[profile] ?? "--";
-        return `<li class="profile-card">
-          <span class="agent-dot ${activeCounts[profile] ? "running" : "idle"}" aria-hidden="true"></span>
-          <span class="agent-name" title="${escapeHtml(config?.model ?? "配置不可用")}">${escapeHtml(PROFILE_LABELS[profile])} · ${taskCounts[profile]} 项</span>
+        const label = PROFILE_LABELS[profile] ?? profile;
+        const codexLabel = PROFILE_CODEX_LABELS[profile] ?? profile;
+        const accessibleLabel = `${codexLabel} · ${label}`;
+        return `<li class="profile-card profile-level-${escapeHtml(profile)}" role="group" aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(accessibleLabel)}">
+          <span class="agent-name" title="${escapeHtml(config?.model ?? "配置不可用")}"><span class="profile-codex-label">${escapeHtml(codexLabel)}</span></span>
           <span class="agent-role">
             <span class="profile-stats"><strong class="profile-stat-value">${activeCounts[profile]}</strong><span class="profile-stat-label">活动</span></span>
             <span class="profile-stats"><strong class="profile-stat-value">${escapeHtml(limit)}</strong><span class="profile-stat-label">上限</span></span>
           </span>
         </li>`;
       }).join("");
-    }
-
-    function renderActivity(tasks) {
-      const events = tasks.flatMap((task) => (task.history ?? []).map((entry) => ({ ...entry, taskId: task.id })))
-        .sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
-        .slice(0, 8);
-      elements.activityList.innerHTML = events.length ? events.map((event) => `
-        <li class="activity-item">
-          <span class="activity-time">${escapeHtml(formatDate(event.at, false))}</span>
-          <span class="activity-copy"><strong>${escapeHtml(event.taskId)}</strong> ${escapeHtml(STATUS_LABELS[event.to] ?? event.to)} · ${escapeHtml(event.reason)}</span>
-        </li>
-      `).join("") : '<li class="muted">暂无活动</li>';
     }
 
     function setExpandedSidePanel(button) {
@@ -2047,7 +2230,8 @@
         <div class="detail-grid">
           <div class="detail-field"><span class="detail-label">状态</span><span class="detail-value">${escapeHtml(STATUS_LABELS[task.status])}</span></div>
           <div class="detail-field"><span class="detail-label">优先级</span><span class="detail-value">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></div>
-          <div class="detail-field"><span class="detail-label">执行档位</span><span class="detail-value">${escapeHtml(PROFILE_LABELS[task.execution_profile] ?? task.execution_profile)}</span></div>
+          <div class="detail-field"><span class="detail-label">任务档位</span><span class="detail-value">${escapeHtml(PROFILE_LABELS[task.execution_profile] ?? task.execution_profile)}</span></div>
+          <div class="detail-field"><span class="detail-label">运行环境</span><span class="detail-value">${escapeHtml(runtimeEnvironmentName(task.runtime_environment))} (${escapeHtml(task.runtime_environment)})</span></div>
           <div class="detail-field"><span class="detail-label">模型</span><span class="detail-value">${escapeHtml(profileConfig(task.execution_profile)?.model ?? "配置不可用")} · ${escapeHtml(profileConfig(task.execution_profile)?.reasoning_effort ?? "--")}</span></div>
           <div class="detail-field"><span class="detail-label">归档时间</span><span class="detail-value">${escapeHtml(formatDate(task.archived_at))}</span></div>
           <div class="detail-field"><span class="detail-label">项目</span><span class="detail-value">${escapeHtml(projects.join("、") || "未识别")}</span></div>
@@ -2071,12 +2255,21 @@
       elements.taskDialog.showModal();
     }
 
-    elements.refreshState.addEventListener("click", refreshState);
+    elements.openSettings.addEventListener("click", () => setSettingsDrawer(true));
+    elements.closeSettings.addEventListener("click", () => setSettingsDrawer(false));
+    elements.settingsScrim.addEventListener("click", () => setSettingsDrawer(false));
     elements.dismissNotice.addEventListener("click", hideNotice);
     elements.search.addEventListener("input", (event) => {
       currentQuery = event.target.value.trim().toLocaleLowerCase("zh-CN");
-      if (state) renderTasks(state.tasks);
+      if (state) {
+        resetInvalidHeaderFilters(state.tasks);
+        renderHeaderFilterButtons();
+        renderTasks(state.tasks);
+      }
     });
+    elements.statusFilter.addEventListener("click", () => openHeaderFilter("status"));
+    elements.priorityFilter.addEventListener("click", () => openHeaderFilter("priority"));
+    elements.environmentFilter.addEventListener("click", () => openHeaderFilter("environment"));
     elements.projectFilter.addEventListener("click", () => openHeaderFilter("project"));
     elements.profileFilter.addEventListener("click", () => openHeaderFilter("profile"));
     elements.headerFilterMenu.addEventListener("click", (event) => {
@@ -2092,18 +2285,40 @@
     document.addEventListener("pointerdown", (event) => {
       if (activeHeaderFilter && !elements.headerFilterMenu.contains(event.target) && !event.target.closest(".header-filter-button")) closeHeaderFilterMenu();
     });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && elements.settingsDrawer.classList.contains("is-open")) {
+        event.preventDefault();
+        setSettingsDrawer(false);
+      }
+    });
     window.addEventListener("resize", () => {
       if (activeHeaderFilter) renderHeaderFilterMenu();
     });
     elements.taskTable.addEventListener("scroll", () => {
       if (activeHeaderFilter) renderHeaderFilterMenu();
     });
+    function resetHeaderFilters() {
+      currentStatus = "all";
+      currentPriority = "all";
+      currentEnvironment = "all";
+      currentProject = "all";
+      currentProfile = "all";
+      closeHeaderFilterMenu();
+      renderHeaderFilterButtons();
+    }
+
     function setTaskFilter(filter) {
-      currentFilter = filter;
+      const nextFilter = ["pending", "active", "attention", "closed", "archived"].includes(filter) ? filter : "pending";
+      if (nextFilter !== currentFilter) resetHeaderFilters();
+      currentFilter = nextFilter;
       document.querySelectorAll("[data-filter]").forEach((button) => {
         button.setAttribute("aria-pressed", String(button.dataset.filter === currentFilter));
       });
-      if (state) renderTasks(state.tasks);
+      if (state) {
+        resetInvalidHeaderFilters(state.tasks);
+        renderHeaderFilterButtons();
+        renderTasks(state.tasks);
+      }
     }
 
     document.querySelectorAll("[data-filter]").forEach((button) => {
@@ -2116,12 +2331,18 @@
         copyTaskId(copyButton.dataset.copyTaskId, copyButton);
         return;
       }
+      const archiveButton = event.target.closest(".archive-button");
+      if (archiveButton) {
+        event.stopPropagation();
+        archiveTask(archiveButton.dataset.archiveTaskId);
+        return;
+      }
       if (event.target.closest(".conflict-summary")) return;
       const row = event.target.closest("tr[data-task-id]");
       if (row) openTask(row.dataset.taskId);
     });
     elements.taskRows.addEventListener("keydown", (event) => {
-      if (event.target.closest(".task-copy-button")) return;
+      if (event.target.closest(".task-copy-button, .archive-button")) return;
       if (event.target.closest(".conflict-summary")) return;
       if (!["Enter", " "].includes(event.key)) return;
       const row = event.target.closest("tr[data-task-id]");

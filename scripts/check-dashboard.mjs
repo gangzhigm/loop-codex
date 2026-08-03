@@ -16,16 +16,35 @@ assert(html.includes('const STATE_ENDPOINT = "/api/state"'), "缺少 SQLite 状�
 assert(/fetch\(STATE_ENDPOINT/.test(html), "监控页未通过 API 读取状态");
 assert(!html.includes("showOpenFilePicker"), "仍包含旧文件授权逻辑");
 assert(!html.includes("TASKS.json"), "仍将 TASKS.json 暴露为运行时数据源");
+assert(!html.includes('id="refreshState"'), "顶部导航栏不应保留刷新按钮");
+assert(html.includes('id="openSettings" class="settings-button"'), "顶部导航栏缺少设置齿轮按钮");
+assert(html.includes('aria-label="设置"'), "设置按钮缺少可访问名称");
+assert(html.includes('title="设置"'), "设置按钮缺少工具提示");
+assert(html.includes('id="settingsDrawer" class="settings-drawer"'), "缺少设置抽屉容器");
+assert(html.includes('id="settingsScrim" class="settings-scrim"'), "缺少设置抽屉遮罩");
+assert(html.includes('function setSettingsDrawer(open)'), "缺少设置抽屉状态控制逻辑");
+assert(html.includes('elements.openSettings.addEventListener("click", () => setSettingsDrawer(true));'), "设置按钮未绑定打开抽屉交互");
+assert(html.includes('elements.closeSettings.addEventListener("click", () => setSettingsDrawer(false));'), "设置抽屉关闭按钮未绑定交互");
+assert(html.includes('elements.settingsScrim.addEventListener("click", () => setSettingsDrawer(false));'), "设置抽屉遮罩未绑定关闭交互");
+assert(html.includes('event.key === "Escape" && elements.settingsDrawer.classList.contains("is-open")'), "Escape 未关闭设置抽屉");
+assert(/\.settings-drawer\s*\{[\s\S]*?right:\s*0;[\s\S]*?transform:\s*translateX\(100%\);[\s\S]*?transition:\s*transform 180ms ease;/.test(html), "设置抽屉未从右侧平滑滑出");
+assert(html.includes('function formatWorkspaceUpdated(value)'), "缺少顶部更新时间格式化函数");
+assert(html.includes('return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;'), "顶部更新时间未严格输出 yyyy-MM-dd HH:mm:ss");
+assert(!html.includes('更新时间：${formatDate(state.workspace.updated_at)}'), "顶部更新时间仍保留标签或附加元数据");
+assert(html.includes('setConnection("live", `DB.V.${state.workspace.revision}`);'), "顶部数据库元数据未显示动态 DB.V.<workspace revision>");
+assert(!html.includes("SQLite · revision"), "顶部数据库元数据仍保留旧 SQLite · revision 文案");
+assert(!html.includes('setConnection("live", "DB.V.1549")'), "顶部数据库版本不得写死截图中的 revision");
+assert(!html.includes('DB.V.${TASK_SCHEMA_VERSION}'), "顶部数据库版本不得误用 schema_version");
 assert(html.includes('WAITING_CONFLICT: "等待冲突"'), "缺少 WAITING_CONFLICT 状态");
 assert(html.includes('CONFIRMED: "已确认"'), "缺少 CONFIRMED 状态");
-assert(html.includes('const TASK_SCHEMA_VERSION = "3.2.0"'), "Dashboard Schema 版本不是 3.2.0");
+assert(html.includes('const TASK_SCHEMA_VERSION = "3.3.0"'), "Dashboard Schema 版本不是 3.3.0");
 for (const profile of ["routine", "standard", "advanced", "deep", "complex", "exceptional"]) {
-  assert(new RegExp(`\\b${profile}:\\s*"`).test(html), `缺少 ${profile} 执行档位`);
+  assert(new RegExp(`\\b${profile}:\\s*"`).test(html), `缺少 ${profile} 任务档位`);
 }
-assert(html.includes("const EXECUTION_PROFILES = Object.keys(PROFILE_LABELS);"), "执行档位列表未从标签配置生成");
+assert(html.includes("const EXECUTION_PROFILES = Object.keys(PROFILE_LABELS);"), "任务档位列表未从标签配置生成");
 assert(html.includes('const PRIORITY_ORDER = { blocker: 0, critical: 1, high: 2, medium: 3, low: 4 }'), "缺少五级优先级排序");
 assert(html.includes("@media (max-width: 760px)"), "缺少移动端响应式规则");
-assert(/\.content-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1\.85fr\) minmax\(360px, 1fr\);/.test(html), "主内容区未使用收窄左栏、加宽右栏的稳定比例");
+assert(/\.content-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) minmax\(280px, 0\.26fr\);/.test(html), "主内容区未进一步缩窄右栏并扩大任务列表");
 assert(/@media \(max-width: 1080px\)[\s\S]*?\.content-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);/.test(html), "窄桌面未保留主内容区上下排列降级");
 assert(/body\s*\{[\s\S]*?min-height:\s*100dvh;[\s\S]*?overflow:\s*hidden;[\s\S]*?display:\s*flex;/.test(html), "桌面根布局未限制为动态视口高度");
 assert(/\.main\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;[\s\S]*?display:\s*flex;/.test(html), "主内容区未使用剩余视口高度");
@@ -35,22 +54,53 @@ assert(/\.table-wrap\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;[\s\S]
 assert(/\.side-section\s*\{[\s\S]*?overflow:\s*auto;/.test(html), "右侧监控栏未使用内部滚动");
 assert(/@media \(max-width: 1080px\)[\s\S]*?body\s*\{[\s\S]*?overflow:\s*auto;[\s\S]*?display:\s*block;/.test(html), "窄桌面未恢复自然页面滚动");
 assert(html.includes('id="projectFilter" class="header-filter-button"'), "项目筛选未迁移为表头图标控件");
-assert(html.includes('id="profileFilter" class="header-filter-button"'), "执行档位筛选未迁移为表头图标控件");
+assert(html.includes('id="profileFilter" class="header-filter-button"'), "任务档位筛选未迁移为表头图标控件");
+assert(html.includes('id="statusFilter" class="header-filter-button"'), "状态筛选未迁移为表头图标控件");
+assert(html.includes('id="priorityFilter" class="header-filter-button"'), "优先级筛选未迁移为表头图标控件");
+assert(html.includes('id="environmentFilter" class="header-filter-button"'), "运行环境筛选未使用表头图标控件");
 assert(!html.includes('class="project-select"'), "顶部工具栏仍保留项目下拉框");
-assert(!html.includes('class="profile-select"'), "顶部工具栏仍保留执行档位下拉框");
+assert(!html.includes('class="profile-select"'), "顶部工具栏仍保留任务档位下拉框");
 assert(html.includes('id="headerFilterMenu" class="header-filter-menu" role="menu" hidden'), "缺少表头筛选菜单容器");
 assert(html.includes('aria-label="筛选项目"'), "项目筛选图标缺少可访问名称");
 assert(html.includes('title="筛选项目"'), "项目筛选图标缺少提示文本");
-assert(html.includes('aria-label="筛选执行档位"'), "执行档位筛选图标缺少可访问名称");
-assert(html.includes('title="筛选执行档位"'), "执行档位筛选图标缺少提示文本");
-assert(html.includes('function headerFilterOptions(kind)'), "缺少表头筛选选项生成逻辑");
+assert(html.includes('aria-label="筛选任务档位"'), "任务档位筛选图标缺少可访问名称");
+assert(html.includes('title="筛选任务档位"'), "任务档位筛选图标缺少提示文本");
+assert(html.includes('aria-label="筛选状态"'), "状态筛选图标缺少可访问名称");
+assert(html.includes('title="筛选状态"'), "状态筛选图标缺少提示文本");
+assert(html.includes('aria-label="筛选优先级"'), "优先级筛选图标缺少可访问名称");
+assert(html.includes('title="筛选优先级"'), "优先级筛选图标缺少提示文本");
+assert(html.includes('aria-label="筛选运行环境"'), "运行环境筛选图标缺少可访问名称");
+assert(html.includes('title="筛选运行环境"'), "运行环境筛选图标缺少提示文本");
+assert(html.includes('function headerFilterOptions(kind, tasks = state?.tasks ?? [])'), "缺少表头筛选选项生成逻辑");
+assert(html.includes('const contextualTasks = tasks.filter((task) => taskMatches(task, kind));'), "表头筛选选项未基于忽略自身条件的当前上下文生成");
+assert(html.includes('function resetInvalidHeaderFilters(tasks)'), "缺少自动轮询后的失效表头筛选重置逻辑");
+assert(html.includes('const HEADER_FILTER_STATUSES = ["DRAFT", "PENDING", "RUNNING", "WAITING_CONFLICT", "WAITING_HUMAN", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]'), "状态筛选未覆盖当前支持的真实任务状态");
+assert(html.includes('const HEADER_FILTER_PRIORITIES = ["blocker", "critical", "high", "medium", "low"]'), "优先级筛选未按五级优先级顺序展示");
+assert(html.includes('return [["all", "全部状态"], ...HEADER_FILTER_STATUSES.filter'), "状态筛选缺少全部状态清除选项");
+assert(html.includes('return [["all", "全部优先级"], ...HEADER_FILTER_PRIORITIES.filter'), "优先级筛选缺少全部优先级清除选项");
+assert(html.includes('return [["all", "全部环境"], ...runtimeEnvironmentEntries().filter'), "运行环境筛选缺少配置驱动的全部环境选项");
 assert(html.includes('role="menuitemradio"'), "表头筛选选项未使用单选菜单语义");
 assert(html.includes('function setHeaderFilter(kind, value)'), "缺少表头筛选状态更新逻辑");
 assert(html.includes('function closeHeaderFilterMenu'), "缺少表头筛选菜单关闭逻辑");
 assert(html.includes('event.key === "Escape"'), "表头筛选菜单不支持键盘关闭");
 assert(/\.header-filter-menu\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?z-index:\s*20;/.test(html), "表头筛选菜单未脱离滚动容器以避免裁切");
 assert(/\.header-filter-button\s*\{[\s\S]*?width:\s*22px;[\s\S]*?height:\s*22px;/.test(html), "表头筛选图标未使用稳定紧凑尺寸");
-assert(html.includes('<th style="width: 11%">时间</th>'), "任务表格未将耗时列表头调整为时间信息");
+assert(html.includes('if (ignoredHeaderFilter !== "status" && currentStatus !== "all" && task.status !== currentStatus) return false;'), "状态筛选未按 status 精确匹配");
+assert(html.includes('if (ignoredHeaderFilter !== "priority" && currentPriority !== "all" && task.priority !== currentPriority) return false;'), "优先级筛选未按 priority 精确匹配");
+assert(html.includes('if (ignoredHeaderFilter !== "environment" && currentEnvironment !== "all" && task.runtime_environment !== currentEnvironment) return false;'), "运行环境筛选未按 runtime_environment 精确匹配");
+assert(html.includes('elements.statusFilter.addEventListener("click", () => openHeaderFilter("status"));'), "状态筛选图标未绑定菜单交互");
+assert(html.includes('elements.priorityFilter.addEventListener("click", () => openHeaderFilter("priority"));'), "优先级筛选图标未绑定菜单交互");
+assert(html.includes('elements.environmentFilter.addEventListener("click", () => openHeaderFilter("environment"));'), "运行环境筛选图标未绑定菜单交互");
+assert(html.includes('if (ignoredHeaderFilter !== "status" && currentStatus !== "all" && task.status !== currentStatus) return false;\n      if (ignoredHeaderFilter !== "priority" && currentPriority !== "all" && task.priority !== currentPriority) return false;\n      if (ignoredHeaderFilter !== "environment" && currentEnvironment !== "all" && task.runtime_environment !== currentEnvironment) return false;\n      if (ignoredHeaderFilter !== "project"'), "状态、优先级、运行环境和项目筛选未保持交集");
+assert((html.match(/currentStatus = "all"/g) ?? []).length === 2, "状态表头筛选应仅在初始化和状态切换时重置");
+assert((html.match(/currentPriority = "all"/g) ?? []).length === 2, "优先级表头筛选应仅在初始化和状态切换时重置");
+assert(html.includes('if (selected !== "all" && !validValues.has(selected)) setHeaderFilterValue(kind, "all");'), "自动刷新未仅重置失效的表头筛选");
+assert(!html.includes('<th style="width: 14%">进度</th>'), "任务表头仍显示进度列");
+assert(!html.includes('data-label="进度"'), "任务行仍显示进度列");
+assert(!html.includes('class="progress-cell"'), "任务列表仍保留进度条容器");
+assert(!html.includes('class="progress-track"'), "任务列表仍保留进度条轨道");
+assert(!html.includes('class="progress-fill"'), "任务列表仍保留进度条填充层");
+assert(html.includes('<th style="width: 15%">时间</th>'), "任务表格未为时间信息重新分配列宽");
 assert(html.includes('class="task-time-info"'), "任务行缺少时间信息容器");
 assert((html.match(/class="task-time-row"/g) ?? []).length === 3, "任务时间信息未严格按三行展示");
 assert(html.includes('开始</span>${taskTimeValue(task.started_at)}'), "任务时间信息未展示 started_at");
@@ -58,6 +108,10 @@ assert(html.includes('完成</span>${taskTimeValue(task.completed_at)}'), "任�
 assert(html.includes('耗时</span>${taskDurationValue(task)}'), "任务时间信息未展示任务耗时");
 assert(html.includes('function formatTaskTime(value)'), "缺少 Asia/Shanghai 任务时间格式化逻辑");
 assert(html.includes('timeZone: "Asia/Shanghai"'), "任务时间未固定使用 Asia/Shanghai 时区");
+assert(html.includes('hourCycle: "h23"'), "任务时间未固定使用 24 小时制");
+assert(html.includes('return `${time.hour}:${time.minute}`;'), "任务时间未严格输出 HH:mm");
+const taskTimeFormatter = html.match(/function formatTaskTime\(value\)\s*\{([\s\S]*?)\n    \}/)?.[1] ?? "";
+assert(!taskTimeFormatter.includes('second: "2-digit"'), "任务时间不应显示秒");
 assert(html.includes('function formatTaskDuration(task)'), "缺少按任务状态计算耗时的逻辑");
 assert(html.includes('if (task.status === "RUNNING") return formatDuration(task.started_at, null);'), "运行中任务不会使用当前时间持续计算耗时");
 assert(html.includes('return Number.isFinite(completedTime) ? formatDuration(task.started_at, task.completed_at) : "--";'), "非运行中任务的缺失完成时间未显示占位");
@@ -68,19 +122,41 @@ assert(html.includes('currentFilter === "pending" && task.status !== "PENDING"')
 assert(html.includes('class="metric metric-filter" type="button" data-filter="pending"'), "待执行统计卡未使用可访问按钮筛选");
 assert(html.includes('class="metric metric-filter" type="button" data-filter="active"'), "执行中统计卡未使用可访问按钮筛选");
 assert(html.includes('class="metric metric-filter" type="button" data-filter="attention"'), "需要关注统计卡未使用可访问按钮筛选");
-assert(html.includes('class="metric metric-filter" type="button" data-filter="confirmation"'), "待确认/归档统计卡未使用可访问按钮筛选");
-assert(html.includes('data-filter="confirmation" aria-pressed="false">待确认/归档'), "缺少待确认/归档状态筛选入口");
-assert(html.includes('currentFilter === "confirmation" && !["SUCCEEDED", "CONFIRMED"].includes(task.status)'), "待确认/归档筛选未严格匹配未归档 SUCCEEDED 或 CONFIRMED 状态");
+assert(html.includes('class="metric metric-filter" type="button" data-filter="closed" aria-pressed="false"><span class="metric-label">待确认'), "待确认统计卡未进入已结束筛选");
+assert(!html.includes('data-filter="confirmation"'), "任务筛选不应保留待确认/归档分类");
+assert(!html.includes('currentFilter === "confirmation"'), "不应保留待确认/归档筛选状态");
 assert(html.includes('function setTaskFilter(filter)'), "缺少统计卡与状态分段共享的筛选状态更新逻辑");
 assert(html.includes('button.setAttribute("aria-pressed", String(button.dataset.filter === currentFilter));'), "统计卡与状态分段未按当前筛选保持同步激活态");
 assert(html.includes('button.addEventListener("click", () => setTaskFilter(button.dataset.filter));'), "统计卡和状态分段未复用统一筛选交互");
+assert(!html.includes('data-filter="all"'), "任务列表不应保留全部状态分段或内部入口");
+assert(!html.includes('>全部</button>'), "任务列表不应保留全部状态分段的可激活按钮");
+assert(html.includes('let currentFilter = "pending";'), "首次加载应默认激活待执行状态");
+assert(html.includes('data-filter="pending" aria-pressed="true">待执行</button>'), "待执行分段未作为默认激活项");
+assert(html.includes('function resetHeaderFilters()'), "缺少状态切换时的表头筛选重置逻辑");
+for (const filterState of ["currentStatus", "currentPriority", "currentEnvironment", "currentProject", "currentProfile"]) {
+  assert(html.includes(`${filterState} = "all";`), `${filterState} 未在状态切换时恢复为全部`);
+}
+assert(html.includes('const nextFilter = ["pending", "active", "attention", "closed", "archived"].includes(filter) ? filter : "pending";'), "无效状态选择未回退为待执行");
+assert(html.includes('if (nextFilter !== currentFilter) resetHeaderFilters();'), "切换状态时未重置表头筛选");
+assert(html.includes('closeHeaderFilterMenu();'), "切换状态时未关闭遗留表头筛选菜单");
+assert(html.includes('renderHeaderFilterButtons();'), "切换状态时未同步表头筛选图标和菜单选中态");
 assert(/\.metric-filter:hover,[\s\S]*?\.metric-filter:focus-visible,[\s\S]*?\.metric-filter\[aria-pressed="true"\]/.test(html), "统计卡缺少 hover、focus 和激活态");
-assert(/\.segments button\[data-filter="confirmation"\]\s*\{[\s\S]*?width:\s*82px;/.test(html), "待确认/归档筛选未使用稳定宽度");
-assert((html.match(/class="metric metric-filter" type="button" data-filter="(?:pending|active|attention|confirmation)" aria-pressed="false"/g) ?? []).length === 4, "四张可点击统计卡未完整保留原生按钮语义");
-assert(html.includes('if (currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;'), "统计卡筛选未与项目条件保持交集");
-assert(html.includes('if (currentProfile !== "all" && task.execution_profile !== currentProfile) return false;'), "统计卡筛选未与执行档位条件保持交集");
+assert(!html.includes('.segments button[data-filter="confirmation"]'), "不应保留待确认/归档的固定宽度样式");
+assert((html.match(/class="metric metric-filter" type="button" data-filter="(?:pending|active|attention|closed|archived)" aria-pressed="false"/g) ?? []).length === 5, "五张可点击统计卡未完整保留原生按钮语义");
+assert(/\.metric\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;[\s\S]*?align-items:\s*flex-start;[\s\S]*?justify-content:\s*center;/.test(html), "顶部统计项未统一使用上标签下数字的纵向布局");
+assert(/\.metric-label\s*\{[\s\S]*?display:\s*block;/.test(html), "顶部统计标签未使用稳定块级布局");
+assert(/\.metric-value\s*\{[\s\S]*?display:\s*block;/.test(html), "顶部统计数字未使用稳定块级布局");
+assert((html.match(/class="metric(?: metric-filter)?"/g) ?? []).length === 6, "顶部统计项未保持六项统一结构");
+assert(/@media \(max-width: 760px\)[\s\S]*?\.metric \{ min-height: 44px;/.test(html), "窄窗口统计项未保持稳定整体高度");
+assert(html.includes('if (ignoredHeaderFilter !== "project" && currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;'), "统计卡筛选未与项目条件保持交集");
+assert(html.includes('if (ignoredHeaderFilter !== "profile" && currentProfile !== "all" && task.execution_profile !== currentProfile) return false;'), "统计卡筛选未与任务档位条件保持交集");
+assert(html.includes('data-label="运行环境">${environmentCell(task)}'), "任务列表未展示运行环境");
+assert(html.includes('<span class="detail-label">运行环境</span>'), "任务详情未展示运行环境");
+assert(html.includes('return Object.entries(candidate?.runtime_config?.runtime_environments ?? {});'), "运行环境列表未从初始化配置读取");
+assert(html.includes('runtime_config.runtime_environments 无效'), "运行环境配置缺失时未明确报错");
+assert(html.includes('运行环境缺失或未知'), "任务或活动 execution 的运行环境缺失时未明确报错");
 assert(html.includes('if (!currentQuery) return true;'), "统计卡筛选未保留搜索关键词条件");
-assert((html.match(/currentFilter = "all"/g) ?? []).length === 1, "状态刷新后不应重置当前筛选模式");
+assert(!html.includes('currentFilter = "all"'), "状态刷新不应回退到已移除的全部筛选模式");
 assert(!html.includes('data-filter="human"'), "不应保留需人工筛选入口");
 assert(!html.includes('const HUMAN_STATUSES'), "不应保留专用需人工状态集合");
 assert(!html.includes('currentFilter === "human"'), "不应保留需人工筛选分支");
@@ -89,8 +165,6 @@ assert(html.includes('function needsAttention(task)'), "缺少需要关注的统
 assert(html.includes('return ATTENTION_STATUSES.has(task.status) || isHeartbeatLate(task);'), "需要关注判定未覆盖状态和心跳超时");
 assert(html.includes('currentTasks.filter(needsAttention)'), "需要关注统计未限定为未归档任务的统一集合");
 assert(html.includes('currentFilter === "attention" && !needsAttention(task)'), "需关注筛选未使用统一判定逻辑");
-assert(html.includes('renderAlerts(attentionTasks);'), "右侧需要关注摘要未使用统一任务集合");
-assert(html.includes('for (const task of tasks.filter(needsAttention))'), "右侧需要关注摘要未使用统一判定逻辑");
 assert(html.includes('data-filter="archived"'), "缺少已归档筛选入口");
 assert(html.includes('function isArchived(task)'), "缺少独立 archived_at 判定函数");
 assert(html.includes('return Boolean(task?.archived_at);'), "archived_at 缺失或 null 时未按未归档处理");
@@ -99,7 +173,7 @@ assert(html.includes('} else if (archived) {'), "默认和其他状态筛选未�
 assert(html.includes('const currentTasks = tasks.filter((task) => !isArchived(task));'), "顶部统计未使用未归档任务口径");
 assert(html.includes('<div class="metric-label">当前任务</div>'), "顶部任务总数标签未明确未归档口径");
 const metricLabels = [...html.matchAll(/class="metric-label">([^<]+)</g)].map((match) => match[1]);
-assert(JSON.stringify(metricLabels) === JSON.stringify(["当前任务", "待执行", "执行中", "需要关注", "待确认/归档", "完成率"]), "顶部统计项未按任务生命周期排列");
+assert(JSON.stringify(metricLabels) === JSON.stringify(["当前任务", "待执行", "执行中", "需要关注", "待确认", "已归档"]), "顶部统计项未按任务生命周期排列");
 assert(!metricLabels.includes("卡顿或阻塞"), "顶部导航栏不应显示卡顿或阻塞统计");
 assert(!metricLabels.includes("失败"), "顶部导航栏不应显示失败统计");
 assert(html.includes('id="metricPending"'), "顶部导航栏缺少待执行统计");
@@ -108,12 +182,32 @@ assert(html.includes('elements.metricPending.textContent = pending;'), "待执�
 assert(html.includes('id="metricAttention"'), "顶部导航栏缺少需要关注统计");
 assert(html.includes('const attention = attentionTasks.length;'), "需要关注统计未使用统一任务集合数量");
 assert(html.includes('elements.metricAttention.textContent = attention;'), "需要关注统计未渲染实时数据");
-assert(html.includes('id="metricConfirmation"'), "顶部导航栏缺少待确认/归档统计");
-assert(html.includes('const confirmation = (counts.SUCCEEDED ?? 0) + (counts.CONFIRMED ?? 0);'), "待确认/归档统计未覆盖 SUCCEEDED 和 CONFIRMED 状态");
-assert(html.includes('elements.metricConfirmation.textContent = confirmation;'), "待确认/归档统计未渲染实时数据");
+assert(html.includes('id="metricConfirmation"'), "顶部导航栏缺少待确认统计");
+assert(html.includes('const confirmation = (counts.SUCCEEDED ?? 0) + (counts.CONFIRMED ?? 0);'), "待确认统计未覆盖 SUCCEEDED 和 CONFIRMED 状态");
+assert(html.includes('elements.metricConfirmation.textContent = confirmation;'), "待确认统计未渲染实时数据");
+assert(html.includes('id="metricArchived"'), "顶部导航栏缺少已归档统计");
+assert(html.includes('const archived = tasks.filter(isArchived).length;'), "已归档统计未基于全量任务计算");
+assert(html.includes('elements.metricArchived.textContent = archived;'), "已归档统计未渲染实时整数");
+assert(!html.includes("metricRate"), "不应保留完成率统计元素或引用");
+assert(!html.includes("Math.round((succeeded / total) * 100)"), "不应保留完成率百分比计算");
 assert(html.includes('`已归档 ${visible.length} 项`'), "已归档视图未显示筛选后的归档数量");
 assert(html.includes('归档于 ${escapeHtml(formatDate(task.archived_at, false))}'), "任务行未显示归档时间");
 assert(html.includes('<span class="detail-label">归档时间</span>'), "任务详情未显示归档时间");
+assert(html.includes('<th class="task-action-heading" style="width: 7%">操作</th>'), "任务表格缺少稳定宽度的操作列");
+assert(html.includes('<td class="task-action-cell" data-label="操作">${renderTaskAction(task)}</td>'), "任务行缺少固定操作单元格");
+assert(html.includes('return currentFilter === "closed" && !isArchived(task) && CLOSED_STATUSES.has(task.status);'), "归档按钮未严格限定在已结束分段的未归档终态任务");
+assert(html.includes('if (!canArchiveTask(task)) return "";'), "非已结束分段的操作单元格未保持为空");
+assert(html.includes('data-archive-task-id="${escapeHtml(task.id)}"'), "归档按钮未绑定明确任务 ID");
+assert(html.includes('aria-label="归档任务 ${escapeHtml(task.id)}" title="归档任务"'), "归档按钮缺少可访问名称或 tooltip");
+assert(html.includes('disabled aria-busy=\\"true\\"'), "归档提交期间未禁用按钮");
+assert(html.includes('task.status === "SUCCEEDED"'), "SUCCEEDED 归档未使用单独的人工确认说明");
+assert(html.includes('if (!window.confirm(confirmation)) return;'), "取消归档确认仍可能提交变更");
+assert(html.includes('method: "POST"'), "归档动作未使用非 GET 请求");
+assert(html.includes('body: JSON.stringify({ task_id: task.id, action: "archive", row_version: task.row_version })'), "归档请求未携带固定动作与并发版本");
+assert(html.includes('await refreshState();'), "归档完成或失败后未刷新 SQLite 状态");
+assert(html.includes('showNotice(`归档失败：${message}`);'), "归档失败未显示明确错误");
+assert(!html.includes('data-unarchive-task-id'), "本任务不应增加取消归档操作");
+assert(/\.archive-button\s*\{[\s\S]*?width:\s*62px;[\s\S]*?height:\s*32px;/.test(html), "归档按钮未使用稳定尺寸");
 assert(/\.task-tools\s*\{[\s\S]*?flex-wrap:\s*nowrap;/.test(html), "任务筛选工具栏仍可能换行");
 assert(/\.segments\s*\{[\s\S]*?white-space:\s*nowrap;/.test(html), "状态筛选组未禁止文字换行");
 assert(/\.segments button\s*\{[\s\S]*?flex:\s*0 0 54px;[\s\S]*?width:\s*54px;/.test(html), "状态筛选按钮未使用稳定等宽尺寸");
@@ -139,6 +233,23 @@ assert(html.includes('阻塞任务标题未找到'), "缺少阻塞任务标题�
 assert(html.includes('阻塞任务 ID 未记录'), "缺少冲突字段不完整降级文案");
 assert(html.includes('检测时间无效'), "缺少无效冲突时间降级文案");
 
+assert(html.includes('function dependencyIndicatorState(task, tasks)'), "缺少依赖状态汇总逻辑");
+assert(html.includes('if (!dependencyIds.length) return null;'), "无 depends_on 的任务不应显示依赖圆点");
+assert(html.includes('tasksById.get(id)?.status'), "依赖状态未从当前任务快照读取");
+assert(html.includes('["DRAFT", "PENDING", "FAILED", "CANCELLED"].includes(status) || !VALID_STATUSES.has(status)'), "未执行、失败、取消、缺失或异常依赖未标为红色");
+assert(html.includes('return { color: "red", label: "依赖状态：存在未执行、失败、取消、缺失或异常依赖" };'), "红色依赖状态缺少说明文本");
+assert(html.includes('return { color: "yellow", label: "依赖状态：存在执行中或等待中的依赖" };'), "执行中或等待中的依赖未标为黄色");
+assert(html.includes('return { color: "green", label: "依赖状态：全部依赖已成功完成" };'), "全部成功依赖未标为绿色");
+assert(html.includes('function renderDependencyIndicator(task, tasks)'), "任务行缺少依赖圆点渲染");
+assert(html.includes('class="dependency-indicator is-${indicator.color}"'), "依赖圆点未绑定汇总颜色");
+assert(html.includes('aria-label="${escapeHtml(indicator.label)}" title="${escapeHtml(indicator.label)}"'), "依赖圆点缺少可访问说明和悬停提示");
+assert(html.includes('class="status-badge-row"'), "依赖圆点未与状态标签保持同一行");
+assert(/\.dependency-indicator\s*\{[\s\S]*?flex:\s*0 0 8px;[\s\S]*?width:\s*8px;[\s\S]*?height:\s*8px;/.test(html), "依赖圆点未使用稳定尺寸");
+assert(html.includes('.dependency-indicator.is-red { background: var(--danger); }'), "依赖红色样式缺失");
+assert(html.includes('.dependency-indicator.is-yellow { background: var(--warning); }'), "依赖黄色样式缺失");
+assert(html.includes('.dependency-indicator.is-green { background: var(--success); }'), "依赖绿色样式缺失");
+assert(html.includes('task?.depends_on !== undefined'), "任务 depends_on 结构未验证");
+
 assert(html.includes('function copyTaskId(taskId, button)'), "缺少任务 ID 复制处理函数");
 assert(html.includes('await navigator.clipboard.writeText(taskId)'), "复制操作未使用当前任务原始 ID");
 assert(html.includes('data-copy-task-id="${escapeHtml(task.id)}"'), "任务行复制按钮未绑定完整 task.id");
@@ -150,16 +261,21 @@ assert(html.includes('setFeedback("success", "已复制")'), "复制成功缺少
 assert(html.includes('setFeedback("failed", "复制失败")'), "复制失败缺少反馈");
 assert(/\.task-copy-button\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/.test(html), "复制按钮未使用固定点击区域");
 assert(/\.task-title-line\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 28px;/.test(html), "标题和复制按钮未使用稳定布局");
-assert(html.includes('elements.alertCount.textContent = `${alerts.length} 项`;'), "需要关注标题计数未保留全部任务数量");
-assert(html.includes('alerts.slice(0, 1).map((alert) => `'), "需要关注摘要未限制为确定性首条任务");
-assert(html.includes('elements.agentCount.textContent = `${agents.length} 项`;'), "活动执行标题未保留全部 execution 数量");
-assert(html.includes('const visibleAgents = agents.slice(0, 1);'), "活动执行摘要未限制为确定性首项");
-assert(html.includes('visibleAgents.length ? visibleAgents.map((agent) => `'), "活动执行摘要未按可见首项渲染");
-assert(html.includes(': \'<li class="muted">暂无活动执行</li>\';'), "活动执行摘要缺少空状态");
-assert(html.includes('renderAgents(state.agents ?? []);'), "活动执行摘要未在状态刷新时重新渲染");
-assert(/\.profile-list\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\);/.test(html), "执行档位未使用三列卡片网格");
-assert(html.includes('class="profile-card"'), "执行档位缺少独立卡片结构");
-assert((html.match(/class="profile-card"/g) ?? []).length === 1, "执行档位应由脚本统一渲染卡片");
+assert(/\.profile-list\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\);/.test(html), "任务档位未使用三列卡片网格");
+assert(html.includes('class="profile-card profile-level-${escapeHtml(profile)}"'), "任务档位缺少独立卡片结构");
+assert((html.match(/class="profile-card profile-level-\$\{escapeHtml\(profile\)\}"/g) ?? []).length === 1, "任务档位应由脚本统一渲染卡片");
+assert(html.includes("const PROFILE_CODEX_LABELS = {"), "任务档位卡片缺少 Codex 等级配置");
+assert(html.includes('routine: "Codex 1", standard: "Codex 2", advanced: "Codex 3", deep: "Codex 4", complex: "Codex 5", exceptional: "Codex 6"'), "任务档位未按 Codex 1 至 6 配置");
+assert(html.includes('role="group" aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(accessibleLabel)}"'), "任务档位卡片缺少完整名称和 Codex 等级的可访问名称与工具提示");
+assert(html.includes('class="profile-codex-label"'), "任务档位卡片未显示 Codex 等级标题");
+assert(!html.includes('class="profile-initial"'), "任务档位卡片不应显示旧首字母标题");
+assert(!html.includes('class="agent-dot ${activeCounts[profile] ? "running" : "idle"}"'), "任务档位卡片标题左侧不应显示状态圆点");
+assert(!html.includes('${taskCounts[profile]} 项'), "任务档位卡片不应显示任务数量");
+for (const profile of ["routine", "standard", "advanced", "deep", "complex", "exceptional"]) {
+  assert(html.includes(`profile-level-${profile}`), `${profile} 缺少独立等级背景色`);
+}
+assert(/\.profile-card\.profile-level-routine\s*\{[^}]*background:\s*#e8f5ea/.test(html), "Routine 未使用绿色系背景");
+assert(/\.profile-card\.profile-level-exceptional\s*\{[^}]*background:\s*#f6d2d2/.test(html), "Exceptional 未使用红色系背景");
 assert(html.includes('class="profile-stats"'), "档位卡片缺少活动数/并发上限字段");
 assert(html.includes('class="profile-stat-value"'), "档位卡片指标缺少数字层级");
 assert(html.includes('class="profile-stat-label"'), "档位卡片指标缺少描述层级");
@@ -172,15 +288,13 @@ assert(!html.includes('const scheduling ='), "档位卡片不应计算周期频�
 assert(html.includes('grid-template-columns: repeat(2, minmax(0, 1fr));'), "窄视口缺少档位卡片降列布局");
 assert(html.includes('grid-template-columns: repeat(3, minmax(0, 1fr));'), "移动端档位卡片布局断言缺失");
 assert(html.includes('profile-card .agent-role'), "档位卡片统计未与横向活动执行样式隔离");
-assert((html.match(/class="side-heading"/g) ?? []).length === 4, "右侧监控栏未保留四个可折叠标题");
-assert((html.match(/class="side-heading-group"/g) ?? []).length === 4, "四个标题未使用统一的左侧标题摘要组");
-assert((html.match(/class="side-heading-summary"/g) ?? []).length === 4, "四个标题未保留统一摘要样式");
-assert(html.includes('aria-expanded="true" aria-controls="activityContent"'), "最近活动未默认展开或缺少关联内容区");
-assert(html.includes('aria-expanded="false" aria-controls="alertContent"'), "需要关注未默认收起或缺少关联内容区");
-assert(html.includes('id="activityContent" class="side-content is-expanded"'), "最近活动内容区未默认展开");
-assert(html.includes('id="alertContent" class="side-content" hidden'), "需要关注内容区未默认收起");
-for (const contentId of ["alertContent", "agentContent", "profileContent", "activityContent"]) {
-  assert(html.includes(`id="${contentId}" class="side-content`), `缺少 ${contentId} 折叠内容区`);
+assert((html.match(/class="side-heading"/g) ?? []).length === 1, "右侧仅应保留任务档位折叠标题");
+assert((html.match(/class="side-heading-group"/g) ?? []).length === 1, "任务档位标题未使用统一的左侧标题摘要组");
+assert((html.match(/class="side-heading-summary"/g) ?? []).length === 1, "任务档位标题未保留摘要样式");
+assert(html.includes('aria-expanded="true" aria-controls="profileContent"'), "任务档位未默认展开或缺少关联内容区");
+assert(html.includes('id="profileContent" class="side-content is-expanded"'), "任务档位内容区未默认展开");
+for (const removedId of ["alertContent", "agentContent", "activityContent"]) {
+  assert(!html.includes(`id="${removedId}"`), `${removedId} 不应保留为空白占位`);
 }
 assert(html.includes('function setExpandedSidePanel(button)'), "缺少侧栏单开手风琴控制逻辑");
 assert(html.includes('candidate === button'), "侧栏手风琴未保证同时只展开一个面板");
@@ -189,6 +303,12 @@ assert(html.includes('candidate.setAttribute("aria-expanded", String(expanded))'
 assert(html.includes('document.querySelector(".side-section").addEventListener("click"'), "侧栏标题未绑定切换交互");
 assert(/\.side-content\.is-expanded\s*\{[\s\S]*?max-height:\s*900px;/.test(html), "展开侧栏内容未保留可见区域");
 assert(/\.side-section\s*\{\s*display:\s*block;\s*overflow:\s*visible;\s*\}/.test(html), "窄桌面侧栏未保持纵向手风琴顺序");
+assert(/\.content-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) minmax\(280px, 0\.26fr\);/.test(html), "桌面布局未进一步缩窄右侧栏并扩大任务列表");
+assert(html.includes('<th style="width: 15%"><span class="table-header-label">运行环境'), "运行环境列未获得稳定可用宽度");
+assert(html.includes('<th style="width: 15%"><span class="table-header-label">项目'), "项目列未获得稳定可用宽度");
+assert(!html.includes('function renderAlerts('), "不应保留已移除关注模块的渲染逻辑");
+assert(!html.includes('function renderAgents('), "不应保留已移除活动执行模块的渲染逻辑");
+assert(!html.includes('function renderActivity('), "不应保留已移除最近活动模块的渲染逻辑");
 
 const allIds = [...html.matchAll(/\sid=["']([^"']+)["']/g)].map((match) => match[1]);
 const ids = new Set(allIds);
@@ -207,7 +327,7 @@ if (scripts.length === 1) {
   }
 }
 
-for (const label of ["任务总览", "任务", "需要关注", "活动执行", "最近活动", "状态历史"]) {
+for (const label of ["任务总览", "任务", "任务档位", "状态历史"]) {
   assert(html.includes(label), `缺少界面区域：${label}`);
 }
 

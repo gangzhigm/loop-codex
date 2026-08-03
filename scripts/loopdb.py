@@ -12,8 +12,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB = BASE_DIR / "data" / "loop-agent.sqlite3"
 SCHEMA_PATH = BASE_DIR / "schemas" / "loop-agent.sql"
 CONFIG_PATH = BASE_DIR / "config" / "initialization.json"
-SCHEMA_VERSION = "3.2.0"
-SCHEMA_USER_VERSION = 30200
+SCHEMA_VERSION = "3.3.0"
+SCHEMA_USER_VERSION = 30300
+ROUTING_SCHEMA_USER_VERSION = 30200
 ARCHIVE_SCHEMA_USER_VERSION = 30100
 LEGACY_SCHEMA_USER_VERSION = 30000
 SHANGHAI = timezone(timedelta(hours=8))
@@ -22,6 +23,7 @@ DEPENDENCY_COMPLETE_STATUSES = {"SUCCEEDED", "CONFIRMED"}
 ARCHIVABLE_STATUSES = {"CONFIRMED", "FAILED", "CANCELLED"}
 PRIORITIES = ("blocker", "critical", "high", "medium", "low")
 EXECUTION_PROFILES = ("routine", "standard", "advanced", "deep", "complex", "exceptional")
+RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "deepseek")
 FORBIDDEN_SCOPE_ROOTS = {"$CODEX_HOME", ".reasonix", ".env"}
 ALLOWED_TABLES = {
     "tasks",
@@ -49,6 +51,9 @@ CREATE TABLE tasks_new (
   priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),
   execution_profile TEXT NOT NULL DEFAULT 'standard' CHECK (execution_profile IN (
     'routine', 'standard', 'advanced', 'deep', 'complex', 'exceptional'
+  )),
+  runtime_environment TEXT NOT NULL CHECK (runtime_environment IN (
+    'codex_automation', 'codex_cli', 'deepseek'
   )),
   assigned_agent TEXT,
   created_at TEXT NOT NULL,
@@ -88,12 +93,15 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     database = config.get("database") or {}
     prompts = config.get("prompts") or {}
     execution = config.get("task_execution") or {}
+    self_hosted_agent = config.get("self_hosted_agent") or {}
+    deepseek = config.get("deepseek") or {}
     priority_policy = config.get("priority_policy") or {}
     dashboard = config.get("dashboard") or {}
     automations = config.get("automations") or {}
     health = config.get("health") or {}
     limits = execution.get("profile_parallel_limits") or {}
     profiles = automations.get("profiles") or {}
+    runtime_environments = config.get("runtime_environments") or {}
     project_defaults = priority_policy.get("project_defaults") or {}
     valid_profile_config = set(profiles) == set(EXECUTION_PROFILES) and all(
         isinstance(profiles[profile], dict)
@@ -108,6 +116,15 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
                 and profiles[profile].get("offset_minutes") is None)
         )
         for profile in EXECUTION_PROFILES
+    )
+    valid_runtime_environment_config = set(runtime_environments) == set(RUNTIME_ENVIRONMENTS) and all(
+        isinstance(runtime_environments[environment], dict)
+        and isinstance(runtime_environments[environment].get("name"), str)
+        and bool(runtime_environments[environment]["name"].strip())
+        and isinstance(runtime_environments[environment].get("entry"), dict)
+        and runtime_environments[environment]["entry"].get("type") == environment
+        and runtime_environments[environment]["entry"].get("claim_argument") == environment
+        for environment in RUNTIME_ENVIRONMENTS
     )
     valid = (
         config.get("config_version") == "3.0.0"
@@ -135,6 +152,33 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and all(isinstance(limits[profile], int) and limits[profile] >= 1 for profile in EXECUTION_PROFILES)
         and execution.get("scope_conflict_mode") == "project"
         and isinstance(execution.get("require_human_approval_for"), list)
+        and isinstance(self_hosted_agent.get("max_steps"), int)
+        and 1 <= self_hosted_agent["max_steps"] <= 200
+        and isinstance(self_hosted_agent.get("model_timeout_seconds"), (int, float))
+        and self_hosted_agent["model_timeout_seconds"] > 0
+        and isinstance(self_hosted_agent.get("tool_timeout_seconds"), (int, float))
+        and self_hosted_agent["tool_timeout_seconds"] > 0
+        and isinstance(self_hosted_agent.get("max_file_bytes"), int)
+        and self_hosted_agent["max_file_bytes"] >= 1024
+        and isinstance(self_hosted_agent.get("max_tool_output_chars"), int)
+        and self_hosted_agent["max_tool_output_chars"] >= 1024
+        and isinstance(deepseek.get("api_base_url"), str)
+        and deepseek["api_base_url"].startswith("https://")
+        and isinstance(deepseek.get("model"), str)
+        and bool(deepseek["model"].strip())
+        and isinstance(deepseek.get("timeout_seconds"), (int, float))
+        and deepseek["timeout_seconds"] > 0
+        and isinstance(deepseek.get("max_retries"), int)
+        and 0 <= deepseek["max_retries"] <= 10
+        and isinstance(deepseek.get("retry_backoff_seconds"), (int, float))
+        and deepseek["retry_backoff_seconds"] >= 0
+        and isinstance(deepseek.get("max_retry_backoff_seconds"), (int, float))
+        and deepseek["max_retry_backoff_seconds"] >= deepseek["retry_backoff_seconds"]
+        and isinstance(deepseek.get("api_key_environment_variable"), str)
+        and bool(deepseek["api_key_environment_variable"].strip())
+        and isinstance(deepseek.get("supported_execution_profiles"), list)
+        and bool(deepseek["supported_execution_profiles"])
+        and all(profile in EXECUTION_PROFILES for profile in deepseek["supported_execution_profiles"])
         and priority_policy.get("levels") == list(PRIORITIES)
         and all(priority in PRIORITIES for priority in project_defaults.values())
         and isinstance(dashboard.get("host"), str)
@@ -146,7 +190,10 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and automations["worker_interval_minutes"] >= 1
         and isinstance(automations.get("entry_prompt_template"), str)
         and "{profile}" in automations["entry_prompt_template"]
+        and automations.get("runtime_environment") == "codex_automation"
+        and "codex_automation" in automations["entry_prompt_template"]
         and valid_profile_config
+        and valid_runtime_environment_config
         and health.get("scheduler") == "windows_task_scheduler"
         and isinstance(health.get("task_name"), str)
         and bool(health["task_name"].strip())
@@ -194,6 +241,11 @@ def connect(path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
 
 
 def initialize_schema(database: sqlite3.Connection) -> None:
+    current = int(database.execute("PRAGMA user_version").fetchone()[0])
+    if current not in {0, SCHEMA_USER_VERSION}:
+        raise LoopError(
+            f"数据库 Schema 不是当前版本: user_version={current}；请先运行 loopctl.py migrate"
+        )
     database.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
@@ -202,18 +254,27 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
     if current == SCHEMA_USER_VERSION:
         return {
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
-            "archived": 0, "profiles_backfilled": 0,
+            "archived": 0, "profiles_backfilled": 0, "runtime_environments_backfilled": 0,
         }
-    if current not in {LEGACY_SCHEMA_USER_VERSION, ARCHIVE_SCHEMA_USER_VERSION}:
+    supported_versions = {
+        LEGACY_SCHEMA_USER_VERSION,
+        ARCHIVE_SCHEMA_USER_VERSION,
+        ROUTING_SCHEMA_USER_VERSION,
+    }
+    if current not in supported_versions:
         raise LoopError(
             "不支持的 Schema 迁移: "
-            f"user_version={current}, expected={LEGACY_SCHEMA_USER_VERSION} or {ARCHIVE_SCHEMA_USER_VERSION}"
+            f"user_version={current}, expected one of {sorted(supported_versions)}"
         )
     active = int(database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0])
     if active:
         raise LoopError(f"Schema 迁移要求没有活动 execution，当前为 {active}")
 
-    source_version = "3.0.0" if current == LEGACY_SCHEMA_USER_VERSION else "3.1.0"
+    source_version = {
+        LEGACY_SCHEMA_USER_VERSION: "3.0.0",
+        ARCHIVE_SCHEMA_USER_VERSION: "3.1.0",
+        ROUTING_SCHEMA_USER_VERSION: "3.2.0",
+    }[current]
     database.execute("PRAGMA foreign_keys = OFF")
     try:
         transaction(database)
@@ -238,15 +299,16 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
 
         task_count = int(database.execute("SELECT count(*) FROM tasks").fetchone()[0])
         database.execute(TASKS_TABLE_SQL)
+        profile_expression = "execution_profile" if current == ROUTING_SCHEMA_USER_VERSION else "'standard'"
         database.execute(
-            """INSERT INTO tasks_new(
-              id, title, description, status, priority, execution_profile, assigned_agent,
+            f"""INSERT INTO tasks_new(
+              id, title, description, status, priority, execution_profile, runtime_environment, assigned_agent,
               created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
               progress_percent, progress_summary, progress_next_step, result_summary, result_error,
               human_required, human_question, human_options_json, human_requested_at,
               human_responded_at, human_response, row_version
             ) SELECT
-              id, title, description, status, priority, 'standard', assigned_agent,
+              id, title, description, status, priority, {profile_expression}, 'codex_automation', assigned_agent,
               created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
               progress_percent, progress_summary, progress_next_step, result_summary, result_error,
               human_required, human_question, human_options_json, human_requested_at,
@@ -256,7 +318,7 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
         database.execute("DROP TABLE tasks")
         database.execute("ALTER TABLE tasks_new RENAME TO tasks")
         database.execute(
-            "CREATE INDEX idx_tasks_queue ON tasks(status, execution_profile, priority, created_at, id)"
+            "CREATE INDEX idx_tasks_queue ON tasks(status, runtime_environment, execution_profile, priority, created_at, id)"
         )
         database.execute(
             "CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)"
@@ -278,7 +340,8 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
         "to": SCHEMA_VERSION,
         "migrated": True,
         "archived": len(confirmed),
-        "profiles_backfilled": task_count,
+        "profiles_backfilled": 0 if current == ROUTING_SCHEMA_USER_VERSION else task_count,
+        "runtime_environments_backfilled": task_count,
     }
 
 
@@ -446,10 +509,13 @@ def insert_task(
     status = task.get("status", "PENDING")
     priority = task.get("priority", "medium")
     execution_profile = task.get("execution_profile", "standard")
+    runtime_environment = task.get("runtime_environment")
     if priority not in PRIORITIES:
         raise LoopError(f"任务优先级无效: {priority}")
     if execution_profile not in EXECUTION_PROFILES:
         raise LoopError(f"执行档位无效: {execution_profile}")
+    if runtime_environment not in RUNTIME_ENVIRONMENTS:
+        raise LoopError(f"运行环境无效: {runtime_environment}")
     stamp = task.get("created_at") or now_shanghai()
     progress = task.get("progress") or {}
     result = task.get("result") or {}
@@ -457,17 +523,17 @@ def insert_task(
     database.execute(
         """
         INSERT INTO tasks(
-          id, title, description, status, priority, execution_profile, assigned_agent,
+          id, title, description, status, priority, execution_profile, runtime_environment, assigned_agent,
           created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
           progress_percent, progress_summary, progress_next_step,
           result_summary, result_error,
           human_required, human_question, human_options_json,
           human_requested_at, human_responded_at, human_response, row_version
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             task_id, str(task.get("title") or task_id), str(task.get("description") or ""),
-            status, priority, execution_profile, task.get("assigned_agent"), stamp,
+            status, priority, execution_profile, runtime_environment, task.get("assigned_agent"), stamp,
             task.get("started_at"), task.get("updated_at") or stamp, task.get("heartbeat_at"),
             task.get("completed_at"), task.get("archived_at"), int(task.get("attempt", 0)),
             int(progress.get("percent", 0)),
@@ -536,7 +602,8 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": task_id, "title": row["title"], "description": row["description"],
         "status": row["status"], "priority": row["priority"],
-        "execution_profile": row["execution_profile"], "assigned_agent": row["assigned_agent"],
+        "execution_profile": row["execution_profile"], "runtime_environment": row["runtime_environment"],
+        "assigned_agent": row["assigned_agent"],
         "created_at": row["created_at"], "started_at": row["started_at"], "updated_at": row["updated_at"],
         "heartbeat_at": row["heartbeat_at"], "completed_at": row["completed_at"],
         "archived_at": row["archived_at"], "attempt": row["attempt"],
@@ -582,7 +649,7 @@ def current_revision(database: sqlite3.Connection) -> int:
 def state_payload(database: sqlite3.Connection, config: dict[str, Any] | None = None) -> dict[str, Any]:
     value = config or load_initialization_config()
     executions = database.execute(
-        "SELECT e.execution_id, e.task_id, e.heartbeat_at, t.execution_profile "
+        "SELECT e.execution_id, e.task_id, e.heartbeat_at, t.execution_profile, t.runtime_environment "
         "FROM executions e JOIN tasks t ON t.id=e.task_id "
         "WHERE e.status='RUNNING' ORDER BY e.started_at"
     ).fetchall()
@@ -590,7 +657,8 @@ def state_payload(database: sqlite3.Connection, config: dict[str, Any] | None = 
         "id": row["execution_id"], "role": "worker", "status": "RUNNING",
         "current_task_id": row["task_id"], "last_seen_at": row["heartbeat_at"],
         "execution_profile": row["execution_profile"],
-        "summary": f"Concurrent SQLite worker · {row['execution_profile']}",
+        "runtime_environment": row["runtime_environment"],
+        "summary": f"Concurrent SQLite worker · {row['runtime_environment']} · {row['execution_profile']}",
     } for row in executions]
     updated = database.execute("SELECT max(updated_at) FROM tasks").fetchone()[0] or now_shanghai()
     workspace = value["workspace"]
@@ -667,6 +735,11 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
     ).fetchall()
     if invalid_profiles:
         errors.append("任务执行档位无效: " + ",".join(row[0] for row in invalid_profiles))
+    invalid_runtime_environments = database.execute(
+        "SELECT id FROM tasks WHERE runtime_environment NOT IN ('codex_automation','codex_cli','deepseek')"
+    ).fetchall()
+    if invalid_runtime_environments:
+        errors.append("任务运行环境无效: " + ",".join(row[0] for row in invalid_runtime_environments))
     dependency_cycle = dependency_cycle_path(database)
     if dependency_cycle:
         errors.append("循环依赖: " + " -> ".join(dependency_cycle))

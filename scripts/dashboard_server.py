@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import sqlite3
+import subprocess
 import sys
 import threading
 from http import HTTPStatus
@@ -15,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 sys.dont_write_bytecode = True
 
 from loopdb import (
+    ARCHIVABLE_STATUSES,
     BASE_DIR,
     CONFIG_PATH,
     DEFAULT_DB,
@@ -28,6 +31,9 @@ from loopdb import (
 
 
 HEALTH_STATE = BASE_DIR / "runtime" / "health-state.json"
+TASK_ACTION_PATH = "/api/task-action"
+TASK_ID_PATTERN = re.compile(r"[A-Z][A-Z0-9_-]*\Z")
+MAX_ACTION_BODY_BYTES = 4096
 IMAGE_CONTENT_TYPES = {
     ".avif": "image/avif",
     ".gif": "image/gif",
@@ -36,6 +42,99 @@ IMAGE_CONTENT_TYPES = {
     ".png": "image/png",
     ".webp": "image/webp",
 }
+
+
+class DashboardActionError(Exception):
+    def __init__(self, status: HTTPStatus, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def run_loopctl(database_path: Path, arguments: list[str]) -> dict[str, object]:
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(BASE_DIR / "scripts" / "loopctl.py"), "--db", str(database_path), *arguments],
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="strict",
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as error:
+        raise DashboardActionError(HTTPStatus.SERVICE_UNAVAILABLE, "任务状态服务执行失败") from error
+    try:
+        payload = json.loads(completed.stdout)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise DashboardActionError(HTTPStatus.SERVICE_UNAVAILABLE, "任务状态服务返回无效") from error
+    if not isinstance(payload, dict):
+        raise DashboardActionError(HTTPStatus.SERVICE_UNAVAILABLE, "任务状态服务返回无效")
+    if completed.returncode != 0 or payload.get("outcome") == "ERROR":
+        message = payload.get("message")
+        raise DashboardActionError(
+            HTTPStatus.CONFLICT,
+            str(message) if isinstance(message, str) and message else "任务状态已变化，请刷新后重试",
+        )
+    return payload
+
+
+def archive_dashboard_task(
+    database_path: Path,
+    task_id: object,
+    action: object,
+    row_version: object,
+) -> dict[str, object]:
+    if not isinstance(task_id, str) or TASK_ID_PATTERN.fullmatch(task_id) is None:
+        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "task_id 无效")
+    if action != "archive":
+        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "action 仅支持 archive")
+    if isinstance(row_version, bool) or not isinstance(row_version, int) or row_version < 1:
+        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "row_version 无效")
+
+    database = connect(database_path)
+    try:
+        task = database.execute(
+            "SELECT status, archived_at, row_version FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()
+    finally:
+        database.close()
+    if task is None:
+        raise DashboardActionError(HTTPStatus.NOT_FOUND, "任务不存在")
+    if task["row_version"] != row_version:
+        raise DashboardActionError(HTTPStatus.CONFLICT, "任务状态已变化，请刷新后重试")
+    if task["archived_at"] is not None:
+        raise DashboardActionError(HTTPStatus.CONFLICT, "任务已经归档，请刷新列表")
+
+    confirmed = False
+    expected_row_version = row_version
+    if task["status"] == "SUCCEEDED":
+        confirmation = run_loopctl(
+            database_path,
+            [
+                "confirm",
+                task_id,
+                "--reason",
+                "Dashboard 人工确认并归档。",
+                "--expected-row-version",
+                str(expected_row_version),
+            ],
+        )
+        expected_row_version = int(confirmation["row_version"])
+        confirmed = True
+    elif task["status"] not in ARCHIVABLE_STATUSES:
+        raise DashboardActionError(HTTPStatus.CONFLICT, "当前任务状态不允许归档，请刷新后重试")
+
+    archived = run_loopctl(
+        database_path,
+        [
+            "archive",
+            task_id,
+            "--reason",
+            "Dashboard 人工归档任务。",
+            "--expected-row-version",
+            str(expected_row_version),
+        ],
+    )
+    return {"ok": True, "confirmed": confirmed, **archived}
 
 
 def runtime_health() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -193,6 +292,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
+
+    def do_POST(self) -> None:
+        if urlparse(self.path).path != TASK_ACTION_PATH:
+            self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self.send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"ok": False, "error": "Content-Type 必须为 application/json"})
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", ""))
+            if content_length < 1 or content_length > MAX_ACTION_BODY_BYTES:
+                raise ValueError
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8", errors="strict"))
+            if not isinstance(payload, dict) or set(payload) != {"task_id", "action", "row_version"}:
+                raise DashboardActionError(
+                    HTTPStatus.BAD_REQUEST,
+                    "请求必须且只能包含 task_id、action 和 row_version",
+                )
+            result = archive_dashboard_task(
+                self.server.database_path,
+                payload["task_id"],
+                payload["action"],
+                payload["row_version"],
+            )
+            self.send_json(HTTPStatus.OK, result)
+        except DashboardActionError as error:
+            self.send_json(error.status, {"ok": False, "error": str(error)})
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求 JSON 无效"})
+        except (sqlite3.Error, OSError) as error:
+            self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
 
 
 def parser() -> argparse.ArgumentParser:

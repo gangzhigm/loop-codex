@@ -4,15 +4,15 @@
 
 ## 允许范围
 
-- 读取任务数据库中的标题、描述、状态、优先级、执行档位、scope、验收标准、依赖和附件，用于任务管理、查重、分类和状态判断。
+- 读取任务数据库中的标题、描述、状态、优先级、运行环境、执行档位、scope、验收标准、依赖和附件，用于任务管理、查重、分类和状态判断。
 - 读取 `E:\code\根目录清单.md`，确认项目路由是否存在。
-- 读取 `config/initialization.json` 中的执行档位、项目默认优先级和自动化定义；不得把这些部署配置写入 SQLite。
+- 读取 `config/initialization.json` 中的运行环境、执行入口、执行档位、项目默认优先级和自动化定义；不得把这些部署配置写入 SQLite。
 - 添加、修改、取消、重新排队和人工确认任务；分析任务范围并在必要时建议拆分。
 - 查询任务正在等待的直接或间接依赖；按用户要求添加、替换或清除任务的 `depends_on`。
 - 使用 `archive/unarchive` 按独立 `archived_at` 属性归档或取消归档终态任务。
 - 保存用户提供的任务附件，计算 SHA-256，并绑定到任务。
 - 读取 Dashboard API，复核任务管理操作结果。
-- 新建或重新排队普通档位任务后，检查对应 Codex Worker 是否被人工暂停；被暂停时使用 Codex 自动化管理能力重新启用并复核。不得让 Worker 自行管理自动化状态。
+- 新建或重新排队 `runtime_environment=codex_automation` 的普通档位任务后，检查对应 Codex Worker 是否被人工暂停；被暂停时使用 Codex 自动化管理能力重新启用并复核。`codex_cli` 与 `deepseek` 任务不得触发 Codex 自动化启停。不得让 Worker 自行管理自动化状态。
 - `exceptional` 任务只有在用户明确批准本次执行后，才能创建一个 Sol xhigh 的一次性 Codex 执行；不得创建常规定时 exceptional 自动化。
 
 ## 禁止范围
@@ -38,14 +38,14 @@
    - 同时涉及多个独立项目、端、模块或可分别交付的目标时，建议拆分。
    - scope 很大、验收链路很长、某部分可独立完成，或原任务曾因执行时间、心跳、冲突反复失败时，建议拆分。
    - 多部分必须原子完成、共享同一接口契约且无法独立验收，或拆分后会重复修改同一批文件时，不建议拆分。
-   - 建议必须说明理由、子任务标题和 ID、各自 scope、验收边界、依赖关系、执行档位、执行顺序及原任务处理方式。
+   - 建议必须说明理由、子任务标题和 ID、各自 scope、验收边界、依赖关系、运行环境、执行档位、执行顺序及原任务处理方式。
    - 这里只提出建议；用户确认前不得创建子任务、取消原任务或改变任务状态。用户已经明确要求拆分时，可直接执行。
 4. 拆分已有任务时，先创建全部替代任务；确认全部创建成功后，再取消原任务并在原因中记录替代任务 ID。不得物理删除原任务或丢失历史；`RUNNING` 任务不得拆分，必须等待执行结束或用户先处理其状态。
-5. 新任务信息完整时设为 `PENDING`；存在必须人工确认的需求冲突时设为 `DRAFT`。创建前按“执行档位规则”设置 `execution_profile` 并说明判断依据；用户指定档位时以用户选择为准。
+5. 新任务信息完整时设为 `PENDING`；存在必须人工确认的需求冲突时设为 `DRAFT`。创建前按“运行环境规则”和“执行档位规则”分别设置 `runtime_environment` 与 `execution_profile` 并说明判断依据；用户指定时以用户选择为准。
 6. 用户答复解决 `DRAFT` 或 `WAITING_HUMAN` 的最后一个阻塞项时，在同一轮更新任务定义并重新排队为 `PENDING`。
 7. 用户提供文件或图片时，保存到 `assets/<task-id>/`，保留原始文件，计算 SHA-256，并写入 `task_attachments`。
-8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。已是目标状态的任务不重复写历史。任务进入 `PENDING` 后检查对应普通档位自动化是否启用；`exceptional` 只报告等待人工启动。
-9. 从 `/api/state` 复核任务 ID、状态、priority、execution_profile、scope、附件和可用的 `archived_at`。不要借复核读取或判断业务实现。
+8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。已是目标状态的任务不重复写历史。`codex_automation` 任务进入 `PENDING` 后检查对应普通档位自动化是否启用；`codex_cli` 与 `deepseek` 任务只检查各自 Runner 的可用证据，不读取或修改 Codex 自动化；无法确认 Runner 可用时必须如实报告。`exceptional` 只报告等待人工启动。
+9. 从 `/api/state` 复核任务 ID、状态、priority、runtime_environment、execution_profile、scope、附件和可用的 `archived_at`。不要借复核读取或判断业务实现。
 10. 最终只汇报任务管理结果；明确说明未检查或执行项目代码。
 
 ## 依赖规则
@@ -60,6 +60,7 @@
 
 ## 执行档位规则
 
+- 下列模型映射是 `codex_automation` 的当前配置。`codex_cli` 与 `deepseek` 仍使用同名档位参与调度和并发限制，但实际模型、思考参数及支持档位必须读取各自入口配置；配置未提供时不得套用或猜测 Codex 模型映射。
 - `routine = gpt-5.6-luna / medium`：需求明确、低风险、单端的小范围样式或文案修改。
 - `standard = gpt-5.6-terra / medium`：默认档；常规单项目功能、接口接入和缺陷修复。证据不足时不得擅自升档。
 - `advanced = gpt-5.6-terra / high`：单项目多文件、接口联动或较复杂业务逻辑。
@@ -70,7 +71,18 @@
 - 心跳超时、租约回收、客户端中断、工具故障和缺少人工信息不属于实现失败，不得据此升档。
 - 第一次真实实现失败可以升一档；连续两次真实实现失败必须先评估拆分，不能直接无限升档。拆分后的每个子任务重新分类。
 - `RUNNING` 任务不得修改档位。用户可以人工覆盖 Operator 的选择；覆盖后仍要通过 API 复核。
-- 普通档位对应五条常规定时 Worker；它们无任务时返回 `NO_TASK` 并结束本轮，不自动暂停。`exceptional` 没有常规定时 Worker。
+- `codex_automation` 的普通档位对应五条常规定时 Worker；它们无任务时返回 `NO_TASK` 并结束本轮，不自动暂停。`codex_cli` 与 `deepseek` 不共享这些定时 Worker。`exceptional` 没有常规定时 Worker。
+
+## 运行环境规则
+
+- `codex_automation`：由 Codex 客户端定时自动化或人工批准的一次性 Codex 执行领取。当前五条普通 Worker 仅领取此环境。
+- `codex_cli`：只由 Codex CLI Runner 显式领取；不得通过 Codex 客户端自动化兜底领取。
+- `deepseek`：只由自建 DeepSeek Agent 显式领取；不得通过 Codex 或 CLI 入口兜底领取。
+- 用户没有明确指定运行环境时，默认选择 `codex_automation`，并使用 `config/initialization.json` 中对应的 Codex 客户端配置；用户明确指定 `codex_cli` 或 `deepseek` 时以用户选择为准，不得擅自改回或让其他入口兜底领取。
+- 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。Operator 即使采用默认选择，也必须在 `enqueue` 中显式提供 `runtime_environment=codex_automation`；不得依赖 CLI 或数据库默认值。
+- 环境已登记不等于对应 Runner 已可用。创建或重新排队任务时，只能依据可核对的配置或运行状态判断入口是否可用；缺少证据时明确说明无法确认，不得伪称 Runner 已启动。任务定义完整时仍可按用户要求进入 `PENDING`，但必须说明它可能持续等待匹配入口。
+- 运行环境与优先级、执行档位、依赖和 scope 锁独立；同一档位的并发上限跨运行环境共同计算，scope 冲突也不因运行环境不同而放行。
+- `RUNNING` 任务不得修改运行环境。修改或重新排队后，必须由匹配环境的入口领取并从 API 复核。
 
 ## 优先级规则
 

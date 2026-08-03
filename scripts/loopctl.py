@@ -20,6 +20,7 @@ from loopdb import (
     EXECUTION_PROFILES,
     FINAL_EXECUTION_STATUSES,
     PRIORITIES,
+    RUNTIME_ENVIRONMENTS,
     LoopError,
     all_tasks,
     bump_revision,
@@ -71,6 +72,12 @@ def read_json_source(source: str) -> Any:
     return read_json(Path(source).resolve())
 
 
+def require_expected_row_version(args: argparse.Namespace, actual: int) -> None:
+    expected = getattr(args, "expected_row_version", None)
+    if expected is not None and expected != actual:
+        raise LoopError(f"任务已发生并发变化：expected row_version={expected}, actual={actual}")
+
+
 def backup_legacy(tasks_path: Path, inbox_path: Path, backup_root: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     destination = backup_root / f"sqlite-migration-{stamp}"
@@ -82,6 +89,7 @@ def backup_legacy(tasks_path: Path, inbox_path: Path, backup_root: Path) -> Path
 
 def normalize_legacy_task(task: dict[str, Any]) -> dict[str, Any]:
     normalized = json.loads(json.dumps(task, ensure_ascii=False))
+    normalized.setdefault("runtime_environment", "codex_automation")
     old_status = normalized.get("status", "PENDING")
     mapped = LEGACY_STATUS_MAP.get(old_status, old_status)
     if old_status == "RUNNING":
@@ -156,6 +164,7 @@ def command_init(args: argparse.Namespace) -> None:
             stamp = now_shanghai()
             task = {
                 **item,
+                "runtime_environment": item.get("runtime_environment", "codex_automation"),
                 "status": item.get("status", "PENDING"),
                 "created_at": stamp,
                 "updated_at": stamp,
@@ -367,6 +376,7 @@ def command_claim(args: argparse.Namespace) -> None:
             commit(database)
             output({
                 "outcome": "SLOT_FULL", "limit_scope": "global", "profile": args.profile,
+                "runtime_environment": args.runtime_environment,
                 "active": active, "maximum": maximum, "recovered": recovered,
             })
             return
@@ -380,6 +390,7 @@ def command_claim(args: argparse.Namespace) -> None:
             commit(database)
             output({
                 "outcome": "SLOT_FULL", "limit_scope": "profile", "profile": args.profile,
+                "runtime_environment": args.runtime_environment,
                 "active": active, "maximum": maximum, "profile_active": profile_active,
                 "profile_maximum": profile_maximum, "recovered": recovered,
             })
@@ -387,10 +398,10 @@ def command_claim(args: argparse.Namespace) -> None:
         if database.execute("SELECT 1 FROM executions WHERE execution_id=?", (args.execution_id,)).fetchone():
             raise LoopError("execution-id 已存在")
         candidates = database.execute(
-            "SELECT * FROM tasks WHERE status='PENDING' AND execution_profile=? ORDER BY "
+            "SELECT * FROM tasks WHERE status='PENDING' AND runtime_environment=? AND execution_profile=? ORDER BY "
             "CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
             "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id",
-            (args.profile,),
+            (args.runtime_environment, args.profile),
         ).fetchall()
         task_row = None
         scopes: list[sqlite3.Row] = []
@@ -415,6 +426,8 @@ def command_claim(args: argparse.Namespace) -> None:
                 output(
                     {
                         "outcome": "CONFLICT",
+                        "profile": args.profile,
+                        "runtime_environment": args.runtime_environment,
                         "task_id": deferred_conflicts[0]["task_id"],
                         "conflicts": deferred_conflicts[0]["conflicts"],
                         "deferred_conflicts": deferred_conflicts,
@@ -426,7 +439,8 @@ def command_claim(args: argparse.Namespace) -> None:
                 return
             commit(database)
             output({
-                "outcome": "NO_TASK", "profile": args.profile, "active": active,
+                "outcome": "NO_TASK", "profile": args.profile,
+                "runtime_environment": args.runtime_environment, "active": active,
                 "recovered": recovered, "requeued": requeued,
             })
             return
@@ -477,6 +491,7 @@ def command_claim(args: argparse.Namespace) -> None:
                 "active": active + 1,
                 "maximum": maximum,
                 "profile": args.profile,
+                "runtime_environment": args.runtime_environment,
                 "profile_active": profile_active + 1,
                 "profile_maximum": profile_maximum,
                 "revision": revision,
@@ -612,7 +627,11 @@ def command_confirm(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        task = database.execute("SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)).fetchone()
+        task = database.execute(
+            "SELECT status, archived_at, row_version FROM tasks WHERE id=?", (args.task_id,)
+        ).fetchone()
+        if task:
+            require_expected_row_version(args, task["row_version"])
         if not task or task["status"] != "SUCCEEDED":
             raise LoopError("只有 SUCCEEDED 任务可以人工确认")
         if task["archived_at"] is not None:
@@ -632,7 +651,14 @@ def command_confirm(args: argparse.Namespace) -> None:
         )
         revision = bump_revision(database, "human-review")
         commit(database)
-        output({"outcome": "CONFIRMED", "task_id": args.task_id, "revision": revision})
+        output(
+            {
+                "outcome": "CONFIRMED",
+                "task_id": args.task_id,
+                "row_version": task["row_version"] + 1,
+                "revision": revision,
+            }
+        )
     except Exception:
         rollback(database)
         raise
@@ -645,10 +671,11 @@ def command_archive(args: argparse.Namespace) -> None:
     try:
         transaction(database)
         task = database.execute(
-            "SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)
+            "SELECT status, archived_at, row_version FROM tasks WHERE id=?", (args.task_id,)
         ).fetchone()
         if not task:
             raise LoopError("任务不存在")
+        require_expected_row_version(args, task["row_version"])
         if task["status"] not in ARCHIVABLE_STATUSES:
             allowed = "、".join(sorted(ARCHIVABLE_STATUSES))
             raise LoopError(f"只有终态任务可以归档；允许状态：{allowed}")
@@ -660,13 +687,17 @@ def command_archive(args: argparse.Namespace) -> None:
                     "task_id": args.task_id,
                     "status": task["status"],
                     "archived_at": task["archived_at"],
+                    "row_version": task["row_version"],
                     "revision": bump_revision(database, "task-manager"),
                 }
             )
             return
         stamp = now_shanghai()
         reason = args.reason or "人工归档任务。"
-        database.execute("UPDATE tasks SET archived_at=? WHERE id=?", (stamp, args.task_id))
+        database.execute(
+            "UPDATE tasks SET archived_at=?, row_version=row_version+1 WHERE id=?",
+            (stamp, args.task_id),
+        )
         database.execute(
             "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
             "VALUES(?, ?, ?, ?, 'task-manager', ?)",
@@ -680,6 +711,7 @@ def command_archive(args: argparse.Namespace) -> None:
                 "task_id": args.task_id,
                 "status": task["status"],
                 "archived_at": stamp,
+                "row_version": task["row_version"] + 1,
                 "revision": revision,
             }
         )
@@ -782,7 +814,7 @@ def command_enqueue(args: argparse.Namespace) -> None:
 
 def command_update(args: argparse.Namespace) -> None:
     patch = read_json(Path(args.file).resolve())
-    allowed = {"title", "description", "priority", "execution_profile"}
+    allowed = {"title", "description", "priority", "execution_profile", "runtime_environment"}
     unknown = set(patch) - allowed - {"scope", "depends_on", "acceptance"}
     if unknown:
         raise LoopError("不支持的更新字段: " + ", ".join(sorted(unknown)))
@@ -800,10 +832,12 @@ def command_update(args: argparse.Namespace) -> None:
             raise LoopError(f"任务优先级无效: {patch['priority']}")
         if "execution_profile" in patch and patch["execution_profile"] not in EXECUTION_PROFILES:
             raise LoopError(f"执行档位无效: {patch['execution_profile']}")
+        if "runtime_environment" in patch and patch["runtime_environment"] not in RUNTIME_ENVIRONMENTS:
+            raise LoopError(f"运行环境无效: {patch['runtime_environment']}")
         stamp = now_shanghai()
         assignments: list[str] = []
         values: list[Any] = []
-        for field in ("title", "description", "priority", "execution_profile"):
+        for field in ("title", "description", "priority", "execution_profile", "runtime_environment"):
             if field in patch:
                 assignments.append(f"{field}=?")
                 values.append(patch[field])
@@ -948,6 +982,7 @@ def parser() -> argparse.ArgumentParser:
     claim = commands.add_parser("claim")
     claim.add_argument("execution_id")
     claim.add_argument("--profile", required=True, choices=EXECUTION_PROFILES)
+    claim.add_argument("--runtime-environment", required=True, choices=RUNTIME_ENVIRONMENTS)
     claim.set_defaults(handler=command_claim)
     heartbeat = commands.add_parser("heartbeat")
     heartbeat.add_argument("execution_id")
@@ -961,10 +996,12 @@ def parser() -> argparse.ArgumentParser:
     confirm = commands.add_parser("confirm")
     confirm.add_argument("task_id")
     confirm.add_argument("--reason")
+    confirm.add_argument("--expected-row-version", type=int)
     confirm.set_defaults(handler=command_confirm)
     archive = commands.add_parser("archive")
     archive.add_argument("task_id")
     archive.add_argument("--reason")
+    archive.add_argument("--expected-row-version", type=int)
     archive.set_defaults(handler=command_archive)
     unarchive = commands.add_parser("unarchive")
     unarchive.add_argument("task_id")

@@ -1,5 +1,5 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 30200;
+PRAGMA user_version = 30300;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),
   execution_profile TEXT NOT NULL DEFAULT 'standard' CHECK (execution_profile IN (
     'routine', 'standard', 'advanced', 'deep', 'complex', 'exceptional'
+  )),
+  runtime_environment TEXT NOT NULL CHECK (runtime_environment IN (
+    'codex_automation', 'codex_cli', 'deepseek'
   )),
   assigned_agent TEXT,
   created_at TEXT NOT NULL,
@@ -129,7 +132,7 @@ CREATE TABLE IF NOT EXISTS task_conflicts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_queue
-  ON tasks(status, execution_profile, priority, created_at, id);
+  ON tasks(status, runtime_environment, execution_profile, priority, created_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_tasks_archived
   ON tasks(archived_at, status, updated_at);

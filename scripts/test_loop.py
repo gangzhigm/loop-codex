@@ -17,6 +17,7 @@ from loopdb import (
     ARCHIVABLE_STATUSES,
     DEFAULT_DB,
     EXECUTION_PROFILES,
+    RUNTIME_ENVIRONMENTS,
     SCHEMA_PATH,
     SCHEMA_USER_VERSION,
     all_tasks,
@@ -35,7 +36,7 @@ LOOPCTL = BASE_DIR / "scripts" / "loopctl.py"
 class LoopConcurrencyTests(unittest.TestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["automations"]["worker_interval_minutes"], 10)
+        self.assertEqual(config["automations"]["worker_interval_minutes"], 20)
         self.assertEqual(config["prompts"]["operator"], "prompts/operator.md")
         self.assertEqual(config["prompts"]["worker"], "prompts/worker.md")
         self.assertNotIn("health_interval_minutes", config["automations"])
@@ -45,6 +46,8 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(config["health"]["failure_threshold"], 3)
         self.assertEqual(config["priority_policy"]["levels"], ["blocker", "critical", "high", "medium", "low"])
         self.assertEqual(set(config["automations"]["profiles"]), set(EXECUTION_PROFILES))
+        self.assertEqual(set(config["runtime_environments"]), set(RUNTIME_ENVIRONMENTS))
+        self.assertEqual(config["automations"]["runtime_environment"], "codex_automation")
         self.assertEqual(
             config["task_execution"]["profile_parallel_limits"],
             {"routine": 2, "standard": 3, "advanced": 2, "deep": 1, "complex": 1, "exceptional": 1},
@@ -67,6 +70,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         project: str,
         priority: str = "medium",
         execution_profile: str = "standard",
+        runtime_environment: str = "codex_automation",
     ) -> None:
         database = connect(self.db_path)
         insert_task(
@@ -78,6 +82,7 @@ class LoopConcurrencyTests(unittest.TestCase):
                 "status": "PENDING",
                 "priority": priority,
                 "execution_profile": execution_profile,
+                "runtime_environment": runtime_environment,
                 "created_at": now_shanghai(),
                 "scope": [f"{project}/file.txt"],
                 "acceptance": ["test"],
@@ -108,14 +113,26 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
         return json.loads(completed.stdout)
 
-    def claim(self, execution_id: str, profile: str = "standard") -> dict[str, object]:
-        return self.run_ctl("claim", execution_id, "--profile", profile)
+    def claim(
+        self,
+        execution_id: str,
+        profile: str = "standard",
+        runtime_environment: str = "codex_automation",
+    ) -> dict[str, object]:
+        return self.run_ctl(
+            "claim",
+            execution_id,
+            "--profile",
+            profile,
+            "--runtime-environment",
+            runtime_environment,
+        )
 
-    def run_ctl_error(self, *arguments: str) -> dict[str, object]:
+    def run_ctl_error(self, *arguments: str, db_path: Path | None = None) -> dict[str, object]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         completed = subprocess.run(
-            [sys.executable, str(LOOPCTL), "--db", str(self.db_path), *arguments],
+            [sys.executable, str(LOOPCTL), "--db", str(db_path or self.db_path), *arguments],
             cwd=BASE_DIR,
             check=False,
             capture_output=True,
@@ -146,13 +163,14 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(tables, ALLOWED_TABLES)
         self.assertEqual(DEFAULT_DB, BASE_DIR / "data" / "loop-agent.sqlite3")
 
-    def test_fresh_schema_has_archived_at_and_current_version(self) -> None:
+    def test_fresh_schema_has_routing_fields_and_current_version(self) -> None:
         database = connect(self.db_path)
         columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)").fetchall()}
         version = database.execute("PRAGMA user_version").fetchone()[0]
         database.close()
         self.assertIn("archived_at", columns)
         self.assertIn("execution_profile", columns)
+        self.assertIn("runtime_environment", columns)
         self.assertEqual(version, SCHEMA_USER_VERSION)
 
     def test_six_parallel_claims_and_seventh_slot_full(self) -> None:
@@ -189,6 +207,53 @@ class LoopConcurrencyTests(unittest.TestCase):
         result = self.claim("routine-only", "routine")
         self.assertEqual(result["task"]["id"], "ROUTINE-LOW")
         self.assertEqual(result["task"]["execution_profile"], "routine")
+
+    def test_claim_isolated_by_runtime_environment(self) -> None:
+        self.add_task("AUTOMATION-BLOCKER", "project-1", "blocker", runtime_environment="codex_automation")
+        self.add_task("CLI-LOW", "project-2", "low", runtime_environment="codex_cli")
+        result = self.claim("cli-only", runtime_environment="codex_cli")
+        self.assertEqual(result["task"]["id"], "CLI-LOW")
+        self.assertEqual(result["task"]["runtime_environment"], "codex_cli")
+        self.assertEqual(result["runtime_environment"], "codex_cli")
+        state = self.run_ctl("state")
+        agent = next(item for item in state["agents"] if item["id"] == "cli-only")
+        self.assertEqual(agent["runtime_environment"], "codex_cli")
+
+    def test_claim_requires_explicit_runtime_environment(self) -> None:
+        self.add_task("EXPLICIT-ENV", "project-1")
+        completed = subprocess.run(
+            [sys.executable, str(LOOPCTL), "--db", str(self.db_path), "claim", "missing-env", "--profile", "standard"],
+            cwd=BASE_DIR,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        database = connect(self.db_path)
+        status = database.execute("SELECT status FROM tasks WHERE id='EXPLICIT-ENV'").fetchone()[0]
+        database.close()
+        self.assertEqual(status, "PENDING")
+
+    def test_profile_limit_is_shared_across_runtime_environments(self) -> None:
+        environments = ["codex_automation", "codex_cli", "deepseek"]
+        for index, environment in enumerate(environments, start=1):
+            self.add_task(f"ENV-{index}", f"project-{index}", runtime_environment=environment)
+        self.add_task("ENV-4", "project-4", runtime_environment="codex_automation")
+        for index, environment in enumerate(environments, start=1):
+            self.assertEqual(self.claim(f"env-exec-{index}", runtime_environment=environment)["outcome"], "CLAIMED")
+        full = self.claim("env-exec-4", runtime_environment="codex_automation")
+        self.assertEqual(full["outcome"], "SLOT_FULL")
+        self.assertEqual(full["limit_scope"], "profile")
+
+    def test_scope_conflict_is_shared_across_runtime_environments(self) -> None:
+        self.add_task("AUTOMATION-LOCK", "project-1", "critical", runtime_environment="codex_automation")
+        self.add_task("CLI-CONFLICT", "project-1", "high", runtime_environment="codex_cli")
+        self.assertEqual(self.claim("automation-lock")["outcome"], "CLAIMED")
+        conflict = self.claim("cli-conflict", runtime_environment="codex_cli")
+        self.assertEqual(conflict["outcome"], "CONFLICT")
+        self.assertEqual(conflict["task_id"], "CLI-CONFLICT")
 
     def test_blocker_is_first_priority_within_profile(self) -> None:
         self.add_task("OLDER-CRITICAL", "project-1", "critical")
@@ -239,6 +304,7 @@ class LoopConcurrencyTests(unittest.TestCase):
                 "description": "test",
                 "status": "PENDING",
                 "priority": "critical",
+                "runtime_environment": "codex_automation",
                 "created_at": now_shanghai(),
                 "scope": ["project-1/a.txt", "project-1/b.txt", "project-1/sub/c.txt"],
                 "acceptance": ["test"],
@@ -452,6 +518,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(migrated["outcome"], "MIGRATED")
         self.assertEqual(migrated["archived"], 1)
         self.assertEqual(migrated["profiles_backfilled"], 2)
+        self.assertEqual(migrated["runtime_environments_backfilled"], 2)
         database = connect(legacy_path)
         rows = dict(database.execute("SELECT id, archived_at FROM tasks ORDER BY id").fetchall())
         migration_events = database.execute(
@@ -485,15 +552,15 @@ class LoopConcurrencyTests(unittest.TestCase):
 
         migrated = self.run_ctl("migrate", db_path=legacy_path)
         self.assertEqual(migrated["from"], "3.1.0")
-        self.assertEqual(migrated["to"], "3.2.0")
+        self.assertEqual(migrated["to"], "3.3.0")
         self.assertEqual(migrated["archived"], 0)
         self.assertEqual(migrated["profiles_backfilled"], 1)
         database = connect(legacy_path)
         row = database.execute(
-            "SELECT priority, execution_profile FROM tasks WHERE id='SCHEMA-31'"
+            "SELECT priority, execution_profile, runtime_environment FROM tasks WHERE id='SCHEMA-31'"
         ).fetchone()
         database.close()
-        self.assertEqual(tuple(row), ("high", "standard"))
+        self.assertEqual(tuple(row), ("high", "standard", "codex_automation"))
 
     def test_update_profile_is_exposed_by_state(self) -> None:
         self.add_task("PROFILE-UPDATE", "project-1")
@@ -503,6 +570,162 @@ class LoopConcurrencyTests(unittest.TestCase):
         state = self.run_ctl("state")
         task = next(item for item in state["tasks"] if item["id"] == "PROFILE-UPDATE")
         self.assertEqual(task["execution_profile"], "advanced")
+
+    def test_enqueue_and_update_runtime_environment_are_exposed_by_state(self) -> None:
+        task_path = Path(self.temporary.name) / "runtime-task.json"
+        task_path.write_text(
+            json.dumps(
+                {
+                    "id": "RUNTIME-UPDATE",
+                    "title": "runtime update",
+                    "description": "test",
+                    "priority": "medium",
+                    "execution_profile": "standard",
+                    "runtime_environment": "codex_cli",
+                    "scope": ["local-agent-loop/scripts/loopctl.py"],
+                    "acceptance": ["test"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        self.run_ctl("enqueue", str(task_path))
+        patch_path = Path(self.temporary.name) / "runtime-patch.json"
+        patch_path.write_text('{"runtime_environment":"deepseek"}', encoding="utf-8")
+        self.run_ctl("update", "RUNTIME-UPDATE", str(patch_path))
+        state = self.run_ctl("state")
+        task = next(item for item in state["tasks"] if item["id"] == "RUNTIME-UPDATE")
+        self.assertEqual(task["runtime_environment"], "deepseek")
+
+        patch_path.write_text('{"runtime_environment":"unknown"}', encoding="utf-8")
+        error = self.run_ctl_error("update", "RUNTIME-UPDATE", str(patch_path))
+        self.assertIn("运行环境无效", error["message"])
+
+    def test_enqueue_requires_runtime_environment(self) -> None:
+        task_path = Path(self.temporary.name) / "missing-runtime-task.json"
+        task_path.write_text(
+            json.dumps(
+                {
+                    "id": "MISSING-RUNTIME",
+                    "title": "missing runtime",
+                    "scope": ["project-1/file.txt"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        error = self.run_ctl_error("enqueue", str(task_path))
+        self.assertIn("运行环境无效", error["message"])
+
+    def test_migrate_schema_32_preserves_task_data_and_execution_history(self) -> None:
+        schema_32_path = Path(self.temporary.name) / "schema-32.sqlite3"
+        database = connect(schema_32_path)
+        database.executescript(self.schema_32())
+        stamp = "2026-08-03T09:00:00.000+08:00"
+        database.executemany(
+            "INSERT INTO tasks(id, title, description, status, priority, execution_profile, assigned_agent, "
+            "created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt, "
+            "progress_percent, progress_summary, progress_next_step, result_summary, result_error, "
+            "human_required, human_question, human_options_json, human_requested_at, human_responded_at, "
+            "human_response, row_version) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "SCHEMA-32-ROOT", "root", "root task", "SUCCEEDED", "high", "advanced", None,
+                    stamp, stamp, stamp, stamp, stamp, None, 1, 100, "done", None, "root result", None,
+                    0, None, "[]", None, None, None, 3,
+                ),
+                (
+                    "SCHEMA-32-ROUTED", "routed", "routed task", "FAILED", "blocker", "deep", "old-worker",
+                    stamp, stamp, stamp, stamp, stamp, stamp, 2, 100, "failed", None, None, "kept error",
+                    0, None, "[]", None, None, None, 17,
+                ),
+            ],
+        )
+        database.execute(
+            "INSERT INTO task_dependencies(task_id, dependency_id) VALUES('SCHEMA-32-ROUTED', 'SCHEMA-32-ROOT')"
+        )
+        database.execute(
+            "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) "
+            "VALUES('SCHEMA-32-ROUTED', 0, 'local-agent-loop/scripts/loopdb.py', 'project:local-agent-loop')"
+        )
+        database.execute(
+            "INSERT INTO task_acceptance(task_id, ordinal, text) VALUES('SCHEMA-32-ROUTED', 0, 'kept acceptance')"
+        )
+        database.execute(
+            "INSERT INTO task_completed_items(task_id, ordinal, text) VALUES('SCHEMA-32-ROUTED', 0, 'kept completed')"
+        )
+        database.execute(
+            "INSERT INTO task_verifications(task_id, ordinal, text) VALUES('SCHEMA-32-ROUTED', 0, 'kept verification')"
+        )
+        database.execute(
+            "INSERT INTO task_attachments(task_id, ordinal, path, sha256, role, saved_at) "
+            "VALUES('SCHEMA-32-ROUTED', 0, 'assets/file.txt', 'abc', 'result', ?)",
+            (stamp,),
+        )
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES('SCHEMA-32-ROUTED', ?, 'RUNNING', 'FAILED', 'old-worker', 'kept history')",
+            (stamp,),
+        )
+        database.execute(
+            "INSERT INTO executions(execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, "
+            "finished_at, outcome) VALUES('old-execution', 'SCHEMA-32-ROUTED', 'FINISHED', ?, ?, ?, ?, 'FAILED')",
+            (stamp, stamp, stamp, stamp),
+        )
+        child_tables = [
+            "task_dependencies", "task_scopes", "task_acceptance", "task_completed_items",
+            "task_verifications", "task_attachments", "task_history", "executions",
+        ]
+        tasks_before = {
+            row["id"]: dict(row) for row in database.execute("SELECT * FROM tasks ORDER BY id").fetchall()
+        }
+        children_before = {
+            table: [tuple(row) for row in database.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()]
+            for table in child_tables
+        }
+        database.close()
+
+        migrated = self.run_ctl("migrate", db_path=schema_32_path)
+        self.assertEqual(migrated["from"], "3.2.0")
+        self.assertEqual(migrated["to"], "3.3.0")
+        self.assertEqual(migrated["profiles_backfilled"], 0)
+        self.assertEqual(migrated["runtime_environments_backfilled"], 2)
+
+        database = connect(schema_32_path)
+        tasks_after = {
+            row["id"]: dict(row) for row in database.execute("SELECT * FROM tasks ORDER BY id").fetchall()
+        }
+        for task_id, before in tasks_before.items():
+            after = tasks_after[task_id]
+            self.assertEqual(after.pop("runtime_environment"), "codex_automation")
+            self.assertEqual(after, before)
+        children_after = {
+            table: [tuple(row) for row in database.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()]
+            for table in child_tables
+        }
+        database.close()
+        self.assertEqual(children_after, children_before)
+
+        repeated = self.run_ctl("migrate", db_path=schema_32_path)
+        self.assertEqual(repeated["outcome"], "ALREADY_CURRENT")
+
+    def test_migrate_schema_32_rejects_active_execution(self) -> None:
+        schema_32_path = Path(self.temporary.name) / "schema-32-active.sqlite3"
+        database = connect(schema_32_path)
+        database.executescript(self.schema_32())
+        stamp = "2026-08-03T09:00:00.000+08:00"
+        database.execute(
+            "INSERT INTO tasks(id, title, status, priority, execution_profile, created_at, updated_at) "
+            "VALUES('ACTIVE-32', 'active', 'RUNNING', 'critical', 'complex', ?, ?)",
+            (stamp, stamp),
+        )
+        database.execute(
+            "INSERT INTO executions(execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at) "
+            "VALUES('active-execution', 'ACTIVE-32', 'RUNNING', ?, ?, ?)",
+            (stamp, stamp, "2999-01-01T00:00:00.000+08:00"),
+        )
+        database.close()
+        error = self.run_ctl_error("migrate", db_path=schema_32_path)
+        self.assertIn("Schema 迁移要求没有活动 execution", error["message"])
 
     def test_update_rejects_dependency_cycle_with_full_path(self) -> None:
         for index in range(1, 4):
@@ -546,7 +769,7 @@ class LoopConcurrencyTests(unittest.TestCase):
     @staticmethod
     def legacy_schema(user_version: int) -> str:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
-        schema = schema.replace("PRAGMA user_version = 30200;", f"PRAGMA user_version = {user_version};")
+        schema = schema.replace("PRAGMA user_version = 30300;", f"PRAGMA user_version = {user_version};")
         schema = schema.replace(
             "  priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),\n",
             "  priority TEXT NOT NULL CHECK (priority IN ('critical', 'high', 'medium', 'low')),\n",
@@ -558,10 +781,34 @@ class LoopConcurrencyTests(unittest.TestCase):
             "",
         )
         schema = schema.replace(
+            "  runtime_environment TEXT NOT NULL CHECK (runtime_environment IN (\n"
+            "    'codex_automation', 'codex_cli', 'deepseek'\n"
+            "  )),\n",
+            "",
+        )
+        schema = schema.replace(
             "CREATE INDEX IF NOT EXISTS idx_tasks_queue\n"
-            "  ON tasks(status, execution_profile, priority, created_at, id);",
+            "  ON tasks(status, runtime_environment, execution_profile, priority, created_at, id);",
             "CREATE INDEX IF NOT EXISTS idx_tasks_queue\n"
             "  ON tasks(status, priority, created_at, id);",
+        )
+        return schema
+
+    @staticmethod
+    def schema_32() -> str:
+        schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        schema = schema.replace("PRAGMA user_version = 30300;", "PRAGMA user_version = 30200;")
+        schema = schema.replace(
+            "  runtime_environment TEXT NOT NULL CHECK (runtime_environment IN (\n"
+            "    'codex_automation', 'codex_cli', 'deepseek'\n"
+            "  )),\n",
+            "",
+        )
+        schema = schema.replace(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_queue\n"
+            "  ON tasks(status, runtime_environment, execution_profile, priority, created_at, id);",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_queue\n"
+            "  ON tasks(status, execution_profile, priority, created_at, id);",
         )
         return schema
 

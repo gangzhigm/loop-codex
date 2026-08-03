@@ -379,3 +379,125 @@
 2026-07-31T18:08:33.311+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
 2026-07-31T18:08:46.401+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
 2026-07-31T18:12:58.720+08:00 127.0.0.1 "GET /api/attachment?task_id=HOLDING-AI-GROUP-HEALTH-JSON-REGRESSION-001&path=assets%2FHOLDING-AI-GROUP-HEALTH-JSON-REGRESSION-001%2Finvalid-json-regression.png HTTP/1.1" 200 -
+2026-08-03T08:48:23.009+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-03T08:48:23.418+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T09:08:32.620+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T09:39:22.272+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-03T09:39:22.341+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T09:39:46.820+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T09:39:53.370+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T09:40:34.534+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T09:40:35.366+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-03T09:40:46.672+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T09:40:47.782+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-03T09:51:23.072+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T09:51:23.789+08:00 127.0.0.1 "GET /api/tasks HTTP/1.1" 404 -
+2026-08-03T10:05:39.994+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T10:09:57.667+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T10:19:39.087+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T10:38:33.823+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T10:41:53.757+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T10:45:03.446+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:06:14.403+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:08:32.995+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T11:10:13.399+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:13:57.481+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:14:17.303+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 503 -
+2026-08-03T11:14:26.375+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-03T11:14:26.440+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T11:14:27.023+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T11:16:17.727+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:20:47.762+08:00 127.0.0.1 "GET /memberCenter/coupon/distributionTransfer HTTP/1.1" 404 -
+2026-08-03T11:21:17.978+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:35:31.747+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:38:36.552+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T11:44:44.142+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T11:50:23.739+08:00 127.0.0.1 "GET /api/attachment?task_id=DARPHIN-NEW-MEMBER-SWITCH-LAYOUT-001&path=assets%2FDARPHIN-NEW-MEMBER-SWITCH-LAYOUT-001%2Freference.png HTTP/1.1" 200 -
+2026-08-03T11:50:30.825+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T11:50:54.192+08:00 127.0.0.1 "GET /api/attachment?task_id=RS-ADMIN-DECORATION-RESTORE-OPERATION-DATE-001&path=assets%2FRS-ADMIN-DECORATION-RESTORE-OPERATION-DATE-001%2Freference.png HTTP/1.1" 200 -
+2026-08-03T11:51:01.009+08:00 127.0.0.1 "GET /api/attachment?task_id=DARPHIN-NEW-MEMBER-SWITCH-LAYOUT-001&path=assets%2FDARPHIN-NEW-MEMBER-SWITCH-LAYOUT-001%2Freference.png HTTP/1.1" 200 -
+2026-08-03T11:51:08.191+08:00 127.0.0.1 "GET /api/attachment?task_id=RS-ADMIN-DECORATION-RESTORE-OPERATION-DATE-001&path=assets%2FRS-ADMIN-DECORATION-RESTORE-OPERATION-DATE-001%2Freference.png HTTP/1.1" 200 -
+2026-08-03T12:08:33.000+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T12:19:01.735+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T12:38:33.076+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T13:08:32.933+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T13:38:32.712+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T13:52:25.449+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T14:08:34.142+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T14:25:06.586+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T14:38:50.139+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T14:41:01.330+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T14:41:01.393+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 60089)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 136, in do_GET
+    self.send_json(HTTPStatus.OK, payload)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 118, in send_json
+    self.send_bytes(status, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 115, in send_bytes
+    self.wfile.write(body)
+    ~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] 你的主机中的软件中止了一个已建立的连接。
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 496, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 484, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 140, in do_GET
+    self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 118, in send_json
+    self.send_bytes(status, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 114, in send_bytes
+    self.end_headers()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 598, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 602, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] 你的主机中的软件中止了一个已建立的连接。
+----------------------------------------
+2026-08-03T14:42:46.148+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T14:52:47.150+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:08:49.073+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T15:13:57.786+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:18:31.820+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:20:56.814+08:00 127.0.0.1 "GET /api/attachment?task_id=DARPHIN-NEW-MEMBER-SWITCH-LAYOUT-001&path=assets%2FDARPHIN-NEW-MEMBER-SWITCH-LAYOUT-001%2Freference.png HTTP/1.1" 200 -
+2026-08-03T15:27:08.975+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:30:26.806+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:31:56.531+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:32:43.273+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:34:32.872+08:00 127.0.0.1 "GET /api/attachment?task_id=LOOP-DASHBOARD-REMOVE-PROGRESS-COLUMN-001&path=assets%2FLOOP-DASHBOARD-REMOVE-PROGRESS-COLUMN-001%2Freference.png HTTP/1.1" 200 -
+2026-08-03T15:35:53.678+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T15:38:38.289+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T16:06:57.171+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T16:08:32.368+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T16:20:37.637+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T16:21:44.442+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-03T16:21:44.751+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
