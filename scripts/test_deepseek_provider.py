@@ -9,8 +9,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from agent_runtime import RuntimeSettings, SafeLogger, SingleTaskAgent, ToolSandbox
+from agent_runtime import ExecutionProfile, RuntimeSettings, SafeLogger, SingleTaskAgent, ToolSandbox
 from deepseek_provider import DeepSeekProvider, DeepSeekProviderError, DeepSeekSettings
+from loopdb import CAPABILITY_LEVELS, load_initialization_config
 
 
 class ScriptedHandler(BaseHTTPRequestHandler):
@@ -88,27 +89,48 @@ def final_response() -> tuple[int, dict[str, Any]]:
 
 class DeepSeekProviderTests(unittest.TestCase):
     def settings(self, base_url: str) -> DeepSeekSettings:
+        profiles = {
+            level: (
+                "deepseek-v4-flash" if level in {"L1", "L2"} else "deepseek-v4-pro",
+                {"L1": "low", "L2": "high", "L3": "low", "L4": "high", "L5": "xhigh"}[level],
+            )
+            for level in CAPABILITY_LEVELS
+        }
         return DeepSeekSettings(
             api_base_url=base_url,
-            model="deepseek-v4-flash",
             timeout_seconds=2,
             max_retries=2,
             retry_backoff_seconds=0.01,
             max_retry_backoff_seconds=0.05,
             api_key_environment_variable="DEEPSEEK_API_KEY",
-            supported_execution_profiles=("standard",),
+            capability_profiles=profiles,
         )
 
+    def request(self, capability_level: str = "L2") -> dict[str, Any]:
+        model, reasoning = self.settings("https://api.deepseek.com").capability_profiles[capability_level]
+        return {
+            "protocol_version": "1.0",
+            "credential_access_approved": True,
+            "messages": [{"role": "runtime", "content": {}}],
+            "tools": ToolSandbox.TOOL_SCHEMAS,
+            "execution_profile": {
+                "runtime_environment": "self_hosted_agent", "provider_id": "deepseek",
+                "capability_level": capability_level, "model": model, "reasoning": reasoning,
+            },
+        }
+
     def test_missing_external_key_fails_without_value(self) -> None:
-        config = {"deepseek": {**self.settings("https://api.deepseek.com").__dict__}}
+        config = load_initialization_config()
         provider = DeepSeekProvider.from_config(config, environment={})
         with self.assertRaisesRegex(DeepSeekProviderError, "external injection"):
-            provider.complete({"protocol_version": "1.0", "credential_access_approved": True, "messages": [{"role": "runtime", "content": {}}], "tools": ToolSandbox.TOOL_SCHEMAS}, 2)
+            provider.complete(self.request(), 2)
 
     def test_credential_is_not_accessed_without_task_approval(self) -> None:
         provider = DeepSeekProvider(self.settings("https://api.deepseek.com"), {"DEEPSEEK_API_KEY": "test-only-token"})
         with self.assertRaisesRegex(DeepSeekProviderError, "explicit task approval"):
-            provider.complete({"protocol_version": "1.0", "messages": [{"role": "runtime", "content": {}}], "tools": ToolSandbox.TOOL_SCHEMAS}, 2)
+            request = self.request()
+            request.pop("credential_access_approved")
+            provider.complete(request, 2)
 
     def test_local_fake_service_runs_tool_loop_and_finishes(self) -> None:
         with TemporaryDirectory() as temporary, LocalServer([tool_response(), final_response()]) as server:
@@ -117,11 +139,11 @@ class DeepSeekProviderTests(unittest.TestCase):
             project.mkdir()
             (project / "AGENTS.md").write_text("Use UTF-8.\n", encoding="utf-8")
             (project / "file.txt").write_text("before\n", encoding="utf-8")
-            task = {"id": "DEEPSEEK-TEST", "description": "Patch the scoped file. APPROVED_ACTIONS: credential_access", "scope": ["project/"], "acceptance": ["File is updated."], "depends_on": [], "runtime_environment": "deepseek", "execution_profile": "standard"}
+            task = {"id": "DEEPSEEK-TEST", "description": "Patch the scoped file. APPROVED_ACTIONS: credential_access", "scope": ["project/"], "acceptance": ["File is updated."], "depends_on": [], "runtime_environment": "self_hosted_agent", "provider_id": "deepseek", "capability_level": "L2"}
             controller = FakeController(task)
             provider = DeepSeekProvider(self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}, sleeper=lambda _: None)
-            agent = SingleTaskAgent(provider, controller, workspace, RuntimeSettings(4, 2, 2, 60, 20_000, 10_000), SafeLogger(io.StringIO()))
-            result = agent.run("test-execution", "deepseek", "standard")
+            agent = SingleTaskAgent(provider, controller, workspace, RuntimeSettings(4, 2, 2, 60, 20_000, 10_000), SafeLogger(io.StringIO()), config=load_initialization_config())
+            result = agent.run("test-execution", "self_hosted_agent", "L2", "deepseek")
 
             self.assertEqual(result["result"]["status"], "SUCCEEDED")
             self.assertEqual((project / "file.txt").read_text(encoding="utf-8"), "after\n")
@@ -130,6 +152,8 @@ class DeepSeekProviderTests(unittest.TestCase):
             self.assertEqual([item["path"] for item in ScriptedHandler.requests], ["/chat/completions", "/chat/completions"])
             self.assertTrue(all(item["authorization_present"] for item in ScriptedHandler.requests))
             self.assertEqual(ScriptedHandler.requests[0]["body"]["tools"][0]["type"], "function")
+            self.assertEqual(ScriptedHandler.requests[0]["body"]["model"], "deepseek-v4-flash")
+            self.assertEqual(ScriptedHandler.requests[0]["body"]["thinking"], {"type": "enabled"})
             self.assertIn("final-result contract", ScriptedHandler.requests[0]["body"]["messages"][0]["content"])
             self.assertEqual(ScriptedHandler.requests[1]["body"]["messages"][-1]["role"], "tool")
 
@@ -137,7 +161,7 @@ class DeepSeekProviderTests(unittest.TestCase):
         with LocalServer([(429, {}), (500, {}), final_response()]) as server:
             waits: list[float] = []
             provider = DeepSeekProvider(self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}, sleeper=waits.append)
-            response = provider.complete({"protocol_version": "1.0", "credential_access_approved": True, "messages": [{"role": "runtime", "content": {}}], "tools": ToolSandbox.TOOL_SCHEMAS}, 2)
+            response = provider.complete(self.request(), 2)
             self.assertEqual(response["type"], "final")
             self.assertEqual(waits, [0.01, 0.02])
             self.assertEqual(len(ScriptedHandler.requests), 3)
@@ -146,15 +170,32 @@ class DeepSeekProviderTests(unittest.TestCase):
         with LocalServer([(401, {})]) as server:
             provider = DeepSeekProvider(self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}, sleeper=lambda _: self.fail("should not retry"))
             with self.assertRaisesRegex(DeepSeekProviderError, "HTTP 401"):
-                provider.complete({"protocol_version": "1.0", "credential_access_approved": True, "messages": [{"role": "runtime", "content": {}}], "tools": ToolSandbox.TOOL_SCHEMAS}, 2)
+                provider.complete(self.request(), 2)
             self.assertEqual(len(ScriptedHandler.requests), 1)
 
     def test_startup_rejects_other_environment_and_unsupported_profile(self) -> None:
         provider = DeepSeekProvider(self.settings("https://api.deepseek.com"), {"DEEPSEEK_API_KEY": "test-only-token"})
-        with self.assertRaisesRegex(DeepSeekProviderError, "runtime environment"):
-            provider.validate_startup("codex_cli", "standard")
+        with self.assertRaisesRegex(DeepSeekProviderError, "self_hosted_agent"):
+            provider.validate_startup(ExecutionProfile("codex_cli", None, "L2", "x", "high", 600, 0))
         with self.assertRaisesRegex(DeepSeekProviderError, "execution profile"):
-            provider.validate_startup("deepseek", "advanced")
+            provider.validate_startup(ExecutionProfile("self_hosted_agent", "deepseek", "L2", "wrong", "high", 600, 0))
+
+    def test_repository_profiles_cover_flash_pro_and_thinking_modes(self) -> None:
+        settings = DeepSeekSettings.from_config(load_initialization_config())
+        self.assertEqual(settings.capability_profiles["L1"], ("deepseek-v4-flash", "low"))
+        self.assertEqual(settings.capability_profiles["L2"], ("deepseek-v4-flash", "high"))
+        self.assertEqual(settings.capability_profiles["L3"], ("deepseek-v4-pro", "low"))
+        self.assertEqual(settings.capability_profiles["L5"], ("deepseek-v4-pro", "xhigh"))
+
+    def test_pro_non_thinking_profile_is_sent_to_api(self) -> None:
+        with LocalServer([final_response()]) as server:
+            provider = DeepSeekProvider(
+                self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}
+            )
+            response = provider.complete(self.request("L3"), 2)
+        self.assertEqual(response["type"], "final")
+        self.assertEqual(ScriptedHandler.requests[0]["body"]["model"], "deepseek-v4-pro")
+        self.assertEqual(ScriptedHandler.requests[0]["body"]["thinking"], {"type": "disabled"})
 
 
 if __name__ == "__main__":

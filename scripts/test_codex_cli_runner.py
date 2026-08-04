@@ -14,7 +14,8 @@ sys.dont_write_bytecode = True
 
 import codex_cli_runner
 from agent_runtime import SafeLogger
-from codex_cli_runner import CodexCliRunner, CodexCliRunnerError, CodexCliSettings, ProfileSettings
+from codex_cli_runner import CodexCliRunner, CodexCliRunnerError, CodexCliSettings
+from agent_runtime import ExecutionProfile
 from loopdb import connect, initialize_schema, insert_task, load_initialization_config, now_shanghai
 
 
@@ -28,11 +29,17 @@ from pathlib import Path
 mode = os.environ.get("FAKE_CODEX_MODE", "success")
 record = os.environ.get("FAKE_CODEX_RECORD")
 pid_file = os.environ.get("FAKE_CODEX_PID")
+counter_file = os.environ.get("FAKE_CODEX_COUNTER")
 prompt = sys.stdin.read()
 if record:
     Path(record).write_text(json.dumps({"argv": sys.argv[1:], "stdin": prompt}, ensure_ascii=False), encoding="utf-8")
 if pid_file:
     Path(pid_file).write_text(str(os.getpid()), encoding="utf-8")
+attempt = 1
+if counter_file:
+    counter = Path(counter_file)
+    attempt = int(counter.read_text(encoding="utf-8")) + 1 if counter.exists() else 1
+    counter.write_text(str(attempt), encoding="utf-8")
 
 result = {
     "status": "SUCCEEDED",
@@ -51,6 +58,13 @@ if mode == "auth":
     raise SystemExit(1)
 if mode == "nonzero":
     print("internal fake failure", file=sys.stderr)
+    raise SystemExit(7)
+if mode == "fail_once" and attempt == 1:
+    print("transient fake failure", file=sys.stderr)
+    raise SystemExit(7)
+if mode == "side_effect_failure":
+    print(json.dumps({"type": "item.completed", "item": {"type": "command_execution", "text": "changed"}}))
+    print("failure after possible side effect", file=sys.stderr)
     raise SystemExit(7)
 if mode == "timeout":
     time.sleep(30)
@@ -76,12 +90,12 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1}}))
 class FakeController:
     def __init__(self, claim: dict[str, object]) -> None:
         self.claim_payload = claim
-        self.claims: list[tuple[str, str, str]] = []
+        self.claims: list[tuple[str, str, str, str | None]] = []
         self.heartbeats: list[tuple[str, str]] = []
         self.finishes: list[tuple[str, str, dict[str, object]]] = []
 
-    def claim(self, execution_id: str, runtime_environment: str, profile: str) -> dict[str, object]:
-        self.claims.append((execution_id, runtime_environment, profile))
+    def claim(self, execution_id: str, runtime_environment: str, capability_level: str, provider_id: str | None) -> dict[str, object]:
+        self.claims.append((execution_id, runtime_environment, capability_level, provider_id))
         if len(self.claims) > 1:
             raise AssertionError("claim called more than once")
         return self.claim_payload
@@ -120,23 +134,27 @@ class CodexCliRunnerTests(unittest.TestCase):
         self.fake_codex.write_text(FAKE_CODEX, encoding="utf-8")
         self.record = self.root / "record.json"
         self.pid_file = self.root / "pid.txt"
+        self.counter_file = self.root / "counter.txt"
         self.config = load_initialization_config()
         self.config["workspace"] = {
             **self.config["workspace"],
             "task_root": str(self.workspace),
             "project_registry": str(self.registry),
         }
+        self.config["execution_profiles"]["codex_cli"]["capabilities"]["L2"] = {
+            "model": "fake-model", "reasoning": "high",
+            "attempt_timeout_seconds": 2, "max_retries": 0,
+        }
         self.settings = CodexCliSettings(
             command_prefix=(sys.executable, str(self.fake_codex)),
             prompt_path=self.prompt,
             use_user_config=True,
             sandbox="workspace-write",
-            timeout_seconds=2,
             termination_grace_seconds=2,
             heartbeat_interval_seconds=0.05,
+            stalled_after_seconds=0.1,
             max_stdout_chars=4096,
             max_stderr_chars=4096,
-            profiles={"standard": ProfileSettings("fake-model", "high")},
         )
 
     def tearDown(self) -> None:
@@ -150,7 +168,8 @@ class CodexCliRunnerTests(unittest.TestCase):
             "acceptance": ["File is verified."],
             "depends_on": ["READY-1"],
             "runtime_environment": "codex_cli",
-            "execution_profile": "standard",
+            "provider_id": None,
+            "capability_level": "L2",
         }
         task.update(overrides)
         return task
@@ -173,18 +192,21 @@ class CodexCliRunnerTests(unittest.TestCase):
             "FAKE_CODEX_MODE": mode,
             "FAKE_CODEX_RECORD": str(self.record),
             "FAKE_CODEX_PID": str(self.pid_file),
+            "FAKE_CODEX_COUNTER": str(self.counter_file),
         }
         with patch.dict(os.environ, environment, clear=False):
-            result = runner.run("codex-cli-standard-test", "standard")
+            result = runner.run("codex-cli-l2-test", "L2")
         return result, controller
 
     def test_repository_config_defines_non_sensitive_profile_mapping(self) -> None:
         settings = CodexCliSettings.from_config(load_initialization_config())
         self.assertEqual(settings.sandbox, "workspace-write")
-        self.assertEqual(settings.timeout_seconds, 3600)
         self.assertEqual(settings.max_stdout_chars, 1_000_000)
         self.assertTrue(settings.use_user_config)
-        self.assertEqual(settings.profiles["complex"], ProfileSettings("gpt-5.6-sol", "high"))
+        self.assertEqual(
+            ExecutionProfile.resolve(load_initialization_config(), "codex_cli", None, "L5").model,
+            "gpt-5.6-sol",
+        )
         serialized = json.dumps(load_initialization_config()["codex_cli"], ensure_ascii=False).lower()
         self.assertNotIn("token", serialized)
         self.assertNotIn("credential", serialized)
@@ -194,7 +216,7 @@ class CodexCliRunnerTests(unittest.TestCase):
         result, controller = self.run_runner()
         self.assertEqual(result["result"]["status"], "SUCCEEDED")
         self.assertEqual(len(controller.claims), 1)
-        self.assertEqual(controller.claims[0][1:], ("codex_cli", "standard"))
+        self.assertEqual(controller.claims[0][1:], ("codex_cli", "L2", None))
         self.assertEqual(len(controller.finishes), 1)
         self.assertGreaterEqual(len(controller.heartbeats), 2)
         record = json.loads(self.record.read_text(encoding="utf-8"))
@@ -241,6 +263,7 @@ class CodexCliRunnerTests(unittest.TestCase):
                 self.assertEqual(len(controller.finishes), 1)
 
     def test_authentication_failure_waits_for_human_and_redacts_sensitive_output(self) -> None:
+        self.config["execution_profiles"]["codex_cli"]["capabilities"]["L2"]["max_retries"] = 1
         result, controller = self.run_runner("auth")
         final = result["result"]
         self.assertEqual(final["status"], "WAITING_HUMAN")
@@ -249,6 +272,7 @@ class CodexCliRunnerTests(unittest.TestCase):
         self.assertNotIn("authorization=", serialized)
         self.assertNotIn(".codex", serialized)
         self.assertEqual(len(controller.finishes), 1)
+        self.assertEqual(self.counter_file.read_text(encoding="utf-8"), "1")
 
     def test_nonzero_exit_is_failed_and_finished(self) -> None:
         result, controller = self.run_runner("nonzero")
@@ -256,9 +280,39 @@ class CodexCliRunnerTests(unittest.TestCase):
         self.assertIn("code 7", result["result"]["error"])
         self.assertEqual(len(controller.finishes), 1)
 
+    def test_retry_uses_new_attempt_budget_and_finishes_once(self) -> None:
+        self.config["execution_profiles"]["codex_cli"]["capabilities"]["L2"]["max_retries"] = 1
+        result, controller = self.run_runner("fail_once")
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(self.counter_file.read_text(encoding="utf-8"), "2")
+        self.assertEqual(len(controller.claims), 1)
+        self.assertEqual(len(controller.finishes), 1)
+
+    def test_retry_exhaustion_and_possible_side_effect_suppression(self) -> None:
+        self.config["execution_profiles"]["codex_cli"]["capabilities"]["L2"]["max_retries"] = 1
+        result, _ = self.run_runner("nonzero")
+        self.assertEqual(result["result"]["status"], "FAILED")
+        self.assertEqual(self.counter_file.read_text(encoding="utf-8"), "2")
+        self.counter_file.unlink()
+        result, _ = self.run_runner("side_effect_failure")
+        self.assertEqual(result["result"]["status"], "FAILED")
+        self.assertIn("side effects", result["result"]["error"])
+        self.assertEqual(self.counter_file.read_text(encoding="utf-8"), "1")
+
+    def test_execution_profile_is_an_immutable_pre_claim_snapshot(self) -> None:
+        profile = ExecutionProfile.resolve(self.config, "codex_cli", None, "L2")
+        self.config["execution_profiles"]["codex_cli"]["capabilities"]["L2"]["model"] = "changed"
+        self.assertEqual((profile.model, profile.reasoning), ("fake-model", "high"))
+
+    def test_config_requires_stall_detection_before_attempt_timeout(self) -> None:
+        config = load_initialization_config()
+        config["execution_profiles"]["codex_cli"]["capabilities"]["L1"]["attempt_timeout_seconds"] = 300
+        with self.assertRaisesRegex(CodexCliRunnerError, "stalled detection"):
+            CodexCliSettings.from_config(config, command_prefix=(sys.executable,))
+
     def test_timeout_terminates_process_and_finishes(self) -> None:
-        settings = CodexCliSettings(**{**self.settings.__dict__, "timeout_seconds": 0.2})
-        result, controller = self.run_runner("timeout", settings=settings)
+        self.config["execution_profiles"]["codex_cli"]["capabilities"]["L2"]["attempt_timeout_seconds"] = 1
+        result, controller = self.run_runner("timeout")
         self.assertEqual(result["result"]["status"], "FAILED")
         self.assertIn("timed out", result["result"]["error"])
         self.assertEqual(len(controller.finishes), 1)
@@ -290,7 +344,7 @@ class CodexCliRunnerTests(unittest.TestCase):
                 self.assertFalse(self.record.exists())
 
     def test_routing_mismatch_finishes_failed_without_starting_codex(self) -> None:
-        claim = {"outcome": "CLAIMED", "task": self.task(runtime_environment="deepseek")}
+        claim = {"outcome": "CLAIMED", "task": self.task(runtime_environment="self_hosted_agent")}
         result, controller = self.run_runner(claim=claim)
         self.assertEqual(result["result"]["status"], "FAILED")
         self.assertEqual(len(controller.finishes), 1)
@@ -341,7 +395,7 @@ class CodexCliRunnerTests(unittest.TestCase):
             {"FAKE_CODEX_MODE": "success", "FAKE_CODEX_RECORD": str(self.record)},
             clear=False,
         ):
-            result = runner.run("codex-cli-round-trip", "standard")
+            result = runner.run("codex-cli-round-trip", "L2")
         self.assertEqual(result["result"]["status"], "SUCCEEDED")
         database = connect(database_path)
         task = database.execute("SELECT status FROM tasks WHERE id='CLI-ROUND-TRIP'").fetchone()

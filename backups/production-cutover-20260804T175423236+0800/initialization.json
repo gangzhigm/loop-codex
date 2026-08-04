@@ -162,7 +162,7 @@
   "automations": {
     "worker_interval_minutes": 20,
     "runtime_environment": "codex_automation",
-    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；runtime_environment=codex_automation，capability_level={capability_level}，execution_policy=automatic；过渡期 legacy_profile={profile}。",
+    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；当前运行环境为 codex_automation，当前能力等级为 {capability_level}；过渡期旧执行档位为 {profile}。",
     "capabilities": {
       "L1": { "name": "Loop Agent Worker · L1", "model": "gpt-5.6-luna", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-routine", "scheduled": true, "offset_minutes": 0, "legacy_profile": "routine" },
       "L2": { "name": "Loop Agent Worker · L2", "model": "gpt-5.6-terra", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-standard", "scheduled": true, "offset_minutes": 2, "legacy_profile": "standard" },
@@ -180,23 +180,7 @@
     },
     "production_switch": {
       "operator_required": true,
-      "status": "active",
-      "rollback": {
-        "schema_from": "3.3.0",
-        "schema_to": "3.4.0",
-        "backup_directory": "backups/production-cutover-20260804T175423236+0800",
-        "database_backup": "backups/production-cutover-20260804T175423236+0800/loop-agent-schema-3.3.0-before-3.4.0.sqlite3",
-        "database_sha256": "8aede6847bd2e3d6034fd3c0500f313c114992c5be6f63e71477c6e22b290860",
-        "configuration_backup": "backups/production-cutover-20260804T175423236+0800/initialization.json",
-        "configuration_sha256": "d1d451a777e0cb0eb43aaa10ba7f525d4650e67f23775af9190d4d0e96d136d3",
-        "requirements": [
-          "Pause all five Codex Worker automations before rollback.",
-          "Confirm active_executions=0 and that no old client session can still edit.",
-          "Restore both the database and initialization configuration from this backup set.",
-          "Restart Dashboard Server through scripts/health_run.py and validate Schema, API, task count, and database integrity before reactivating Workers.",
-          "Only Operator may reactivate or modify the five real Codex automations."
-        ]
-      },
+      "status": "pending_maintenance_window",
       "checklist": [
         "Confirm old Codex client executions have ended and no stalled session owns the same scope.",
         "Operator updates and verifies the five real automation entries with capability_level parameters.",

@@ -8,4 +8,6 @@
 
 `operator.md` 由任务管理对话遵循；Codex Worker 自动化的入口提示只负责读取并执行 `worker.md`，不复制正文。Windows 健康任务直接运行确定性脚本，不使用模型提示词。
 
-五条普通 Worker 自动化共享 `worker.md`，入口提示固定提供 `runtime_environment=codex_automation` 和当前 `execution_profile`，不得复制正文。Codex CLI Runner 使用 `cli-worker.md`，由 Runner 负责一次 claim、heartbeat 和 finish，CLI 子进程不得管理队列。DeepSeek 使用自建 Agent Runtime 的中立上下文。各入口调用 `claim` 时必须显式声明 `codex_automation`、`codex_cli` 或 `deepseek`；`exceptional` 使用人工批准的一次性执行。修改提示词后下一次对应 Worker 直接读取新内容；修改环境、档位、结构或路径时必须同步更新初始化配置、文档和真实执行入口。
+五条普通 Worker 自动化共享 `worker.md`，规范入口固定提供 `runtime_environment=codex_automation`、`capability_level=L1..L5` 和 `execution_policy=automatic`，不得复制正文。过渡期仍接受明确提供的旧 `execution_profile`：`routine -> L1`、`standard -> L2`、`advanced -> L3`、`deep -> L4`、`complex -> L5`；`exceptional` 仅表示 `L5/manual` 的人工一次性执行。Codex CLI Runner 使用 `cli-worker.md`，由 Runner 负责一次 claim、heartbeat 和 finish，CLI 子进程不得管理队列。自建 Agent 使用中立上下文。各入口调用 `claim` 时必须显式声明匹配运行环境；修改环境、能力等级、结构或路径时必须同步更新初始化配置、文档和真实执行入口。
+
+真实 Codex 自动化的入口切换仅能由 Operator 在生产 Schema 切换维护窗口完成并复核。普通 Worker 不读取、暂停、启用、删除或创建自动化；AI 会话在 claim 前已经启动这一产品差异不改变统一逻辑队列的主动拉取语义。

@@ -16,23 +16,34 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from loopdb import CONFIG_PATH, EXECUTION_PROFILES, load_initialization_config
+from agent_runtime import ExecutionProfile
+from loopdb import CAPABILITY_LEVELS, CONFIG_PATH, load_initialization_config, resolve_execution_profile
 
 
 class DeepSeekProviderError(RuntimeError):
     """Public, credential-free provider failure."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable_request: bool = False,
+        requires_human: bool = False,
+    ) -> None:
+        self.retryable_request = retryable_request
+        self.requires_human = requires_human
+        super().__init__(message)
+
 
 @dataclass(frozen=True)
 class DeepSeekSettings:
     api_base_url: str
-    model: str
     timeout_seconds: float
     max_retries: int
     retry_backoff_seconds: float
     max_retry_backoff_seconds: float
     api_key_environment_variable: str
-    supported_execution_profiles: tuple[str, ...]
+    capability_profiles: dict[str, tuple[str, str]]
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "DeepSeekSettings":
@@ -40,28 +51,36 @@ class DeepSeekSettings:
         if not isinstance(value, dict):
             raise DeepSeekProviderError("DeepSeek configuration is missing")
         try:
+            capability_profiles = {
+                level: (
+                    str(resolve_execution_profile(
+                        "self_hosted_agent", "deepseek", level, dict(config)
+                    )["model"]),
+                    str(resolve_execution_profile(
+                        "self_hosted_agent", "deepseek", level, dict(config)
+                    )["reasoning"]),
+                )
+                for level in CAPABILITY_LEVELS
+            }
             settings = cls(
                 api_base_url=str(value["api_base_url"]).rstrip("/"),
-                model=str(value["model"]),
                 timeout_seconds=float(value["timeout_seconds"]),
                 max_retries=int(value["max_retries"]),
                 retry_backoff_seconds=float(value["retry_backoff_seconds"]),
                 max_retry_backoff_seconds=float(value["max_retry_backoff_seconds"]),
                 api_key_environment_variable=str(value["api_key_environment_variable"]),
-                supported_execution_profiles=tuple(value["supported_execution_profiles"]),
+                capability_profiles=capability_profiles,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise DeepSeekProviderError("DeepSeek configuration is invalid") from error
         if (
             not settings.api_base_url.startswith(("https://", "http://"))
-            or not settings.model
             or settings.timeout_seconds <= 0
             or not 0 <= settings.max_retries <= 10
             or settings.retry_backoff_seconds < 0
             or settings.max_retry_backoff_seconds < settings.retry_backoff_seconds
             or not settings.api_key_environment_variable
-            or not settings.supported_execution_profiles
-            or any(profile not in EXECUTION_PROFILES for profile in settings.supported_execution_profiles)
+            or set(settings.capability_profiles) != set(CAPABILITY_LEVELS)
         ):
             raise DeepSeekProviderError("DeepSeek configuration is invalid")
         return settings
@@ -93,18 +112,30 @@ class DeepSeekProvider:
         settings = DeepSeekSettings.from_config(config)
         return cls(settings, environment=environment, opener=opener, sleeper=sleeper)
 
-    def validate_startup(self, runtime_environment: str, profile: str) -> None:
-        if runtime_environment != "deepseek":
-            raise DeepSeekProviderError("DeepSeek provider only supports the deepseek runtime environment")
-        if profile not in self.settings.supported_execution_profiles:
-            raise DeepSeekProviderError("DeepSeek provider does not support this execution profile")
+    def validate_startup(self, profile: ExecutionProfile) -> None:
+        if profile.runtime_environment != "self_hosted_agent" or profile.provider_id != "deepseek":
+            raise DeepSeekProviderError(
+                "DeepSeek provider only supports self_hosted_agent/deepseek",
+                requires_human=True,
+            )
+        configured = self.settings.capability_profiles.get(profile.capability_level)
+        if configured != (profile.model, profile.reasoning):
+            raise DeepSeekProviderError(
+                "DeepSeek provider does not support this execution profile",
+                requires_human=True,
+            )
 
     def complete(self, request: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
         if request.get("credential_access_approved") is not True:
-            raise DeepSeekProviderError("DeepSeek credential access requires explicit task approval")
+            raise DeepSeekProviderError(
+                "DeepSeek credential access requires explicit task approval", requires_human=True
+            )
         api_key = self._environment.get(self.settings.api_key_environment_variable, "")
         if not isinstance(api_key, str) or not api_key.strip():
-            raise DeepSeekProviderError("DeepSeek API key is unavailable from the configured external injection")
+            raise DeepSeekProviderError(
+                "DeepSeek API key is unavailable from the configured external injection",
+                requires_human=True,
+            )
         payload = self._request_payload(request)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         timeout = min(float(timeout_seconds), self.settings.timeout_seconds)
@@ -126,12 +157,15 @@ class DeepSeekProvider:
             except HTTPError as error:
                 error.close()
                 if error.code not in {429, 500, 502, 503, 504}:
-                    raise DeepSeekProviderError(f"DeepSeek API returned HTTP {error.code}") from error
+                    raise DeepSeekProviderError(
+                        f"DeepSeek API returned HTTP {error.code}",
+                        requires_human=error.code in {401, 403},
+                    ) from error
                 last_error = f"DeepSeek API returned HTTP {error.code}"
             except (URLError, TimeoutError, socket.timeout, OSError) as error:
                 last_error = f"DeepSeek API connection failed: {type(error).__name__}"
             if attempt >= self.settings.max_retries:
-                raise DeepSeekProviderError(last_error)
+                raise DeepSeekProviderError(last_error, retryable_request=True)
             self._sleeper(min(
                 self.settings.max_retry_backoff_seconds,
                 self.settings.retry_backoff_seconds * (2 ** attempt),
@@ -151,12 +185,26 @@ class DeepSeekProvider:
                 + json.dumps(request.get("final_result_schema") or {}, ensure_ascii=False)
             ),
         })
+        profile = request.get("execution_profile")
+        if not isinstance(profile, dict):
+            raise DeepSeekProviderError("neutral provider request omitted execution profile")
+        capability_level = profile.get("capability_level")
+        configured = self.settings.capability_profiles.get(str(capability_level))
+        signature = (profile.get("model"), profile.get("reasoning"))
+        if (
+            profile.get("runtime_environment") != "self_hosted_agent"
+            or profile.get("provider_id") != "deepseek"
+            or configured != signature
+        ):
+            raise DeepSeekProviderError("neutral provider execution profile is unsupported")
+        reasoning = str(profile["reasoning"])
         return {
-            "model": self.settings.model,
+            "model": profile["model"],
             "messages": messages,
             "tools": self._tools(request.get("tools")),
             "tool_choice": "auto",
             "stream": False,
+            "thinking": {"type": "enabled" if reasoning in {"high", "xhigh"} else "disabled"},
         }
 
     @staticmethod

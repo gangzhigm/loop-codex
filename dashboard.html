@@ -831,11 +831,11 @@
       line-height: 1.2;
       white-space: nowrap;
     }
-    .profile-routine { border-color: #cad8ce; background: #eff6f1; color: #315d3d; }
-    .profile-standard { border-color: #c9d9dc; background: #f2f8f8; color: #315c62; }
-    .profile-advanced { border-color: #d7cfaa; background: #f8f5e8; color: #66591b; }
-    .profile-deep { border-color: #d2c4da; background: #f5eff7; color: #654773; }
-    .profile-complex, .profile-exceptional { border-color: #ddc4c4; background: #faeeee; color: #7c3030; }
+    .profile-L1 { border-color: #cad8ce; background: #eff6f1; color: #315d3d; }
+    .profile-L2 { border-color: #c9d9dc; background: #f2f8f8; color: #315c62; }
+    .profile-L3 { border-color: #d7cfaa; background: #f8f5e8; color: #66591b; }
+    .profile-L4 { border-color: #d2c4da; background: #f5eff7; color: #654773; }
+    .profile-L5 { border-color: #ddc4c4; background: #faeeee; color: #7c3030; }
     .environment-badge { border-color: #c7d0d9; background: #f3f5f7; color: #364553; }
 
     .project-cell {
@@ -911,6 +911,74 @@
       gap: 8px;
     }
 
+    .profile-level-help-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .profile-level-help {
+      display: inline-grid;
+      width: 16px;
+      height: 16px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      color: var(--muted);
+      background: var(--surface-subtle);
+      cursor: help;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      outline: 0;
+    }
+
+    .profile-level-help:focus-visible {
+      color: var(--accent);
+      border-color: var(--accent);
+      outline: 2px solid var(--accent-soft);
+      outline-offset: 1px;
+    }
+
+    .profile-level-tooltip {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      z-index: 30;
+      display: grid;
+      width: max-content;
+      max-width: min(280px, calc(100vw - 32px));
+      gap: 7px;
+      padding: 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: 0 8px 20px rgba(24, 33, 43, 0.16);
+      font-size: 10px;
+      line-height: 1.3;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-3px);
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    .profile-level-help-wrap:hover .profile-level-tooltip,
+    .profile-level-help:focus-visible + .profile-level-tooltip {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .profile-level-tooltip-item {
+      display: grid;
+      gap: 2px;
+      min-width: 190px;
+    }
+
+    .profile-level-tooltip-item strong { color: var(--ink); font-size: 11px; }
+    .profile-level-tooltip-item span { color: var(--muted); white-space: nowrap; }
+
     .side-heading-summary {
       min-width: 0;
       overflow: hidden;
@@ -964,10 +1032,6 @@
       list-style: none;
     }
 
-    #profileCount {
-      display: none;
-    }
-
     .profile-row {
       display: grid;
       gap: 8px;
@@ -978,12 +1042,11 @@
       color: #24313b;
     }
 
-    .profile-row.profile-level-routine { border-left-color: #68a873; }
-    .profile-row.profile-level-standard { border-left-color: #9cba55; }
-    .profile-row.profile-level-advanced { border-left-color: #d0aa35; }
-    .profile-row.profile-level-deep { border-left-color: #d98239; }
-    .profile-row.profile-level-complex { border-left-color: #c9654b; }
-    .profile-row.profile-level-exceptional { border-left-color: #b94b4b; }
+    .profile-row.profile-level-L1 { border-left-color: #68a873; }
+    .profile-row.profile-level-L2 { border-left-color: #9cba55; }
+    .profile-row.profile-level-L3 { border-left-color: #d0aa35; }
+    .profile-row.profile-level-L4 { border-left-color: #d98239; }
+    .profile-row.profile-level-L5 { border-left-color: #b94b4b; }
 
     .profile-heading-row {
       display: flex;
@@ -1011,7 +1074,7 @@
 
     .profile-channels {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr);
       gap: 6px;
       min-width: 0;
       padding-left: 10px;
@@ -1041,13 +1104,6 @@
       font-variant-numeric: tabular-nums;
       font-weight: 760;
       line-height: 1.25;
-    }
-
-    .profile-channel-mode {
-      color: var(--muted);
-      grid-column: 1 / -1;
-      font-size: 10px;
-      line-height: 1.2;
     }
 
     /* The profile matrix is intentionally visual-only: twelve channel tiles in two columns. */
@@ -1086,25 +1142,23 @@
       text-align: left;
     }
 
-    .profile-channel-active,
-    .profile-channel-mode {
+    .profile-channel-active {
       display: none;
+    }
+
+    .profile-channel-active {
+      display: block;
+      flex: 0 0 auto;
+      margin-left: auto;
     }
 
     .profile-channel-name { color: #24313b; }
 
-    .profile-level-routine .profile-channel:nth-child(1) { background: #c3e5c9; }
-    .profile-level-routine .profile-channel:nth-child(2) { background: #aedab6; }
-    .profile-level-standard .profile-channel:nth-child(1) { background: #d9e9ad; }
-    .profile-level-standard .profile-channel:nth-child(2) { background: #c7df8a; }
-    .profile-level-advanced .profile-channel:nth-child(1) { background: #f0dfa1; }
-    .profile-level-advanced .profile-channel:nth-child(2) { background: #e5cf78; }
-    .profile-level-deep .profile-channel:nth-child(1) { background: #f5c999; }
-    .profile-level-deep .profile-channel:nth-child(2) { background: #efb475; }
-    .profile-level-complex .profile-channel:nth-child(1) { background: #efb6a5; }
-    .profile-level-complex .profile-channel:nth-child(2) { background: #e69a83; }
-    .profile-level-exceptional .profile-channel:nth-child(1) { background: #e8a4a4; }
-    .profile-level-exceptional .profile-channel:nth-child(2) { background: #db8585; }
+    .profile-level-L1 .profile-channel { background: #c3e5c9; }
+    .profile-level-L2 .profile-channel { background: #d9e9ad; }
+    .profile-level-L3 .profile-channel { background: #f0dfa1; }
+    .profile-level-L4 .profile-channel { background: #f5c999; }
+    .profile-level-L5 .profile-channel { background: #e8a4a4; }
 
     .agent-dot {
       width: 9px;
@@ -1446,7 +1500,7 @@
                 <th style="width: 19%">任务</th>
                 <th style="width: 11%"><span class="table-header-label">状态 <button id="statusFilter" class="header-filter-button" type="button" aria-label="筛选状态" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选状态"></button></span></th>
                 <th style="width: 8%"><span class="table-header-label">优先级 <button id="priorityFilter" class="header-filter-button" type="button" aria-label="筛选优先级" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选优先级"></button></span></th>
-                <th style="width: 10%"><span class="table-header-label">任务档位 <button id="profileFilter" class="header-filter-button" type="button" aria-label="筛选任务档位" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选任务档位"></button></span></th>
+                <th style="width: 10%"><span class="table-header-label">能力等级 <button id="profileFilter" class="header-filter-button" type="button" aria-label="筛选能力等级" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选能力等级"></button></span></th>
                 <th style="width: 15%"><span class="table-header-label">运行环境 <button id="environmentFilter" class="header-filter-button" type="button" aria-label="筛选运行环境" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选运行环境"></button></span></th>
                 <th style="width: 15%"><span class="table-header-label">项目 <button id="projectFilter" class="header-filter-button" type="button" aria-label="筛选项目" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选项目"></button></span></th>
                 <th style="width: 15%">时间</th>
@@ -1464,7 +1518,7 @@
 
       <aside class="side-section" aria-label="运行详情">
         <section class="side-block">
-          <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">任务档位</span><span id="profileCount" class="side-heading-summary">0 通道活动</span></span></button>
+          <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">调度容量</span><span class="profile-level-help-wrap"><span id="profileLevelHelp" class="profile-level-help" tabindex="0" role="img" aria-label="查看 L1 至 L5 执行配置">!</span><span id="profileLevelTooltip" class="profile-level-tooltip" role="tooltip"></span></span><span id="profileCount" class="side-heading-summary">0/8</span></span></button>
           <div id="profileContent" class="side-content is-expanded"><ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul></div>
         </section>
       </aside>
@@ -1506,14 +1560,8 @@
       CANCELLED: "已取消"
     };
     const PRIORITY_LABELS = { blocker: "阻断", critical: "紧急", high: "高", medium: "中", low: "低" };
-    const PROFILE_LABELS = {
-      routine: "Routine", standard: "Standard", advanced: "Advanced",
-      deep: "Deep", complex: "Complex", exceptional: "Exceptional"
-    };
-    const PROFILE_CODEX_LABELS = {
-      routine: "Codex 1", standard: "Codex 2", advanced: "Codex 3", deep: "Codex 4", complex: "Codex 5", exceptional: "Codex 6"
-    };
-    const EXECUTION_PROFILES = Object.keys(PROFILE_LABELS);
+    const CAPABILITY_LEVELS = ["L1", "L2", "L3", "L4", "L5"];
+    const CAPABILITY_LABELS = Object.fromEntries(CAPABILITY_LEVELS.map((level) => [level, level]));
     const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"]);
     const ATTENTION_STATUSES = new Set(["DRAFT", "WAITING_CONFLICT", "WAITING_HUMAN", "BLOCKED", "STALLED", "FAILED"]);
     const CLOSED_STATUSES = new Set(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
@@ -1521,7 +1569,7 @@
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
     const HEADER_FILTER_STATUSES = ["DRAFT", "PENDING", "RUNNING", "WAITING_CONFLICT", "WAITING_HUMAN", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"];
     const HEADER_FILTER_PRIORITIES = ["blocker", "critical", "high", "medium", "low"];
-    const TASK_SCHEMA_VERSION = "3.3.0";
+    const TASK_SCHEMA_VERSION = "3.4.0";
     const STATE_ENDPOINT = "/api/state";
     const TASK_ACTION_ENDPOINT = "/api/task-action";
     const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
@@ -1557,6 +1605,7 @@
       workspaceUpdated: document.querySelector("#workspaceUpdated"),
       profileList: document.querySelector("#profileList"),
       profileCount: document.querySelector("#profileCount"),
+      profileLevelTooltip: document.querySelector("#profileLevelTooltip"),
       taskDialog: document.querySelector("#taskDialog"),
       dialogTitle: document.querySelector("#dialogTitle"),
       dialogSubtitle: document.querySelector("#dialogSubtitle"),
@@ -1839,45 +1888,41 @@
       </div>`;
     }
 
-    function profileConfig(profile) {
-      return state?.runtime_config?.automations?.profiles?.[profile] ?? null;
+    function executionConfig(environment, providerId, capabilityLevel, candidate = state) {
+      const profile = candidate?.runtime_config?.execution_profiles?.[environment];
+      if (environment === "self_hosted_agent") {
+        return profile?.providers?.[providerId]?.capabilities?.[capabilityLevel] ?? null;
+      }
+      return profile?.capabilities?.[capabilityLevel] ?? null;
     }
 
-    function codexCliProfileConfig(profile) {
-      return state?.runtime_config?.codex_cli?.profiles?.[profile] ?? null;
+    function executionConfigLabel(config) {
+      if (!config?.model) return "配置不可用";
+      return `${config.model} · ${config.reasoning ?? "unknown"} · ${config.attempt_timeout_seconds ?? "--"}s · 重试 ${config.max_retries ?? "--"}`;
     }
 
-    function includesProfile(values, profile) {
-      return Array.isArray(values) && values.includes(profile);
+    function providerLabel(providerId) {
+      return providerId ? ` · ${providerId}` : "";
     }
 
-    function automationChannelConfig(profile) {
-      if (profile === "exceptional") return { mode: "人工", config: profileConfig(profile) };
-      const config = profileConfig(profile);
-      return { mode: config?.scheduled === true ? "定时配置" : "未配置", config };
-    }
-
-    function cliChannelConfig(profile) {
-      if (profile === "exceptional") return { mode: "人工", config: codexCliProfileConfig(profile) };
-      const cli = state?.runtime_config?.codex_cli;
-      const configured = includesProfile(cli?.supported_execution_profiles, profile)
-        && includesProfile(cli?.dispatcher?.supported_execution_profiles, profile);
-      return { mode: configured ? "Dispatcher 配置" : "未配置", config: codexCliProfileConfig(profile) };
-    }
-
-    function channelDisplayLabel(environment, channel) {
-      const platform = environment === "codex_automation" ? "Codex.APP" : "Codex.CLI";
-      const modelParts = String(channel.config?.model ?? "unknown").split("-");
-      const model = modelParts[modelParts.length - 1] || "unknown";
-      const reasoning = channel.config?.reasoning_effort ?? "unknown";
-      return `${platform}·${model}·${reasoning}`;
+    function renderProfileLevelHelp() {
+      elements.profileLevelTooltip.innerHTML = CAPABILITY_LEVELS.map((level) => {
+        const entries = runtimeEnvironmentEntries().flatMap(([environment, runtime]) => {
+          if (environment === "self_hosted_agent") {
+            return Object.keys(state?.runtime_config?.execution_profiles?.[environment]?.providers ?? {}).map((providerId) => {
+              const config = executionConfig(environment, providerId, level);
+              return `${runtime.name}${providerLabel(providerId)}: ${executionConfigLabel(config)}`;
+            });
+          }
+          return [`${runtime.name}: ${executionConfigLabel(executionConfig(environment, null, level))}`];
+        });
+        return `<div class="profile-level-tooltip-item"><strong>${escapeHtml(level)}</strong><span>${escapeHtml(entries.join(" | "))}</span></div>`;
+      }).join("");
     }
 
     function profileCell(task) {
-      const profile = task.execution_profile;
-      const config = profileConfig(profile);
-      const model = config?.model ? `${config.model} · ${config.reasoning_effort}` : "模型配置不可用";
-      return `<span class="profile-badge profile-${escapeHtml(profile)}" title="${escapeHtml(model)}">${escapeHtml(PROFILE_LABELS[profile] ?? profile)}</span>`;
+      const config = executionConfig(task.runtime_environment, task.provider_id, task.capability_level);
+      return `<span class="profile-badge profile-${escapeHtml(task.capability_level)}" title="${escapeHtml(executionConfigLabel(config))}">${escapeHtml(CAPABILITY_LABELS[task.capability_level] ?? task.capability_level)}</span>`;
     }
 
     function runtimeEnvironmentEntries(candidate = state) {
@@ -1890,7 +1935,7 @@
 
     function environmentCell(task) {
       const environment = task.runtime_environment;
-      return `<span class="environment-badge" title="${escapeHtml(environment)}">${escapeHtml(runtimeEnvironmentName(environment))}</span>`;
+      return `<span class="environment-badge" title="${escapeHtml(`${environment}${providerLabel(task.provider_id)}`)}">${escapeHtml(runtimeEnvironmentName(environment) + providerLabel(task.provider_id))}</span>`;
     }
 
     function headerFilterOptions(kind, tasks = state?.tasks ?? []) {
@@ -1912,8 +1957,8 @@
         const values = new Set(contextualTasks.map((task) => task.runtime_environment));
         return [["all", "全部环境"], ...runtimeEnvironmentEntries().filter(([environment]) => values.has(environment)).map(([environment, config]) => [environment, config.name])];
       }
-      const values = new Set(contextualTasks.map((task) => task.execution_profile));
-      return [["all", "全部任务档位"], ...EXECUTION_PROFILES.filter((profile) => values.has(profile)).map((profile) => [profile, PROFILE_LABELS[profile]])];
+      const values = new Set(contextualTasks.map((task) => task.capability_level));
+      return [["all", "全部能力等级"], ...CAPABILITY_LEVELS.filter((level) => values.has(level)).map((level) => [level, CAPABILITY_LABELS[level]])];
     }
 
     function resetInvalidHeaderFilters(tasks) {
@@ -2025,9 +2070,15 @@
         if (!Number.isInteger(task?.row_version) || task.row_version < 1) errors.push(`任务 ${task?.id ?? index} row_version 无效`);
         if (!VALID_STATUSES.has(task?.status)) errors.push(`任务 ${task?.id ?? index} 状态无效`);
         if (!Object.hasOwn(PRIORITY_ORDER, task?.priority)) errors.push(`任务 ${task?.id ?? index} 优先级无效`);
-        if (!EXECUTION_PROFILES.includes(task?.execution_profile)) errors.push(`任务 ${task?.id ?? index} 任务档位无效`);
+        if (!CAPABILITY_LEVELS.includes(task?.capability_level)) errors.push(`任务 ${task?.id ?? index} 能力等级无效`);
         if (!task?.runtime_environment || !validRuntimeEnvironments.has(task.runtime_environment)) {
           errors.push(`任务 ${task?.id ?? index} 运行环境缺失或未知`);
+        }
+        if (task?.runtime_environment === "self_hosted_agent" && (!task?.provider_id || !executionConfig(task.runtime_environment, task.provider_id, task.capability_level, candidate))) {
+          errors.push(`任务 ${task?.id ?? index} Provider 缺失或未知`);
+        }
+        if (task?.runtime_environment !== "self_hosted_agent" && task?.provider_id !== null) {
+          errors.push(`任务 ${task?.id ?? index} Provider 路由无效`);
         }
         if (task?.depends_on !== undefined && (!Array.isArray(task.depends_on) || task.depends_on.some((id) => typeof id !== "string"))) {
           errors.push(`任务 ${task?.id ?? index} depends_on 无效`);
@@ -2039,6 +2090,10 @@
       for (const [index, agent] of (candidate?.agents ?? []).entries()) {
         if (!agent?.runtime_environment || !validRuntimeEnvironments.has(agent.runtime_environment)) {
           errors.push(`活动 execution ${agent?.id ?? index} 运行环境缺失或未知`);
+        }
+        if (!CAPABILITY_LEVELS.includes(agent?.capability_level)) errors.push(`活动 execution ${agent?.id ?? index} 能力等级无效`);
+        if (agent?.runtime_environment === "self_hosted_agent" && (!agent?.provider_id || !executionConfig(agent.runtime_environment, agent.provider_id, agent.capability_level, candidate))) {
+          errors.push(`活动 execution ${agent?.id ?? index} Provider 缺失或未知`);
         }
       }
       if (errors.length) throw new Error(errors.join("；"));
@@ -2097,7 +2152,7 @@
       if (ignoredHeaderFilter !== "priority" && currentPriority !== "all" && task.priority !== currentPriority) return false;
       if (ignoredHeaderFilter !== "environment" && currentEnvironment !== "all" && task.runtime_environment !== currentEnvironment) return false;
       if (ignoredHeaderFilter !== "project" && currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;
-      if (ignoredHeaderFilter !== "profile" && currentProfile !== "all" && task.execution_profile !== currentProfile) return false;
+      if (ignoredHeaderFilter !== "profile" && currentProfile !== "all" && task.capability_level !== currentProfile) return false;
       if (!currentQuery) return true;
       return [task.id, task.title, task.description, ...taskProjects(task)]
         .filter(Boolean)
@@ -2228,7 +2283,7 @@
             ${renderConflictIndicator(task, tasks)}
           </div></td>
           <td data-label="优先级"><span class="priority-badge priority-${escapeHtml(task.priority)}">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></td>
-          <td data-label="任务档位">${profileCell(task)}</td>
+          <td data-label="能力等级">${profileCell(task)}</td>
           <td data-label="运行环境">${environmentCell(task)}</td>
           <td data-label="项目">${projectCell(task)}</td>
           <td data-label="时间"><div class="task-time-info">
@@ -2250,32 +2305,31 @@
     }
 
     function renderProfiles(tasks, agents) {
-      const channelEnvironments = ["codex_automation", "codex_cli"];
-      const activeCounts = Object.fromEntries(EXECUTION_PROFILES.map((profile) => [profile, Object.fromEntries(channelEnvironments.map((environment) => [environment, 0]))]));
-      agents.forEach((agent) => {
-        if (activeCounts[agent.execution_profile]?.[agent.runtime_environment] !== undefined) {
-          activeCounts[agent.execution_profile][agent.runtime_environment] += 1;
-        }
-      });
-      const activeChannels = EXECUTION_PROFILES.flatMap((profile) => channelEnvironments.map((environment) => activeCounts[profile][environment])).filter((count) => count > 0).length;
-      elements.profileCount.textContent = `${activeChannels} 通道活动`;
-      elements.profileList.innerHTML = EXECUTION_PROFILES.map((profile) => {
-        const limit = state?.settings?.profile_parallel_limits?.[profile] ?? "--";
-        const codexLabel = PROFILE_CODEX_LABELS[profile] ?? profile;
-        const automation = automationChannelConfig(profile);
-        const cli = cliChannelConfig(profile);
-        const channels = [
-          ["codex_automation", "Codex 客户端", automation],
-          ["codex_cli", "Codex CLI", cli]
-        ];
-        return `<li class="profile-row profile-level-${escapeHtml(profile)}" role="group" aria-label="${escapeHtml(`${codexLabel} · ${PROFILE_LABELS[profile]} 调度通道`)}">
-          <div class="profile-heading-row"><span class="profile-codex-label">${escapeHtml(codexLabel)} · ${escapeHtml(PROFILE_LABELS[profile])}</span><span class="profile-limit">共享上限 ${escapeHtml(limit)}</span></div>
-          <div class="profile-channels">${channels.map(([environment, name, channel]) => {
-            const model = channel.config?.model && channel.config?.reasoning_effort ? `${channel.config.model} · ${channel.config.reasoning_effort}` : "模型配置不可用";
-            return `<div class="profile-channel" data-runtime-environment="${environment}" title="${escapeHtml(model)}"><span class="profile-channel-name">${escapeHtml(channelDisplayLabel(environment, channel))}</span><strong class="profile-channel-active">${activeCounts[profile][environment]} 活动</strong><span class="profile-channel-mode">${channel.mode}</span></div>`;
-          }).join("")}</div>
-        </li>`;
+      const environments = runtimeEnvironmentEntries();
+      const platformLimits = state?.settings?.platform_max_active_executions ?? {};
+      const totalActive = agents.length;
+      const totalLimit = state?.settings?.global_max_active_executions ?? "--";
+      elements.profileCount.textContent = `${totalActive}/${totalLimit}`;
+      renderProfileLevelHelp();
+      const capacityRows = environments.map(([environment, runtime]) => {
+        const active = agents.filter((agent) => agent.runtime_environment === environment).length;
+        return `<div class="profile-channel" title="真实 RUNNING execution；等待和终态不占容量"><span class="profile-channel-name">${escapeHtml(runtime.name)}</span><strong class="profile-channel-active">${active}/${escapeHtml(platformLimits[environment] ?? "--")}</strong></div>`;
       }).join("");
+      const capabilityRows = CAPABILITY_LEVELS.map((level) => {
+        const pending = tasks.filter((task) => task.capability_level === level && task.status === "PENDING").length;
+        const entries = environments.flatMap(([environment, runtime]) => {
+          const providers = environment === "self_hosted_agent"
+            ? Object.keys(state?.runtime_config?.execution_profiles?.[environment]?.providers ?? {})
+            : [null];
+          return providers.map((providerId) => {
+            const config = executionConfig(environment, providerId, level);
+            const active = agents.filter((agent) => agent.runtime_environment === environment && agent.provider_id === providerId && agent.capability_level === level).length;
+            return `<div class="profile-channel" title="${escapeHtml(executionConfigLabel(config))}"><span class="profile-channel-name">${escapeHtml(`${runtime.name}${providerLabel(providerId)} · ${executionConfigLabel(config)}`)}</span><strong class="profile-channel-active">${pending}/${active}</strong></div>`;
+          });
+        }).join("");
+        return `<li class="profile-row profile-level-${escapeHtml(level)}" role="group" aria-label="${escapeHtml(`${level} 执行配置`)}"><div class="profile-heading-row"><span class="profile-codex-label">${escapeHtml(level)}</span><span class="profile-limit">待执行/活动</span></div><div class="profile-channels">${entries}</div></li>`;
+      }).join("");
+      elements.profileList.innerHTML = `<li class="profile-row profile-level-L1" role="group" aria-label="平台容量"><div class="profile-heading-row"><span class="profile-codex-label">平台容量</span><span class="profile-limit">全局 ${escapeHtml(totalActive)}/${escapeHtml(totalLimit)}</span></div><div class="profile-channels">${capacityRows}</div></li>${capabilityRows}`;
     }
 
     function setExpandedSidePanel(button) {
@@ -2346,9 +2400,10 @@
         <div class="detail-grid">
           <div class="detail-field"><span class="detail-label">状态</span><span class="detail-value">${escapeHtml(STATUS_LABELS[task.status])}</span></div>
           <div class="detail-field"><span class="detail-label">优先级</span><span class="detail-value">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></div>
-          <div class="detail-field"><span class="detail-label">任务档位</span><span class="detail-value">${escapeHtml(PROFILE_LABELS[task.execution_profile] ?? task.execution_profile)}</span></div>
+          <div class="detail-field"><span class="detail-label">能力等级</span><span class="detail-value">${escapeHtml(CAPABILITY_LABELS[task.capability_level] ?? task.capability_level)}</span></div>
           <div class="detail-field"><span class="detail-label">运行环境</span><span class="detail-value">${escapeHtml(runtimeEnvironmentName(task.runtime_environment))} (${escapeHtml(task.runtime_environment)})</span></div>
-          <div class="detail-field"><span class="detail-label">模型</span><span class="detail-value">${escapeHtml(profileConfig(task.execution_profile)?.model ?? "配置不可用")} · ${escapeHtml(profileConfig(task.execution_profile)?.reasoning_effort ?? "--")}</span></div>
+          <div class="detail-field"><span class="detail-label">Provider</span><span class="detail-value">${escapeHtml(task.provider_id ?? "无")}</span></div>
+          <div class="detail-field"><span class="detail-label">执行配置</span><span class="detail-value">${escapeHtml(executionConfigLabel(executionConfig(task.runtime_environment, task.provider_id, task.capability_level)))}</span></div>
           <div class="detail-field"><span class="detail-label">归档时间</span><span class="detail-value">${escapeHtml(formatDate(task.archived_at))}</span></div>
           <div class="detail-field"><span class="detail-label">项目</span><span class="detail-value">${escapeHtml(projects.join("、") || "未识别")}</span></div>
           <div class="detail-field"><span class="detail-label">尝试次数</span><span class="detail-value">${escapeHtml(task.attempt)}</span></div>

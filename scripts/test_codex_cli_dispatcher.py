@@ -22,16 +22,19 @@ def task(
     task_id: str,
     *,
     priority: str = "medium",
-    profile: str = "standard",
+    capability_level: str = "L2",
     status: str = "PENDING",
     dependencies: list[str] | None = None,
+    execution_policy: str = "automatic",
 ) -> dict[str, object]:
     return {
         "id": task_id,
         "status": status,
         "priority": priority,
         "runtime_environment": "codex_cli",
-        "execution_profile": profile,
+        "provider_id": None,
+        "capability_level": capability_level,
+        "execution_policy": execution_policy,
         "depends_on": dependencies or [],
     }
 
@@ -56,15 +59,18 @@ class CodexCliDispatcherTests(unittest.TestCase):
 
         return CodexCliDispatcher(self.settings, self.config, snapshot_reader=snapshot, launcher=launcher, logger=EventLogger(None))
 
-    def test_select_candidate_keeps_priority_order_and_supported_profiles(self) -> None:
+    def test_select_candidate_keeps_priority_order_and_supported_capabilities(self) -> None:
         tasks = [
             task("medium", priority="medium"),
-            task("blocked", priority="blocker", profile="exceptional"),
-            task("critical", priority="critical", profile="advanced"),
+            task("manual", priority="blocker", capability_level="L5", execution_policy="manual"),
+            task("critical", priority="critical", capability_level="L3"),
         ]
-        selected = select_candidate(tasks, self.settings.supported_profiles)
+        selected = select_candidate(tasks, self.settings.supported_capability_levels)
         self.assertEqual(selected["id"], "medium")
-        selected = select_candidate(sorted(tasks, key=lambda value: {"blocker": 0, "critical": 1, "medium": 3}[str(value["priority"])]), self.settings.supported_profiles)
+        selected = select_candidate(
+            sorted(tasks, key=lambda value: {"blocker": 0, "critical": 1, "medium": 3}[str(value["priority"])]),
+            self.settings.supported_capability_levels,
+        )
         self.assertEqual(selected["id"], "critical")
 
     def test_no_task_and_unsatisfied_dependencies_do_not_start_runner(self) -> None:
@@ -74,24 +80,37 @@ class CodexCliDispatcherTests(unittest.TestCase):
                 self.assertEqual(result["outcome"], "NO_TASK")
                 self.assertFalse(self.launches)
 
-    def test_global_and_profile_capacity_prevent_runner_start(self) -> None:
-        selected = task("selected", profile="advanced")
-        global_agents = [{"execution_profile": "standard"}] * self.settings.max_parallel_tasks
+    def test_global_and_platform_capacity_prevent_runner_start(self) -> None:
+        selected = task("selected", capability_level="L3")
+        global_agents = [
+            {"runtime_environment": "codex_automation", "capability_level": "L1"}
+        ] * self.settings.global_max_active_executions
         global_result = self.dispatcher([selected], global_agents).run()
         self.assertEqual((global_result["outcome"], global_result["limit_scope"]), ("SLOT_FULL", "global"))
         self.assertFalse(self.launches)
-        profile_agents = [{"execution_profile": "advanced"}] * self.settings.profile_parallel_limits["advanced"]
-        profile_result = self.dispatcher([selected], profile_agents).run()
-        self.assertEqual((profile_result["outcome"], profile_result["limit_scope"]), ("SLOT_FULL", "profile"))
+        platform_agents = [
+            {"runtime_environment": "codex_cli", "capability_level": level}
+            for level in ("L1", "L2", "L3", "L4", "L5")
+        ]
+        self.assertEqual(len(platform_agents), self.settings.platform_max_active_executions)
+        platform_result = self.dispatcher([selected], platform_agents).run()
+        self.assertEqual(
+            (platform_result["outcome"], platform_result["limit_scope"]),
+            ("SLOT_FULL", "platform"),
+        )
         self.assertFalse(self.launches)
 
     def test_one_runner_launch_keeps_runner_claim_as_final_race_arbiter(self) -> None:
-        tasks = [task("first", priority="critical", profile="advanced"), task("second", priority="high", profile="standard")]
+        tasks = [
+            task("first", priority="critical", capability_level="L3"),
+            task("second", priority="high", capability_level="L2"),
+        ]
         result = self.dispatcher(tasks).run()
         self.assertEqual(result["outcome"], "RUNNER_FINISHED")
         self.assertEqual(len(self.launches), 1)
         command, cwd, timeout = self.launches[0]
-        self.assertEqual(command[command.index("--profile") + 1], "advanced")
+        self.assertEqual(command[command.index("--capability-level") + 1], "L3")
+        self.assertNotIn("--profile", command)
         self.assertIn("--config", command)
         self.assertIn("--db", command)
         self.assertEqual(cwd, BASE_DIR)
@@ -99,7 +118,10 @@ class CodexCliDispatcherTests(unittest.TestCase):
 
     def test_runner_terminal_outcomes_do_not_trigger_second_profile(self) -> None:
         runner = subprocess.CompletedProcess(["runner"], 0, stdout='{"outcome":"CONFLICT"}', stderr="")
-        result = self.dispatcher([task("first", profile="advanced"), task("second", profile="standard")], result=runner).run()
+        result = self.dispatcher(
+            [task("first", capability_level="L3"), task("second", capability_level="L2")],
+            result=runner,
+        ).run()
         self.assertEqual(result["outcome"], "RUNNER_FINISHED")
         self.assertEqual(len(self.launches), 1)
 
@@ -114,7 +136,7 @@ class CodexCliDispatcherTests(unittest.TestCase):
     def test_dispatcher_config_rejects_unsafe_or_invalid_values(self) -> None:
         for patch in (
             {"interval_minutes": 0},
-            {"supported_execution_profiles": ["exceptional"]},
+            {"supported_capability_levels": ["L6"]},
             {"working_directory": str(BASE_DIR.parent)},
         ):
             with self.subTest(patch=patch):
@@ -122,6 +144,18 @@ class CodexCliDispatcherTests(unittest.TestCase):
                 config["codex_cli"]["dispatcher"].update(patch)
                 with self.assertRaises(DispatcherError):
                     DispatcherSettings.from_config(config)
+
+    def test_dispatcher_timeout_covers_all_configured_attempts(self) -> None:
+        config = copy.deepcopy(self.config)
+        config["codex_cli"]["dispatcher"]["timeout_seconds"] = 7200
+        with self.assertRaisesRegex(DispatcherError, "complete execution attempt"):
+            DispatcherSettings.from_config(config)
+
+    def test_missing_capability_profile_prevents_dispatch(self) -> None:
+        config = copy.deepcopy(self.config)
+        del config["execution_profiles"]["codex_cli"]["capabilities"]["L3"]
+        with self.assertRaises(DispatcherError):
+            DispatcherSettings.from_config(config)
 
     def test_install_script_dry_run_does_not_touch_task_scheduler(self) -> None:
         powershell = shutil.which("powershell.exe") or shutil.which("powershell")

@@ -12,8 +12,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB = BASE_DIR / "data" / "loop-agent.sqlite3"
 SCHEMA_PATH = BASE_DIR / "schemas" / "loop-agent.sql"
 CONFIG_PATH = BASE_DIR / "config" / "initialization.json"
-SCHEMA_VERSION = "3.3.0"
-SCHEMA_USER_VERSION = 30300
+SCHEMA_VERSION = "3.4.0"
+SCHEMA_USER_VERSION = 30400
+PROFILE_ROUTING_SCHEMA_USER_VERSION = 30300
 ROUTING_SCHEMA_USER_VERSION = 30200
 ARCHIVE_SCHEMA_USER_VERSION = 30100
 LEGACY_SCHEMA_USER_VERSION = 30000
@@ -23,7 +24,17 @@ DEPENDENCY_COMPLETE_STATUSES = {"SUCCEEDED", "CONFIRMED"}
 ARCHIVABLE_STATUSES = {"CONFIRMED", "FAILED", "CANCELLED"}
 PRIORITIES = ("blocker", "critical", "high", "medium", "low")
 EXECUTION_PROFILES = ("routine", "standard", "advanced", "deep", "complex", "exceptional")
-RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "deepseek")
+CAPABILITY_LEVELS = ("L1", "L2", "L3", "L4", "L5")
+EXECUTION_POLICIES = ("automatic", "manual")
+CANONICAL_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "self_hosted_agent")
+LEGACY_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "deepseek")
+# Remove these input aliases after production is Schema 3.4.0 and every launcher uses capability arguments.
+RUNTIME_ENVIRONMENTS = CANONICAL_RUNTIME_ENVIRONMENTS + ("deepseek",)
+CLAIM_RUNTIME_ENVIRONMENTS = RUNTIME_ENVIRONMENTS
+LEGACY_PROFILE_TO_CAPABILITY = {
+    "routine": "L1", "standard": "L2", "advanced": "L3",
+    "deep": "L4", "complex": "L5", "exceptional": "L5",
+}
 FORBIDDEN_SCOPE_ROOTS = {"$CODEX_HOME", ".reasonix", ".env"}
 ALLOWED_TABLES = {
     "tasks",
@@ -49,11 +60,15 @@ CREATE TABLE tasks_new (
     'SUCCEEDED', 'CONFIRMED', 'FAILED', 'CANCELLED'
   )),
   priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),
-  execution_profile TEXT NOT NULL DEFAULT 'standard' CHECK (execution_profile IN (
-    'routine', 'standard', 'advanced', 'deep', 'complex', 'exceptional'
+  capability_level TEXT NOT NULL DEFAULT 'L2' CHECK (capability_level IN (
+    'L1', 'L2', 'L3', 'L4', 'L5'
   )),
   runtime_environment TEXT NOT NULL CHECK (runtime_environment IN (
-    'codex_automation', 'codex_cli', 'deepseek'
+    'codex_automation', 'codex_cli', 'self_hosted_agent'
+  )),
+  provider_id TEXT,
+  execution_policy TEXT NOT NULL DEFAULT 'automatic' CHECK (execution_policy IN (
+    'automatic', 'manual'
   )),
   assigned_agent TEXT,
   created_at TEXT NOT NULL,
@@ -74,13 +89,107 @@ CREATE TABLE tasks_new (
   human_requested_at TEXT,
   human_responded_at TEXT,
   human_response TEXT,
-  row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version >= 1)
+  row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version >= 1),
+  CHECK (
+    (runtime_environment = 'self_hosted_agent' AND provider_id IS NOT NULL AND length(trim(provider_id)) > 0)
+    OR (runtime_environment <> 'self_hosted_agent' AND provider_id IS NULL)
+  )
+)
+"""
+
+EXECUTIONS_TABLE_SQL = """
+CREATE TABLE executions_new (
+  execution_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'FINISHED', 'EXPIRED')),
+  started_at TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  finished_at TEXT,
+  outcome TEXT,
+  runtime_environment TEXT NOT NULL CHECK (runtime_environment IN (
+    'codex_automation', 'codex_cli', 'self_hosted_agent'
+  )),
+  provider_id TEXT,
+  capability_level TEXT NOT NULL CHECK (capability_level IN ('L1', 'L2', 'L3', 'L4', 'L5')),
+  execution_policy TEXT NOT NULL CHECK (execution_policy IN ('automatic', 'manual')),
+  model TEXT NOT NULL,
+  reasoning TEXT NOT NULL CHECK (reasoning IN ('low', 'medium', 'high', 'xhigh')),
+  attempt_timeout_seconds INTEGER NOT NULL CHECK (attempt_timeout_seconds > 0),
+  max_retries INTEGER NOT NULL CHECK (max_retries >= 0),
+  CHECK (
+    (runtime_environment = 'self_hosted_agent' AND provider_id IS NOT NULL AND length(trim(provider_id)) > 0)
+    OR (runtime_environment <> 'self_hosted_agent' AND provider_id IS NULL)
+  )
 )
 """
 
 
 class LoopError(RuntimeError):
     pass
+
+
+def legacy_profile_for(capability_level: str, execution_policy: str = "automatic") -> str:
+    if capability_level not in CAPABILITY_LEVELS:
+        raise LoopError(f"任务能力等级无效: {capability_level}")
+    if execution_policy not in EXECUTION_POLICIES:
+        raise LoopError(f"执行策略无效: {execution_policy}")
+    if capability_level == "L5":
+        return "exceptional" if execution_policy == "manual" else "complex"
+    return {"L1": "routine", "L2": "standard", "L3": "advanced", "L4": "deep"}[capability_level]
+
+
+def normalize_execution_target(
+    runtime_environment: str,
+    provider_id: str | None = None,
+) -> tuple[str, str | None]:
+    if runtime_environment == "deepseek":
+        if provider_id not in {None, "deepseek"}:
+            raise LoopError("旧 deepseek 路由只能映射到 provider_id=deepseek")
+        return "self_hosted_agent", "deepseek"
+    if runtime_environment not in CANONICAL_RUNTIME_ENVIRONMENTS:
+        raise LoopError(f"运行环境无效: {runtime_environment}")
+    if runtime_environment == "self_hosted_agent":
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise LoopError("self_hosted_agent 任务必须提供 provider_id")
+        return runtime_environment, provider_id.strip()
+    if provider_id is not None:
+        raise LoopError(f"{runtime_environment} 任务不得保存 provider_id")
+    return runtime_environment, None
+
+
+def resolve_execution_profile(
+    runtime_environment: str,
+    provider_id: str | None,
+    capability_level: str,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    value = config or load_initialization_config()
+    runtime_environment, provider_id = normalize_execution_target(runtime_environment, provider_id)
+    if capability_level not in CAPABILITY_LEVELS:
+        raise LoopError(f"任务能力等级无效: {capability_level}")
+    runtime_profiles = (value.get("execution_profiles") or {}).get(runtime_environment) or {}
+    if runtime_environment == "self_hosted_agent":
+        profile = ((runtime_profiles.get("providers") or {}).get(provider_id) or {}).get(
+            "capabilities", {}
+        ).get(capability_level)
+    else:
+        if runtime_profiles.get("provider_id") is not None:
+            raise LoopError(f"{runtime_environment} execution profile 不得配置 provider_id")
+        profile = (runtime_profiles.get("capabilities") or {}).get(capability_level)
+    if not isinstance(profile, dict):
+        raise LoopError(
+            f"没有匹配的 execution profile: {runtime_environment}/{provider_id or '-'}/{capability_level}"
+        )
+    return {
+        "runtime_environment": runtime_environment,
+        "provider_id": provider_id,
+        "capability_level": capability_level,
+        "model": profile["model"],
+        "reasoning": profile["reasoning"],
+        "attempt_timeout_seconds": int(profile["attempt_timeout_seconds"]),
+        "max_retries": int(profile["max_retries"]),
+    }
 
 
 def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]:
@@ -99,7 +208,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     dashboard = config.get("dashboard") or {}
     automations = config.get("automations") or {}
     health = config.get("health") or {}
-    limits = execution.get("profile_parallel_limits") or {}
+    platform_limits = execution.get("platform_max_active_executions") or {}
     profiles = automations.get("profiles") or {}
     runtime_environments = config.get("runtime_environments") or {}
     project_defaults = priority_policy.get("project_defaults") or {}
@@ -117,17 +226,46 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
         for profile in EXECUTION_PROFILES
     )
-    valid_runtime_environment_config = set(runtime_environments) == set(RUNTIME_ENVIRONMENTS) and all(
+    valid_runtime_environment_config = set(runtime_environments) == set(CANONICAL_RUNTIME_ENVIRONMENTS) and all(
         isinstance(runtime_environments[environment], dict)
         and isinstance(runtime_environments[environment].get("name"), str)
         and bool(runtime_environments[environment]["name"].strip())
         and isinstance(runtime_environments[environment].get("entry"), dict)
         and runtime_environments[environment]["entry"].get("type") == environment
         and runtime_environments[environment]["entry"].get("claim_argument") == environment
-        for environment in RUNTIME_ENVIRONMENTS
+        for environment in CANONICAL_RUNTIME_ENVIRONMENTS
+    )
+    execution_profiles = config.get("execution_profiles") or {}
+    valid_profile_fields = lambda item: (
+        isinstance(item, dict)
+        and isinstance(item.get("model"), str) and bool(item["model"].strip())
+        and item.get("reasoning") in {"low", "medium", "high", "xhigh"}
+        and isinstance(item.get("attempt_timeout_seconds"), int)
+        and item["attempt_timeout_seconds"] > 0
+        and isinstance(item.get("max_retries"), int)
+        and 0 <= item["max_retries"] <= 10
+    )
+    direct_profiles_valid = all(
+        isinstance(execution_profiles.get(environment), dict)
+        and execution_profiles[environment].get("provider_id") is None
+        and set((execution_profiles[environment].get("capabilities") or {})) == set(CAPABILITY_LEVELS)
+        and all(valid_profile_fields(item) for item in execution_profiles[environment]["capabilities"].values())
+        for environment in ("codex_automation", "codex_cli")
+    )
+    self_hosted_profiles = execution_profiles.get("self_hosted_agent") or {}
+    providers = self_hosted_profiles.get("providers") or {}
+    self_hosted_profiles_valid = (
+        isinstance(providers, dict) and bool(providers)
+        and all(
+            isinstance(provider, str) and bool(provider.strip())
+            and isinstance(item, dict)
+            and set((item.get("capabilities") or {})) == set(CAPABILITY_LEVELS)
+            and all(valid_profile_fields(profile) for profile in item["capabilities"].values())
+            for provider, item in providers.items()
+        )
     )
     valid = (
-        config.get("config_version") == "3.0.0"
+        config.get("config_version") == "4.0.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -146,10 +284,13 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and execution["task_lease_seconds"] >= 60
         and isinstance(execution.get("max_attempts"), int)
         and execution["max_attempts"] >= 1
-        and isinstance(execution.get("max_parallel_tasks"), int)
-        and execution["max_parallel_tasks"] >= 1
-        and set(limits) == set(EXECUTION_PROFILES)
-        and all(isinstance(limits[profile], int) and limits[profile] >= 1 for profile in EXECUTION_PROFILES)
+        and isinstance(execution.get("global_max_active_executions"), int)
+        and execution["global_max_active_executions"] >= 1
+        and set(platform_limits) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
+        and all(
+            isinstance(platform_limits[platform], int) and platform_limits[platform] >= 1
+            for platform in CANONICAL_RUNTIME_ENVIRONMENTS
+        )
         and execution.get("scope_conflict_mode") == "project"
         and isinstance(execution.get("require_human_approval_for"), list)
         and isinstance(self_hosted_agent.get("max_steps"), int)
@@ -194,6 +335,9 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and "codex_automation" in automations["entry_prompt_template"]
         and valid_profile_config
         and valid_runtime_environment_config
+        and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
+        and direct_profiles_valid
+        and self_hosted_profiles_valid
         and health.get("scheduler") == "windows_task_scheduler"
         and isinstance(health.get("task_name"), str)
         and bool(health["task_name"].strip())
@@ -254,12 +398,13 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
     if current == SCHEMA_USER_VERSION:
         return {
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
-            "archived": 0, "profiles_backfilled": 0, "runtime_environments_backfilled": 0,
+            "archived": 0, "tasks_mapped": 0, "executions_snapshotted": 0,
         }
     supported_versions = {
         LEGACY_SCHEMA_USER_VERSION,
         ARCHIVE_SCHEMA_USER_VERSION,
         ROUTING_SCHEMA_USER_VERSION,
+        PROFILE_ROUTING_SCHEMA_USER_VERSION,
     }
     if current not in supported_versions:
         raise LoopError(
@@ -274,7 +419,9 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
         LEGACY_SCHEMA_USER_VERSION: "3.0.0",
         ARCHIVE_SCHEMA_USER_VERSION: "3.1.0",
         ROUTING_SCHEMA_USER_VERSION: "3.2.0",
+        PROFILE_ROUTING_SCHEMA_USER_VERSION: "3.3.0",
     }[current]
+    config = load_initialization_config()
     database.execute("PRAGMA foreign_keys = OFF")
     try:
         transaction(database)
@@ -297,31 +444,80 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
                 (task["id"], now_shanghai(), task["status"], task["status"], reason),
             )
 
-        task_count = int(database.execute("SELECT count(*) FROM tasks").fetchone()[0])
+        task_rows = [dict(row) for row in database.execute("SELECT * FROM tasks ORDER BY id").fetchall()]
+        execution_rows = [
+            dict(row) for row in database.execute("SELECT * FROM executions ORDER BY execution_id").fetchall()
+        ]
+        normalized_tasks: dict[str, dict[str, Any]] = {}
+        for row in task_rows:
+            legacy_profile = row.get("execution_profile", "standard")
+            legacy_environment = row.get("runtime_environment", "codex_automation")
+            runtime_environment, provider_id = normalize_execution_target(legacy_environment)
+            normalized_tasks[row["id"]] = {
+                "capability_level": LEGACY_PROFILE_TO_CAPABILITY[legacy_profile],
+                "runtime_environment": runtime_environment,
+                "provider_id": provider_id,
+                "execution_policy": "manual" if legacy_profile == "exceptional" else "automatic",
+            }
+
         database.execute(TASKS_TABLE_SQL)
-        profile_expression = "execution_profile" if current == ROUTING_SCHEMA_USER_VERSION else "'standard'"
-        database.execute(
-            f"""INSERT INTO tasks_new(
-              id, title, description, status, priority, execution_profile, runtime_environment, assigned_agent,
-              created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
-              progress_percent, progress_summary, progress_next_step, result_summary, result_error,
-              human_required, human_question, human_options_json, human_requested_at,
-              human_responded_at, human_response, row_version
-            ) SELECT
-              id, title, description, status, priority, {profile_expression}, 'codex_automation', assigned_agent,
-              created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
-              progress_percent, progress_summary, progress_next_step, result_summary, result_error,
-              human_required, human_question, human_options_json, human_requested_at,
-              human_responded_at, human_response, row_version
-            FROM tasks"""
-        )
+        for row in task_rows:
+            route = normalized_tasks[row["id"]]
+            database.execute(
+                """INSERT INTO tasks_new(
+                  id, title, description, status, priority, capability_level, runtime_environment,
+                  provider_id, execution_policy, assigned_agent, created_at, started_at, updated_at,
+                  heartbeat_at, completed_at, archived_at, attempt, progress_percent, progress_summary,
+                  progress_next_step, result_summary, result_error, human_required, human_question,
+                  human_options_json, human_requested_at, human_responded_at, human_response, row_version
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    row["id"], row["title"], row.get("description", ""), row["status"], row["priority"],
+                    route["capability_level"], route["runtime_environment"], route["provider_id"],
+                    route["execution_policy"], row.get("assigned_agent"), row["created_at"],
+                    row.get("started_at"), row["updated_at"], row.get("heartbeat_at"),
+                    row.get("completed_at"), row.get("archived_at"), row.get("attempt", 0),
+                    row.get("progress_percent", 0), row.get("progress_summary", ""),
+                    row.get("progress_next_step"), row.get("result_summary"), row.get("result_error"),
+                    row.get("human_required", 0), row.get("human_question"),
+                    row.get("human_options_json", "[]"), row.get("human_requested_at"),
+                    row.get("human_responded_at"), row.get("human_response"), row.get("row_version", 1),
+                ),
+            )
+        database.execute(EXECUTIONS_TABLE_SQL)
+        for row in execution_rows:
+            route = normalized_tasks[row["task_id"]]
+            snapshot = resolve_execution_profile(
+                route["runtime_environment"], route["provider_id"], route["capability_level"], config
+            )
+            database.execute(
+                """INSERT INTO executions_new(
+                  execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, finished_at,
+                  outcome, runtime_environment, provider_id, capability_level, execution_policy, model,
+                  reasoning, attempt_timeout_seconds, max_retries
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    row["execution_id"], row["task_id"], row["status"], row["started_at"],
+                    row["heartbeat_at"], row["lease_expires_at"], row.get("finished_at"), row.get("outcome"),
+                    snapshot["runtime_environment"], snapshot["provider_id"], snapshot["capability_level"],
+                    route["execution_policy"], snapshot["model"], snapshot["reasoning"],
+                    snapshot["attempt_timeout_seconds"], snapshot["max_retries"],
+                ),
+            )
+        database.execute("DROP TABLE executions")
         database.execute("DROP TABLE tasks")
         database.execute("ALTER TABLE tasks_new RENAME TO tasks")
+        database.execute("ALTER TABLE executions_new RENAME TO executions")
         database.execute(
-            "CREATE INDEX idx_tasks_queue ON tasks(status, runtime_environment, execution_profile, priority, created_at, id)"
+            "CREATE INDEX idx_tasks_queue ON tasks(status, runtime_environment, provider_id, capability_level, "
+            "execution_policy, priority, created_at, id)"
         )
         database.execute(
             "CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)"
+        )
+        database.execute("CREATE INDEX idx_executions_active ON executions(status, lease_expires_at)")
+        database.execute(
+            "CREATE UNIQUE INDEX idx_executions_one_active_task ON executions(task_id) WHERE status='RUNNING'"
         )
         database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
         foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
@@ -340,8 +536,8 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
         "to": SCHEMA_VERSION,
         "migrated": True,
         "archived": len(confirmed),
-        "profiles_backfilled": 0 if current == ROUTING_SCHEMA_USER_VERSION else task_count,
-        "runtime_environments_backfilled": task_count,
+        "tasks_mapped": len(task_rows),
+        "executions_snapshotted": len(execution_rows),
     }
 
 
@@ -368,11 +564,20 @@ def execution_setting(key: str, default: Any = None, config: dict[str, Any] | No
     return value.get("task_execution", {}).get(key, default)
 
 
-def profile_parallel_limit(profile: str, config: dict[str, Any] | None = None) -> int:
-    if profile not in EXECUTION_PROFILES:
-        raise LoopError(f"执行档位无效: {profile}")
-    limits = execution_setting("profile_parallel_limits", {}, config)
-    return int(limits[profile])
+def global_parallel_limit(config: dict[str, Any] | None = None) -> int:
+    return int(execution_setting("global_max_active_executions", 8, config))
+
+
+def platform_parallel_limit(platform: str, config: dict[str, Any] | None = None) -> int:
+    if platform not in CANONICAL_RUNTIME_ENVIRONMENTS:
+        raise LoopError(f"执行平台无效: {platform}")
+    limits = execution_setting("platform_max_active_executions", {}, config)
+    return int(limits[platform])
+
+
+def uses_capability_schema(database: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)").fetchall()}
+    return "capability_level" in columns
 
 
 def parse_project_registry(path: Path) -> list[dict[str, Any]]:
@@ -508,41 +713,77 @@ def insert_task(
         raise LoopError(f"任务 id 已存在: {task_id}")
     status = task.get("status", "PENDING")
     priority = task.get("priority", "medium")
-    execution_profile = task.get("execution_profile", "standard")
+    execution_profile = task.get("execution_profile")
+    capability_level = task.get("capability_level")
+    execution_policy = task.get("execution_policy")
     runtime_environment = task.get("runtime_environment")
+    provider_id = task.get("provider_id")
     if priority not in PRIORITIES:
         raise LoopError(f"任务优先级无效: {priority}")
-    if execution_profile not in EXECUTION_PROFILES:
+    if execution_profile is not None and execution_profile not in EXECUTION_PROFILES:
         raise LoopError(f"执行档位无效: {execution_profile}")
-    if runtime_environment not in RUNTIME_ENVIRONMENTS:
-        raise LoopError(f"运行环境无效: {runtime_environment}")
+    if capability_level is None:
+        capability_level = LEGACY_PROFILE_TO_CAPABILITY[execution_profile or "standard"]
+    if capability_level not in CAPABILITY_LEVELS:
+        raise LoopError(f"任务能力等级无效: {capability_level}")
+    if execution_policy is None:
+        execution_policy = "manual" if execution_profile == "exceptional" else "automatic"
+    if execution_policy not in EXECUTION_POLICIES:
+        raise LoopError(f"执行策略无效: {execution_policy}")
+    if execution_profile is not None and legacy_profile_for(capability_level, execution_policy) != execution_profile:
+        raise LoopError("旧 execution_profile 与 capability_level/execution_policy 不一致")
+    runtime_environment, provider_id = normalize_execution_target(runtime_environment, provider_id)
+    resolve_execution_profile(runtime_environment, provider_id, capability_level)
     stamp = task.get("created_at") or now_shanghai()
     progress = task.get("progress") or {}
     result = task.get("result") or {}
     human = task.get("human_intervention") or {}
-    database.execute(
-        """
-        INSERT INTO tasks(
-          id, title, description, status, priority, execution_profile, runtime_environment, assigned_agent,
-          created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
-          progress_percent, progress_summary, progress_next_step,
-          result_summary, result_error,
-          human_required, human_question, human_options_json,
-          human_requested_at, human_responded_at, human_response, row_version
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            task_id, str(task.get("title") or task_id), str(task.get("description") or ""),
-            status, priority, execution_profile, runtime_environment, task.get("assigned_agent"), stamp,
-            task.get("started_at"), task.get("updated_at") or stamp, task.get("heartbeat_at"),
-            task.get("completed_at"), task.get("archived_at"), int(task.get("attempt", 0)),
-            int(progress.get("percent", 0)),
-            str(progress.get("summary") or ""), progress.get("next_step"), result.get("summary"),
-            result.get("error"), int(bool(human.get("required", False))), human.get("question"),
-            json_dump(human.get("options") or []), human.get("requested_at"), human.get("responded_at"),
-            human.get("response"), int(task.get("row_version", 1)),
-        ),
+    common_tail = (
+        task.get("assigned_agent"), stamp, task.get("started_at"), task.get("updated_at") or stamp,
+        task.get("heartbeat_at"), task.get("completed_at"), task.get("archived_at"),
+        int(task.get("attempt", 0)), int(progress.get("percent", 0)),
+        str(progress.get("summary") or ""), progress.get("next_step"), result.get("summary"),
+        result.get("error"), int(bool(human.get("required", False))), human.get("question"),
+        json_dump(human.get("options") or []), human.get("requested_at"), human.get("responded_at"),
+        human.get("response"), int(task.get("row_version", 1)),
     )
+    if uses_capability_schema(database):
+        database.execute(
+            """INSERT INTO tasks(
+              id, title, description, status, priority, capability_level, runtime_environment, provider_id,
+              execution_policy, assigned_agent, created_at, started_at, updated_at, heartbeat_at,
+              completed_at, archived_at, attempt, progress_percent, progress_summary, progress_next_step,
+              result_summary, result_error, human_required, human_question, human_options_json,
+              human_requested_at, human_responded_at, human_response, row_version
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task_id, str(task.get("title") or task_id), str(task.get("description") or ""), status,
+                priority, capability_level, runtime_environment, provider_id, execution_policy, *common_tail,
+            ),
+        )
+    else:
+        if execution_policy == "manual" and capability_level != "L5":
+            raise LoopError("Schema 3.3.0 兼容层无法表示 L1-L4 manual execution_policy")
+        if runtime_environment == "self_hosted_agent":
+            if provider_id != "deepseek":
+                raise LoopError("Schema 3.3.0 兼容层只支持 self_hosted_agent/deepseek")
+            legacy_environment = "deepseek"
+        else:
+            legacy_environment = runtime_environment
+        legacy_profile = legacy_profile_for(capability_level, execution_policy)
+        database.execute(
+            """INSERT INTO tasks(
+              id, title, description, status, priority, execution_profile, runtime_environment, assigned_agent,
+              created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
+              progress_percent, progress_summary, progress_next_step, result_summary, result_error,
+              human_required, human_question, human_options_json, human_requested_at,
+              human_responded_at, human_response, row_version
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task_id, str(task.get("title") or task_id), str(task.get("description") or ""), status,
+                priority, legacy_profile, legacy_environment, *common_tail,
+            ),
+        )
     set_task_dependencies(database, task_id, task.get("depends_on") or [])
     for index, scope in enumerate(task.get("scope") or []):
         database.execute(
@@ -599,10 +840,26 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         "SELECT scope_key, blocker_task_id, blocker_execution_id, detected_at FROM task_conflicts WHERE task_id=? ORDER BY scope_key",
         (task_id,),
     ).fetchall()]
+    columns = set(row.keys())
+    if "capability_level" in columns:
+        capability_level = row["capability_level"]
+        execution_policy = row["execution_policy"]
+        provider_id = row["provider_id"]
+        runtime_environment = row["runtime_environment"]
+        execution_profile = legacy_profile_for(capability_level, execution_policy)
+    else:
+        execution_profile = row["execution_profile"]
+        capability_level = LEGACY_PROFILE_TO_CAPABILITY[execution_profile]
+        execution_policy = "manual" if execution_profile == "exceptional" else "automatic"
+        legacy_environment = row["runtime_environment"]
+        runtime_environment = "self_hosted_agent" if legacy_environment == "deepseek" else legacy_environment
+        provider_id = "deepseek" if legacy_environment == "deepseek" else None
     return {
         "id": task_id, "title": row["title"], "description": row["description"],
         "status": row["status"], "priority": row["priority"],
-        "execution_profile": row["execution_profile"], "runtime_environment": row["runtime_environment"],
+        "capability_level": capability_level, "execution_policy": execution_policy,
+        "provider_id": provider_id, "runtime_environment": runtime_environment,
+        "execution_profile": execution_profile,
         "assigned_agent": row["assigned_agent"],
         "created_at": row["created_at"], "started_at": row["started_at"], "updated_at": row["updated_at"],
         "heartbeat_at": row["heartbeat_at"], "completed_at": row["completed_at"],
@@ -648,22 +905,51 @@ def current_revision(database: sqlite3.Connection) -> int:
 
 def state_payload(database: sqlite3.Connection, config: dict[str, Any] | None = None) -> dict[str, Any]:
     value = config or load_initialization_config()
-    executions = database.execute(
-        "SELECT e.execution_id, e.task_id, e.heartbeat_at, t.execution_profile, t.runtime_environment "
-        "FROM executions e JOIN tasks t ON t.id=e.task_id "
-        "WHERE e.status='RUNNING' ORDER BY e.started_at"
-    ).fetchall()
-    agents = [{
-        "id": row["execution_id"], "role": "worker", "status": "RUNNING",
-        "current_task_id": row["task_id"], "last_seen_at": row["heartbeat_at"],
-        "execution_profile": row["execution_profile"],
-        "runtime_environment": row["runtime_environment"],
-        "summary": f"Concurrent SQLite worker · {row['runtime_environment']} · {row['execution_profile']}",
-    } for row in executions]
+    if uses_capability_schema(database):
+        executions = database.execute(
+            "SELECT execution_id, task_id, heartbeat_at, runtime_environment, provider_id, capability_level, "
+            "execution_policy, model, reasoning, attempt_timeout_seconds, max_retries FROM executions "
+            "WHERE status='RUNNING' ORDER BY started_at"
+        ).fetchall()
+        agents = [{
+            "id": row["execution_id"], "role": "worker", "status": "RUNNING",
+            "current_task_id": row["task_id"], "last_seen_at": row["heartbeat_at"],
+            "capability_level": row["capability_level"],
+            "execution_policy": row["execution_policy"],
+            "execution_profile": legacy_profile_for(row["capability_level"], row["execution_policy"]),
+            "runtime_environment": row["runtime_environment"], "provider_id": row["provider_id"],
+            "execution_config": {
+                "model": row["model"], "reasoning": row["reasoning"],
+                "attempt_timeout_seconds": row["attempt_timeout_seconds"],
+                "max_retries": row["max_retries"],
+            },
+            "summary": f"Concurrent SQLite worker · {row['runtime_environment']} · {row['capability_level']}",
+        } for row in executions]
+    else:
+        executions = database.execute(
+            "SELECT e.execution_id, e.task_id, e.heartbeat_at, t.execution_profile, t.runtime_environment "
+            "FROM executions e JOIN tasks t ON t.id=e.task_id "
+            "WHERE e.status='RUNNING' ORDER BY e.started_at"
+        ).fetchall()
+        agents = []
+        for row in executions:
+            runtime_environment = (
+                "self_hosted_agent" if row["runtime_environment"] == "deepseek" else row["runtime_environment"]
+            )
+            agents.append({
+                "id": row["execution_id"], "role": "worker", "status": "RUNNING",
+                "current_task_id": row["task_id"], "last_seen_at": row["heartbeat_at"],
+                "capability_level": LEGACY_PROFILE_TO_CAPABILITY[row["execution_profile"]],
+                "execution_policy": "manual" if row["execution_profile"] == "exceptional" else "automatic",
+                "execution_profile": row["execution_profile"],
+                "runtime_environment": runtime_environment,
+                "provider_id": "deepseek" if row["runtime_environment"] == "deepseek" else None,
+                "summary": f"Concurrent SQLite worker · {runtime_environment} · {row['execution_profile']}",
+            })
     updated = database.execute("SELECT max(updated_at) FROM tasks").fetchone()[0] or now_shanghai()
     workspace = value["workspace"]
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version(database),
         "workspace": {
             "name": workspace["name"], "timezone": workspace["timezone"],
             "revision": current_revision(database), "updated_at": updated,
@@ -729,14 +1015,43 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
     ).fetchall()
     if invalid_priorities:
         errors.append("任务优先级无效: " + ",".join(row[0] for row in invalid_priorities))
-    invalid_profiles = database.execute(
-        "SELECT id FROM tasks WHERE execution_profile NOT IN "
-        "('routine','standard','advanced','deep','complex','exceptional')"
-    ).fetchall()
-    if invalid_profiles:
-        errors.append("任务执行档位无效: " + ",".join(row[0] for row in invalid_profiles))
+    capability_schema = uses_capability_schema(database)
+    if capability_schema:
+        invalid_capabilities = database.execute(
+            "SELECT id FROM tasks WHERE capability_level NOT IN ('L1','L2','L3','L4','L5')"
+        ).fetchall()
+        if invalid_capabilities:
+            errors.append("任务能力等级无效: " + ",".join(row[0] for row in invalid_capabilities))
+        invalid_policies = database.execute(
+            "SELECT id FROM tasks WHERE execution_policy NOT IN ('automatic','manual')"
+        ).fetchall()
+        if invalid_policies:
+            errors.append("任务执行策略无效: " + ",".join(row[0] for row in invalid_policies))
+        invalid_provider_routes = database.execute(
+            "SELECT id FROM tasks WHERE (runtime_environment='self_hosted_agent' AND "
+            "(provider_id IS NULL OR length(trim(provider_id))=0)) OR "
+            "(runtime_environment<>'self_hosted_agent' AND provider_id IS NOT NULL)"
+        ).fetchall()
+        if invalid_provider_routes:
+            errors.append("任务 Provider 路由无效: " + ",".join(row[0] for row in invalid_provider_routes))
+        invalid_snapshots = database.execute(
+            "SELECT execution_id FROM executions WHERE model='' OR attempt_timeout_seconds<=0 OR max_retries<0"
+        ).fetchall()
+        if invalid_snapshots:
+            errors.append("execution 配置快照无效: " + ",".join(row[0] for row in invalid_snapshots))
+    else:
+        invalid_profiles = database.execute(
+            "SELECT id FROM tasks WHERE execution_profile NOT IN "
+            "('routine','standard','advanced','deep','complex','exceptional')"
+        ).fetchall()
+        if invalid_profiles:
+            errors.append("任务执行档位无效: " + ",".join(row[0] for row in invalid_profiles))
+    runtime_values = (
+        "('codex_automation','codex_cli','self_hosted_agent')" if capability_schema
+        else "('codex_automation','codex_cli','deepseek')"
+    )
     invalid_runtime_environments = database.execute(
-        "SELECT id FROM tasks WHERE runtime_environment NOT IN ('codex_automation','codex_cli','deepseek')"
+        f"SELECT id FROM tasks WHERE runtime_environment NOT IN {runtime_values}"
     ).fetchall()
     if invalid_runtime_environments:
         errors.append("任务运行环境无效: " + ",".join(row[0] for row in invalid_runtime_environments))
@@ -744,19 +1059,26 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
     if dependency_cycle:
         errors.append("循环依赖: " + " -> ".join(dependency_cycle))
     active = database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0]
-    maximum = int(execution_setting("max_parallel_tasks", 6, value))
+    maximum = global_parallel_limit(value)
     if active > maximum:
-        errors.append(f"active_executions={active} exceeds max_parallel_tasks={maximum}")
-    for profile in EXECUTION_PROFILES:
-        profile_active = database.execute(
-            "SELECT count(*) FROM executions e JOIN tasks t ON t.id=e.task_id "
-            "WHERE e.status='RUNNING' AND t.execution_profile=?",
-            (profile,),
-        ).fetchone()[0]
-        profile_maximum = profile_parallel_limit(profile, value)
-        if profile_active > profile_maximum:
+        errors.append(f"active_executions={active} exceeds global maximum={maximum}")
+    for platform in CANONICAL_RUNTIME_ENVIRONMENTS:
+        if capability_schema:
+            platform_active = database.execute(
+                "SELECT count(*) FROM executions WHERE status='RUNNING' AND runtime_environment=?",
+                (platform,),
+            ).fetchone()[0]
+        else:
+            legacy_platform = "deepseek" if platform == "self_hosted_agent" else platform
+            platform_active = database.execute(
+                "SELECT count(*) FROM executions e JOIN tasks t ON t.id=e.task_id "
+                "WHERE e.status='RUNNING' AND t.runtime_environment=?",
+                (legacy_platform,),
+            ).fetchone()[0]
+        platform_maximum = platform_parallel_limit(platform, value)
+        if platform_active > platform_maximum:
             errors.append(
-                f"profile={profile} active_executions={profile_active} exceeds maximum={profile_maximum}"
+                f"platform={platform} active_executions={platform_active} exceeds maximum={platform_maximum}"
             )
     orphan_running = database.execute(
         """SELECT t.id FROM tasks t WHERE t.status='RUNNING' AND NOT EXISTS (
@@ -774,6 +1096,6 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
     return {
         "ok": not errors, "schema_version": version,
         "tasks": database.execute("SELECT count(*) FROM tasks").fetchone()[0],
-        "active_executions": active, "max_parallel_tasks": maximum,
+        "active_executions": active, "global_max_active_executions": maximum,
         "tables": sorted(actual_tables), "errors": errors,
     }

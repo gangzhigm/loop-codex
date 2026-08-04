@@ -10,13 +10,20 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
 sys.dont_write_bytecode = True
 
-from loopdb import CONFIG_PATH, EXECUTION_PROFILES, RUNTIME_ENVIRONMENTS, load_initialization_config
+from loopdb import (
+    CAPABILITY_LEVELS,
+    CONFIG_PATH,
+    CANONICAL_RUNTIME_ENVIRONMENTS,
+    load_initialization_config,
+    resolve_execution_profile,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -44,10 +51,66 @@ class ApprovalRequired(AgentRuntimeError):
         super().__init__(f"action requires explicit approval: {action}")
 
 
+class AgentAttemptTimeout(AgentRuntimeError):
+    pass
+
+
+class ModelRequestTimeout(AgentRuntimeError):
+    pass
+
+
+class OwnedWorkStillRunning(AgentRuntimeError):
+    pass
+
+
 class ModelProvider(Protocol):
     """Provider boundary. Implementations translate a model API to this neutral contract."""
 
     def complete(self, request: dict[str, Any], timeout_seconds: float) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class ExecutionProfile:
+    runtime_environment: str
+    provider_id: str | None
+    capability_level: str
+    model: str
+    reasoning: str
+    attempt_timeout_seconds: float
+    max_retries: int
+
+    @classmethod
+    def resolve(
+        cls,
+        config: dict[str, Any],
+        runtime_environment: str,
+        provider_id: str | None,
+        capability_level: str,
+    ) -> "ExecutionProfile":
+        try:
+            value = resolve_execution_profile(
+                runtime_environment, provider_id, capability_level, config
+            )
+        except Exception as error:
+            raise AgentRuntimeError("no unique execution profile matches the requested route") from error
+        return cls(
+            runtime_environment=str(value["runtime_environment"]),
+            provider_id=value["provider_id"],
+            capability_level=str(value["capability_level"]),
+            model=str(value["model"]),
+            reasoning=str(value["reasoning"]),
+            attempt_timeout_seconds=float(value["attempt_timeout_seconds"]),
+            max_retries=int(value["max_retries"]),
+        )
+
+    def request_payload(self) -> dict[str, Any]:
+        return {
+            "runtime_environment": self.runtime_environment,
+            "provider_id": self.provider_id,
+            "capability_level": self.capability_level,
+            "model": self.model,
+            "reasoning": self.reasoning,
+        }
 
 
 @dataclass(frozen=True)
@@ -58,18 +121,38 @@ class RuntimeSettings:
     heartbeat_interval_seconds: float
     max_file_bytes: int
     max_tool_output_chars: int
+    stalled_after_seconds: float = 300
+    provider_termination_grace_seconds: float = 5
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "RuntimeSettings":
         agent = config["self_hosted_agent"]
-        return cls(
+        settings = cls(
             max_steps=int(agent["max_steps"]),
             model_timeout_seconds=float(agent["model_timeout_seconds"]),
             tool_timeout_seconds=float(agent["tool_timeout_seconds"]),
             heartbeat_interval_seconds=float(config["task_execution"]["heartbeat_interval_seconds"]),
             max_file_bytes=int(agent["max_file_bytes"]),
             max_tool_output_chars=int(agent["max_tool_output_chars"]),
+            stalled_after_seconds=float(config["task_execution"]["stalled_after_seconds"]),
+            provider_termination_grace_seconds=float(agent["provider_termination_grace_seconds"]),
         )
+        if not 0 < settings.heartbeat_interval_seconds < settings.stalled_after_seconds:
+            raise AgentRuntimeError("heartbeat interval must be below stalled detection")
+        profiles = config.get("execution_profiles") or {}
+        attempts = [
+            profile["attempt_timeout_seconds"]
+            for runtime in profiles.values()
+            for provider in (
+                list((runtime.get("providers") or {}).values())
+                if isinstance(runtime, dict) and "providers" in runtime
+                else [runtime]
+            )
+            for profile in (provider.get("capabilities") or {}).values()
+        ]
+        if not attempts or any(float(timeout) <= settings.stalled_after_seconds for timeout in attempts):
+            raise AgentRuntimeError("stalled detection must be below every attempt timeout")
+        return settings
 
 
 class SafeLogger:
@@ -118,13 +201,23 @@ class SubprocessLoopController:
             raise AgentRuntimeError("loop controller returned a non-object")
         return payload
 
-    def claim(self, execution_id: str, runtime_environment: str, profile: str) -> dict[str, Any]:
+    def claim(
+        self,
+        execution_id: str,
+        runtime_environment: str,
+        capability_level: str,
+        provider_id: str | None = None,
+    ) -> dict[str, Any]:
         if self.claim_count:
             raise AgentRuntimeError("claim may only be called once per runtime instance")
         self.claim_count += 1
-        return self._invoke(
-            ["claim", execution_id, "--runtime-environment", runtime_environment, "--profile", profile]
-        )
+        arguments = [
+            "claim", execution_id, "--runtime-environment", runtime_environment,
+            "--capability-level", capability_level, "--execution-policy", "automatic",
+        ]
+        if provider_id is not None:
+            arguments.extend(["--provider-id", provider_id])
+        return self._invoke(arguments)
 
     def heartbeat(self, execution_id: str, task_id: str) -> dict[str, Any]:
         return self._invoke(["heartbeat", execution_id, task_id])
@@ -157,13 +250,18 @@ class HeartbeatGuard:
         while not self.stop_event.wait(self.interval_seconds):
             try:
                 self.beat()
-            except Exception as error:  # pragma: no cover - race depends on wall clock
-                self.error = error
-                self.logger.event("heartbeat_failed", error=type(error).__name__)
+            except Exception:  # pragma: no cover - race depends on wall clock
                 self.stop_event.set()
 
     def beat(self) -> None:
-        self.heartbeat()
+        if self.error is not None:
+            raise AgentRuntimeError("heartbeat failed") from self.error
+        try:
+            self.heartbeat()
+        except Exception as error:
+            self.error = error
+            self.logger.event("heartbeat_failed", error=type(error).__name__)
+            raise AgentRuntimeError("heartbeat failed") from error
         self.logger.event("heartbeat")
 
     def ensure_healthy(self) -> None:
@@ -270,6 +368,7 @@ class ToolSandbox:
         self.policy = policy
         self.settings = settings
         self.approved_actions = approved_actions
+        self.side_effect_count = 0
 
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name in HIGH_RISK_ACTIONS:
@@ -347,6 +446,7 @@ class ToolSandbox:
                 raise ToolRejected("new file exceeds configured edit limit")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(new, encoding="utf-8", newline="")
+            self.side_effect_count += 1
             return {"path": path.relative_to(self.policy.workspace).as_posix(), "changed": True, "created": True}
         if not old:
             raise ToolRejected("empty old text is only valid when creating a missing file")
@@ -364,6 +464,7 @@ class ToolSandbox:
             raise ToolRejected("patched file exceeds configured edit limit")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(updated, encoding="utf-8", newline="")
+        self.side_effect_count += 1
         return {"path": path.relative_to(self.policy.workspace).as_posix(), "changed": True}
 
     def _run_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -576,17 +677,39 @@ class SingleTaskAgent:
         workspace: Path,
         settings: RuntimeSettings,
         logger: SafeLogger | None = None,
+        *,
+        config: dict[str, Any] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.provider = provider
         self.controller = controller
         self.workspace = workspace.resolve()
         self.settings = settings
         self.logger = logger or SafeLogger()
+        self.config = config or load_initialization_config()
+        self.clock = clock
 
-    def run(self, execution_id: str, runtime_environment: str, profile: str) -> dict[str, Any]:
-        if runtime_environment not in RUNTIME_ENVIRONMENTS or profile not in EXECUTION_PROFILES:
-            raise AgentRuntimeError("runtime environment and execution profile must be explicit and valid")
-        claim = self.controller.claim(execution_id, runtime_environment, profile)
+    def run(
+        self,
+        execution_id: str,
+        runtime_environment: str,
+        capability_level: str,
+        provider_id: str | None = None,
+    ) -> dict[str, Any]:
+        if runtime_environment not in CANONICAL_RUNTIME_ENVIRONMENTS or capability_level not in CAPABILITY_LEVELS:
+            raise AgentRuntimeError("runtime environment and capability level must be explicit and valid")
+        execution_profile = ExecutionProfile.resolve(
+            self.config, runtime_environment, provider_id, capability_level
+        )
+        validate_startup = getattr(self.provider, "validate_startup", None)
+        if callable(validate_startup):
+            validate_startup(execution_profile)
+        claim = self.controller.claim(
+            execution_id,
+            execution_profile.runtime_environment,
+            execution_profile.capability_level,
+            execution_profile.provider_id,
+        )
         outcome = claim.get("outcome")
         if outcome != "CLAIMED":
             if outcome not in {"NO_TASK", "SLOT_FULL", "CONFLICT"}:
@@ -596,7 +719,12 @@ class SingleTaskAgent:
         task = claim.get("task")
         if not isinstance(task, dict):
             raise AgentRuntimeError("claim omitted task")
-        if task.get("runtime_environment") != runtime_environment or task.get("execution_profile") != profile:
+        expected_route = {
+            "runtime_environment": execution_profile.runtime_environment,
+            "provider_id": execution_profile.provider_id,
+            "capability_level": execution_profile.capability_level,
+        }
+        if any(task.get(key) != value for key, value in expected_route.items()):
             result = self._failed("claimed task routing does not match this runtime")
             finish = self.controller.finish(execution_id, str(task.get("id") or ""), result)
             return {"outcome": "FINISHED", "result": result, "finish": finish}
@@ -605,7 +733,6 @@ class SingleTaskAgent:
             policy = ScopePolicy(self.workspace, list(task.get("scope") or []))
             context = self._task_context(task, policy)
             approvals = approved_actions(task)
-            sandbox = ToolSandbox(policy, self.settings, approvals)
         except Exception as error:
             result = self._waiting("任务上下文无法安全建立，需要人工检查 scope 或项目目录。", type(error).__name__)
             finish = self.controller.finish(execution_id, task_id, result)
@@ -617,7 +744,14 @@ class SingleTaskAgent:
         result: dict[str, Any]
         try:
             with HeartbeatGuard(heartbeat, self.settings.heartbeat_interval_seconds, self.logger) as guard:
-                result = self._model_loop(context, sandbox, guard, "credential_access" in approvals)
+                result = self._run_attempts(
+                    context,
+                    policy,
+                    approvals,
+                    guard,
+                    execution_profile,
+                    "credential_access" in approvals,
+                )
                 guard.ensure_healthy()
                 guard.beat()
         except KeyboardInterrupt:
@@ -629,6 +763,61 @@ class SingleTaskAgent:
         if finish.get("outcome") != "FINISHED":
             raise AgentRuntimeError("finish did not confirm task update")
         return {"outcome": "FINISHED", "task_id": task_id, "result": result, "finish": finish}
+
+    def _run_attempts(
+        self,
+        context: dict[str, Any],
+        policy: ScopePolicy,
+        approvals: set[str],
+        guard: HeartbeatGuard,
+        execution_profile: ExecutionProfile,
+        credential_access_approved: bool,
+    ) -> dict[str, Any]:
+        maximum_attempts = execution_profile.max_retries + 1
+        last_result = self._failed("agent attempt did not start")
+        for attempt in range(1, maximum_attempts + 1):
+            guard.ensure_healthy()
+            guard.beat()
+            sandbox = ToolSandbox(policy, self.settings, approvals)
+            deadline = self.clock() + execution_profile.attempt_timeout_seconds
+            self.logger.event(
+                "agent_attempt_started", attempt=attempt, maximum_attempts=maximum_attempts,
+                capability_level=execution_profile.capability_level,
+            )
+            try:
+                last_result = self._model_loop(
+                    context,
+                    sandbox,
+                    guard,
+                    credential_access_approved,
+                    execution_profile,
+                    deadline,
+                )
+            except OwnedWorkStillRunning:
+                raise
+            except Exception as error:
+                guard.ensure_healthy()
+                if getattr(error, "requires_human", False):
+                    return self._waiting(
+                        "Provider 配置、权限或凭据需要人工处理。",
+                        self._public_error(error),
+                    )
+                self.logger.event("agent_attempt_failed", attempt=attempt, error=type(error).__name__)
+                last_result = self._failed(self._public_error(error))
+            if last_result.get("status") != "FAILED":
+                return last_result
+            retryable = sandbox.side_effect_count == 0
+            if not retryable or attempt >= maximum_attempts:
+                if not retryable and attempt < maximum_attempts:
+                    last_result = self._failed(
+                        str(last_result.get("error") or "agent attempt failed")
+                        + "; execution retry suppressed after a local side effect"
+                    )
+                return last_result
+            guard.ensure_healthy()
+            guard.beat()
+            self.logger.event("agent_attempt_retry", attempt=attempt, next_attempt=attempt + 1)
+        return last_result
 
     def _task_context(self, task: dict[str, Any], policy: ScopePolicy) -> dict[str, Any]:
         instructions = []
@@ -702,9 +891,12 @@ class SingleTaskAgent:
         sandbox: ToolSandbox,
         guard: HeartbeatGuard,
         credential_access_approved: bool,
+        execution_profile: ExecutionProfile,
+        deadline: float,
     ) -> dict[str, Any]:
         messages: list[dict[str, Any]] = [{"role": "runtime", "content": context}]
         for step in range(1, self.settings.max_steps + 1):
+            self._remaining_attempt_seconds(deadline)
             guard.ensure_healthy()
             request = {
                 "protocol_version": "1.0",
@@ -712,19 +904,29 @@ class SingleTaskAgent:
                 "messages": messages,
                 "tools": ToolSandbox.TOOL_SCHEMAS,
                 "credential_access_approved": credential_access_approved,
+                "execution_profile": execution_profile.request_payload(),
                 "final_result_schema": {
                     "status": sorted(FINAL_STATUSES),
                     "required": {"SUCCEEDED": ["summary", "verification"], "FAILED": ["summary", "error"], "WAITING_HUMAN": ["summary", "question"]},
                 },
             }
             self.logger.event("model_request", step=step)
-            raw = self._call_provider(request)
+            try:
+                raw = self._call_provider(request, deadline)
+            except Exception as error:
+                if isinstance(error, ModelRequestTimeout) or getattr(error, "retryable_request", False):
+                    self._remaining_attempt_seconds(deadline)
+                    guard.ensure_healthy()
+                    self.logger.event("model_request_retryable_failure", step=step, error=type(error).__name__)
+                    continue
+                raise
             response = validate_model_response(raw)
             self.logger.event("model_response", step=step, type=response["type"])
             if response["type"] == "final":
                 return response["result"]
             tool_results = []
             for call in response["calls"]:
+                self._remaining_attempt_seconds(deadline)
                 guard.beat()
                 self.logger.event("tool_call", step=step, tool=call["name"])
                 try:
@@ -738,30 +940,45 @@ class SingleTaskAgent:
                 except ToolRejected as error:
                     tool_results.append({"id": call["id"], "ok": False, "error": str(error)[:500]})
                 guard.beat()
+                self._remaining_attempt_seconds(deadline)
             messages.append({"role": "provider", "content": {"tool_calls": response["calls"]}})
             messages.append({"role": "runtime", "content": {"tool_results": tool_results}})
         return self._failed("maximum agent steps exhausted before a valid final result")
 
-    def _call_provider(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _call_provider(self, request: dict[str, Any], deadline: float) -> dict[str, Any]:
         completed: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+        attempt_remaining = self._remaining_attempt_seconds(deadline)
+        request_timeout_seconds = min(self.settings.model_timeout_seconds, attempt_remaining)
 
         def invoke() -> None:
             try:
-                completed.put(("result", self.provider.complete(request, self.settings.model_timeout_seconds)))
+                completed.put(("result", self.provider.complete(request, request_timeout_seconds)))
             except BaseException as error:
                 completed.put(("error", error))
 
         thread = threading.Thread(target=invoke, name="model-provider", daemon=True)
         thread.start()
         try:
-            outcome, value = completed.get(timeout=self.settings.model_timeout_seconds)
+            outcome, value = completed.get(timeout=attempt_remaining)
         except queue.Empty as error:
-            raise AgentRuntimeError("model provider timed out") from error
+            thread.join(timeout=self.settings.provider_termination_grace_seconds)
+            if thread.is_alive():
+                raise OwnedWorkStillRunning(
+                    "model provider remained active after the attempt timeout"
+                ) from error
+            raise AgentAttemptTimeout("agent attempt timed out") from error
         if outcome == "error":
             if isinstance(value, TimeoutError):
-                raise AgentRuntimeError("model provider timed out") from value
+                raise ModelRequestTimeout("model provider request timed out") from value
             raise value
+        self._remaining_attempt_seconds(deadline)
         return value
+
+    def _remaining_attempt_seconds(self, deadline: float) -> float:
+        remaining = deadline - self.clock()
+        if remaining <= 0:
+            raise AgentAttemptTimeout("agent attempt timed out")
+        return remaining
 
     @staticmethod
     def _failed(error: str) -> dict[str, Any]:
@@ -797,8 +1014,9 @@ def load_provider(specification: str) -> ModelProvider:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Single-run self-hosted Local Agent Loop runtime")
-    root.add_argument("--runtime-environment", required=True, choices=RUNTIME_ENVIRONMENTS)
-    root.add_argument("--profile", required=True, choices=EXECUTION_PROFILES)
+    root.add_argument("--runtime-environment", required=True, choices=CANONICAL_RUNTIME_ENVIRONMENTS)
+    root.add_argument("--provider-id", required=True)
+    root.add_argument("--capability-level", required=True, choices=CAPABILITY_LEVELS)
     root.add_argument("--provider", required=True, help="Python module:factory returning a ModelProvider")
     root.add_argument("--execution-id", required=True)
     root.add_argument("--config", default=str(CONFIG_PATH))
@@ -811,16 +1029,16 @@ def main() -> None:
     config = load_initialization_config(Path(args.config))
     workspace = Path(config["workspace"]["task_root"])
     provider = load_provider(args.provider)
-    validate_startup = getattr(provider, "validate_startup", None)
-    if callable(validate_startup):
-        validate_startup(args.runtime_environment, args.profile)
     agent = SingleTaskAgent(
         provider=provider,
         controller=SubprocessLoopController(Path(args.db) if args.db else None),
         workspace=workspace,
         settings=RuntimeSettings.from_config(config),
+        config=config,
     )
-    result = agent.run(args.execution_id, args.runtime_environment, args.profile)
+    result = agent.run(
+        args.execution_id, args.runtime_environment, args.capability_level, args.provider_id
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

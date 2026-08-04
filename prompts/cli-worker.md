@@ -9,5 +9,6 @@
 3. 删除、发布、Git 提交、外部消息和凭据访问只有在当前任务文本含有 `APPROVED_ACTIONS: delete,publish,git_commit,external_message,credential_access` 中对应动作时才允许。缺少批准时返回 `WAITING_HUMAN`，不要尝试执行。
 4. 在 scope 内完成实现与验证。诚实区分已确认事实、合理推断和证据不足；未运行的测试不能写成通过。不得生成持久化 report，也不得写 `CONFIRMED` 或 `archived_at`。
 5. 最终只返回符合 Runner 提供的 JSON Schema 的对象。状态只能是 `SUCCEEDED`、`FAILED` 或 `WAITING_HUMAN`。`SUCCEEDED` 必须提供非空 `verification`；`FAILED` 必须提供非空 `error`；`WAITING_HUMAN` 必须提供非空 `question`。
+6. Runner 可能在确认前一 attempt 的进程树已经结束且未观察到可能的副作用后，以同一 execution 启动新的完整 attempt。先检查现有工作树，不要假设当前 attempt 是首次运行，也不要重复不可幂等动作。
 
 Runner 负责 heartbeat、进程生命周期和 finish；你只负责当前任务的业务内容与最终结构化结果。

@@ -10,7 +10,7 @@ sys.dont_write_bytecode = True
 
 from dashboard_server import DashboardActionError, DashboardServer, archive_dashboard_task, resolve_attachment_image
 from health_run import process_alive
-from loopdb import connect, initialize_schema, insert_task, now_shanghai
+from loopdb import connect, initialize_schema, insert_task, load_initialization_config, now_shanghai, state_payload
 
 
 class AttachmentImageTests(unittest.TestCase):
@@ -67,6 +67,47 @@ class AttachmentImageTests(unittest.TestCase):
 
         self.assertEqual(resolved, image_path.resolve())
         self.assertEqual(content_type, "image/png")
+
+    def test_dashboard_state_exposes_l1_l5_routes_and_capacity_config(self) -> None:
+        self.add_task("DASHBOARD-CODEX", "assets/DASHBOARD-CODEX/reference.png")
+        insert_task(
+            self.database,
+            {
+                "id": "DASHBOARD-DEEPSEEK",
+                "title": "DASHBOARD-DEEPSEEK",
+                "description": "provider route",
+                "status": "PENDING",
+                "priority": "medium",
+                "capability_level": "L5",
+                "runtime_environment": "self_hosted_agent",
+                "provider_id": "deepseek",
+                "execution_policy": "automatic",
+                "created_at": now_shanghai(),
+                "scope": ["project/deepseek.txt"],
+                "acceptance": ["test"],
+            },
+            actor="test",
+            project_paths=["project"],
+        )
+
+        payload = state_payload(self.database, load_initialization_config())
+        routes = {
+            task["id"]: (task["capability_level"], task["runtime_environment"], task["provider_id"])
+            for task in payload["tasks"]
+        }
+
+        self.assertEqual(payload["schema_version"], "3.4.0")
+        self.assertEqual(
+            payload["settings"]["platform_max_active_executions"],
+            {"codex_automation": 5, "codex_cli": 5, "self_hosted_agent": 5},
+        )
+        self.assertEqual(payload["settings"]["global_max_active_executions"], 8)
+        self.assertEqual(routes["DASHBOARD-CODEX"], ("L2", "codex_automation", None))
+        self.assertEqual(routes["DASHBOARD-DEEPSEEK"], ("L5", "self_hosted_agent", "deepseek"))
+        self.assertEqual(
+            payload["tasks"][0]["execution_policy"],
+            "automatic",
+        )
 
     def test_unregistered_path_is_rejected(self) -> None:
         self.add_task("IMAGE-TASK", "assets/IMAGE-TASK/reference.png")

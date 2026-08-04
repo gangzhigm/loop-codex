@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -26,9 +27,11 @@ class ScriptedProvider:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = list(responses)
         self.requests: list[dict[str, Any]] = []
+        self.timeouts: list[float] = []
 
     def complete(self, request: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
         self.requests.append(request)
+        self.timeouts.append(timeout_seconds)
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response
@@ -40,12 +43,12 @@ class ScriptedProvider:
 class FakeController:
     def __init__(self, claim: dict[str, Any]) -> None:
         self.claim_payload = claim
-        self.claims: list[tuple[str, str, str]] = []
+        self.claims: list[tuple[str, str, str, str | None]] = []
         self.heartbeats: list[tuple[str, str]] = []
         self.finishes: list[tuple[str, str, dict[str, Any]]] = []
 
-    def claim(self, execution_id: str, runtime_environment: str, profile: str) -> dict[str, Any]:
-        self.claims.append((execution_id, runtime_environment, profile))
+    def claim(self, execution_id: str, runtime_environment: str, capability_level: str, provider_id: str | None) -> dict[str, Any]:
+        self.claims.append((execution_id, runtime_environment, capability_level, provider_id))
         if len(self.claims) > 1:
             raise AssertionError("claimed more than once")
         return self.claim_payload
@@ -86,6 +89,11 @@ class AgentRuntimeTests(unittest.TestCase):
             max_file_bytes=20_000,
             max_tool_output_chars=10_000,
         )
+        self.config = load_initialization_config()
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"] = {
+            "model": "fake-deepseek", "reasoning": "high",
+            "attempt_timeout_seconds": 1, "max_retries": 0,
+        }
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -97,8 +105,9 @@ class AgentRuntimeTests(unittest.TestCase):
             "scope": ["project/"],
             "acceptance": ["File contains after."],
             "depends_on": ["READY-1"],
-            "runtime_environment": "deepseek",
-            "execution_profile": "standard",
+            "runtime_environment": "self_hosted_agent",
+            "provider_id": "deepseek",
+            "capability_level": "L2",
         }
         task.update(overrides)
         return task
@@ -110,6 +119,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(settings.tool_timeout_seconds, 120)
         self.assertEqual(settings.max_file_bytes, 524_288)
         self.assertEqual(settings.max_tool_output_chars, 50_000)
+        self.assertEqual(settings.provider_termination_grace_seconds, 5)
 
     def run_agent(self, provider: ScriptedProvider, claim: dict[str, Any] | None = None) -> tuple[dict[str, Any], FakeController]:
         controller = FakeController(claim or {"outcome": "CLAIMED", "task": self.task()})
@@ -119,8 +129,9 @@ class AgentRuntimeTests(unittest.TestCase):
             self.workspace,
             self.settings,
             logger=SafeLogger(io.StringIO()),
+            config=self.config,
         )
-        return agent.run("exec-1", "deepseek", "standard"), controller
+        return agent.run("exec-1", "self_hosted_agent", "L2", "deepseek"), controller
 
     def test_successful_edit_uses_tool_loop_and_finishes_once(self) -> None:
         provider = ScriptedProvider(
@@ -186,12 +197,83 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn("git_commit", result["result"]["question"])
         self.assertEqual(controller.finishes[0][2]["status"], "WAITING_HUMAN")
 
-    def test_model_timeout_becomes_failed_and_is_finished(self) -> None:
-        provider = ScriptedProvider([TimeoutError("provider timeout")])
+    def test_provider_request_timeout_can_continue_inside_same_attempt(self) -> None:
+        provider = ScriptedProvider([TimeoutError("provider timeout"), success_result("continued")])
         result, controller = self.run_agent(provider)
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(controller.finishes[0][2]["status"], "SUCCEEDED")
+
+    def test_full_attempt_retry_succeeds_once_and_exhausts_deterministically(self) -> None:
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 1
+        provider = ScriptedProvider([RuntimeError("transient"), success_result("second attempt")])
+        result, controller = self.run_agent(provider)
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(len(controller.claims), 1)
+        self.assertEqual(len(controller.finishes), 1)
+
+        provider = ScriptedProvider([RuntimeError("first"), RuntimeError("second")])
+        result, _ = self.run_agent(provider)
         self.assertEqual(result["result"]["status"], "FAILED")
-        self.assertIn("timed out", result["result"]["error"])
-        self.assertEqual(controller.finishes[0][2]["status"], "FAILED")
+        self.assertEqual(len(provider.requests), 2)
+
+    def test_local_side_effect_suppresses_complete_attempt_retry(self) -> None:
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 1
+        provider = ScriptedProvider([
+            tool_call("apply_patch", {"path": "project/file.txt", "old": "before", "new": "after"}),
+            RuntimeError("failed after edit"),
+            success_result("must not run"),
+        ])
+        result, _ = self.run_agent(provider)
+        self.assertEqual(result["result"]["status"], "FAILED")
+        self.assertIn("local side effect", result["result"]["error"])
+        self.assertEqual(len(provider.requests), 2)
+
+    def test_each_retry_receives_a_fresh_complete_attempt_budget(self) -> None:
+        profile = self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]
+        profile.update({"attempt_timeout_seconds": 1, "max_retries": 1})
+        self.settings = RuntimeSettings(**{
+            **self.settings.__dict__, "heartbeat_interval_seconds": 0.02,
+            "model_timeout_seconds": 2, "provider_termination_grace_seconds": 0.2,
+        })
+
+        def slow_first(_request: dict[str, Any]) -> dict[str, Any]:
+            time.sleep(1.05)
+            return success_result()["result"]
+
+        provider = ScriptedProvider([slow_first, success_result("fresh budget")])
+        result, controller = self.run_agent(provider)
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(len(provider.requests), 2)
+        self.assertGreaterEqual(len(controller.heartbeats), 4)
+        self.assertTrue(all(timeout <= 1 for timeout in provider.timeouts))
+
+    def test_heartbeat_failure_is_infrastructure_failure_before_attempt_timeout(self) -> None:
+        class FailingHeartbeatController(FakeController):
+            def heartbeat(self, execution_id: str, task_id: str) -> dict[str, Any]:
+                value = super().heartbeat(execution_id, task_id)
+                if len(self.heartbeats) >= 3:
+                    raise RuntimeError("heartbeat stalled")
+                return value
+
+        self.settings = RuntimeSettings(**{**self.settings.__dict__, "heartbeat_interval_seconds": 0.01})
+        provider = ScriptedProvider([lambda _request: (time.sleep(0.05), success_result())[1]])
+        controller = FailingHeartbeatController({"outcome": "CLAIMED", "task": self.task()})
+        agent = SingleTaskAgent(
+            provider, controller, self.workspace, self.settings,
+            logger=SafeLogger(io.StringIO()), config=self.config,
+        )
+        result = agent.run("exec-heartbeat", "self_hosted_agent", "L2", "deepseek")
+        self.assertEqual(result["result"]["status"], "FAILED")
+        self.assertIn("heartbeat", result["result"]["error"])
+        self.assertEqual(len(controller.finishes), 1)
+
+    def test_runtime_config_rejects_attempt_timeout_before_stall_detection(self) -> None:
+        config = load_initialization_config()
+        config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L1"]["attempt_timeout_seconds"] = 300
+        with self.assertRaisesRegex(Exception, "stalled detection"):
+            RuntimeSettings.from_config(config)
 
     def test_process_interruption_becomes_failed_and_is_finished(self) -> None:
         provider = ScriptedProvider([KeyboardInterrupt()])
@@ -285,8 +367,9 @@ class AgentRuntimeTests(unittest.TestCase):
             self.workspace,
             self.settings,
             logger=SafeLogger(io.StringIO()),
+            config=self.config,
         )
-        result = agent.run("round-trip-execution", "deepseek", "standard")
+        result = agent.run("round-trip-execution", "self_hosted_agent", "L2", "deepseek")
         database = connect(database_path)
         task = database.execute("SELECT status, result_summary FROM tasks WHERE id='ROUND-TRIP'").fetchone()
         execution = database.execute(

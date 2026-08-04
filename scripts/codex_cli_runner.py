@@ -21,6 +21,7 @@ sys.dont_write_bytecode = True
 
 from agent_runtime import (
     AgentRuntimeError,
+    ExecutionProfile,
     HeartbeatGuard,
     SafeLogger,
     ScopePolicy,
@@ -28,8 +29,8 @@ from agent_runtime import (
     validate_final_result,
 )
 from loopdb import (
+    CAPABILITY_LEVELS,
     CONFIG_PATH,
-    EXECUTION_PROFILES,
     configured_projects,
     load_initialization_config,
     resolve_scope_key,
@@ -39,7 +40,6 @@ from loopdb import (
 BASE_DIR = Path(__file__).resolve().parent.parent
 RUNTIME_ENVIRONMENT = "codex_cli"
 CLAIM_TERMINAL_OUTCOMES = {"NO_TASK", "SLOT_FULL", "CONFLICT"}
-REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 SAFE_SANDBOXES = {"read-only", "workspace-write"}
 AUTH_ERROR = re.compile(
     r"(?i)(not logged in|login required|authentication|unauthori[sz]ed|forbidden|"
@@ -57,14 +57,10 @@ class CodexCliRunnerError(RuntimeError):
     pass
 
 
-class CodexCliTimeout(CodexCliRunnerError):
-    pass
-
-
-@dataclass(frozen=True)
-class ProfileSettings:
-    model: str
-    reasoning_effort: str
+class CodexCliAttemptError(CodexCliRunnerError):
+    def __init__(self, message: str, *, retryable: bool) -> None:
+        self.retryable = retryable
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -73,12 +69,11 @@ class CodexCliSettings:
     prompt_path: Path
     use_user_config: bool
     sandbox: str
-    timeout_seconds: float
     termination_grace_seconds: float
     heartbeat_interval_seconds: float
+    stalled_after_seconds: float
     max_stdout_chars: int
     max_stderr_chars: int
-    profiles: dict[str, ProfileSettings]
 
     @classmethod
     def from_config(
@@ -93,48 +88,36 @@ class CodexCliSettings:
             raise CodexCliRunnerError("codex_cli configuration is missing")
         executable = raw.get("executable")
         prompt_value = raw.get("prompt")
-        supported = raw.get("supported_execution_profiles")
-        profile_values = raw.get("profiles")
         if not isinstance(executable, str) or not executable.strip():
             raise CodexCliRunnerError("codex_cli executable is invalid")
         if not isinstance(prompt_value, str) or not prompt_value.strip():
             raise CodexCliRunnerError("codex_cli prompt is invalid")
-        if not isinstance(supported, list) or not supported or len(set(supported)) != len(supported):
-            raise CodexCliRunnerError("codex_cli supported profiles are invalid")
-        if any(profile not in EXECUTION_PROFILES for profile in supported):
-            raise CodexCliRunnerError("codex_cli contains an unknown execution profile")
-        if not isinstance(profile_values, dict) or set(profile_values) != set(supported):
-            raise CodexCliRunnerError("codex_cli profile mapping is incomplete")
-        profiles: dict[str, ProfileSettings] = {}
-        for profile in supported:
-            value = profile_values.get(profile)
-            if not isinstance(value, dict):
-                raise CodexCliRunnerError("codex_cli profile mapping is invalid")
-            model = value.get("model")
-            effort = value.get("reasoning_effort")
-            if not isinstance(model, str) or not model.strip() or effort not in REASONING_EFFORTS:
-                raise CodexCliRunnerError("codex_cli model mapping is invalid")
-            profiles[profile] = ProfileSettings(model.strip(), effort)
+        profiles = {
+            level: ExecutionProfile.resolve(config, RUNTIME_ENVIRONMENT, None, level)
+            for level in CAPABILITY_LEVELS
+        }
         prompt_path = (base_dir / prompt_value).resolve()
         if not prompt_path.is_relative_to(base_dir.resolve()) or not prompt_path.is_file():
             raise CodexCliRunnerError("codex_cli prompt path is unavailable")
         sandbox = raw.get("sandbox")
         use_user_config = raw.get("use_user_config")
-        timeout = raw.get("timeout_seconds")
         grace = raw.get("termination_grace_seconds")
         stdout_limit = raw.get("max_stdout_chars")
         stderr_limit = raw.get("max_stderr_chars")
         heartbeat = (config.get("task_execution") or {}).get("heartbeat_interval_seconds")
+        stalled = (config.get("task_execution") or {}).get("stalled_after_seconds")
         if sandbox not in SAFE_SANDBOXES:
             raise CodexCliRunnerError("codex_cli sandbox must be read-only or workspace-write")
         if not isinstance(use_user_config, bool):
             raise CodexCliRunnerError("codex_cli use_user_config must be a boolean")
-        if not isinstance(timeout, (int, float)) or timeout <= 0:
-            raise CodexCliRunnerError("codex_cli timeout is invalid")
         if not isinstance(grace, (int, float)) or grace <= 0:
             raise CodexCliRunnerError("codex_cli termination grace is invalid")
         if not isinstance(heartbeat, (int, float)) or heartbeat <= 0:
             raise CodexCliRunnerError("heartbeat interval is invalid")
+        if not isinstance(stalled, (int, float)) or not heartbeat < stalled:
+            raise CodexCliRunnerError("heartbeat interval must be below stalled detection")
+        if any(profile.attempt_timeout_seconds <= float(stalled) for profile in profiles.values()):
+            raise CodexCliRunnerError("stalled detection must be below every Codex CLI attempt timeout")
         if not isinstance(stdout_limit, int) or stdout_limit < 1024:
             raise CodexCliRunnerError("codex_cli stdout limit is invalid")
         if not isinstance(stderr_limit, int) or stderr_limit < 1024:
@@ -145,12 +128,11 @@ class CodexCliSettings:
             prompt_path=prompt_path,
             use_user_config=use_user_config,
             sandbox=sandbox,
-            timeout_seconds=float(timeout),
             termination_grace_seconds=float(grace),
             heartbeat_interval_seconds=float(heartbeat),
+            stalled_after_seconds=float(stalled),
             max_stdout_chars=stdout_limit,
             max_stderr_chars=stderr_limit,
-            profiles=profiles,
         )
 
     @staticmethod
@@ -254,10 +236,15 @@ class CodexCliRunner:
         self.logger = logger or SafeLogger()
         self._process: subprocess.Popen[str] | None = None
 
-    def run(self, execution_id: str, profile: str) -> dict[str, Any]:
-        if not execution_id or profile not in self.settings.profiles:
-            raise CodexCliRunnerError("execution id and supported profile must be explicit")
-        claim = self.controller.claim(execution_id, RUNTIME_ENVIRONMENT, profile)
+    def run(self, execution_id: str, capability_level: str) -> dict[str, Any]:
+        if not execution_id or capability_level not in CAPABILITY_LEVELS:
+            raise CodexCliRunnerError("execution id and capability level must be explicit")
+        execution_profile = ExecutionProfile.resolve(
+            self.config, RUNTIME_ENVIRONMENT, None, capability_level
+        )
+        claim = self.controller.claim(
+            execution_id, RUNTIME_ENVIRONMENT, capability_level, None
+        )
         outcome = claim.get("outcome")
         if outcome != "CLAIMED":
             if outcome not in CLAIM_TERMINAL_OUTCOMES:
@@ -268,7 +255,11 @@ class CodexCliRunner:
         if not isinstance(task, dict):
             raise CodexCliRunnerError("claim omitted task")
         task_id = str(task.get("id") or "")
-        if task.get("runtime_environment") != RUNTIME_ENVIRONMENT or task.get("execution_profile") != profile:
+        if (
+            task.get("runtime_environment") != RUNTIME_ENVIRONMENT
+            or task.get("provider_id") is not None
+            or task.get("capability_level") != capability_level
+        ):
             return self._finish(execution_id, task_id, self._failed("claimed task routing does not match Codex CLI"))
         try:
             project = self._project_context(task)
@@ -287,7 +278,7 @@ class CodexCliRunner:
 
         try:
             with HeartbeatGuard(heartbeat, self.settings.heartbeat_interval_seconds, self.logger) as guard:
-                result = self._execute(task, project, profile, guard)
+                result = self._run_attempts(task, project, execution_profile, guard)
                 guard.ensure_healthy()
                 guard.beat()
         except KeyboardInterrupt:
@@ -298,6 +289,46 @@ class CodexCliRunner:
             self.logger.event("codex_cli_failed", error=type(error).__name__)
             result = self._failed(self._public_error(error))
         return self._finish(execution_id, task_id, result)
+
+    def _run_attempts(
+        self,
+        task: dict[str, Any],
+        project: ProjectContext,
+        execution_profile: ExecutionProfile,
+        guard: HeartbeatGuard,
+    ) -> dict[str, Any]:
+        maximum_attempts = execution_profile.max_retries + 1
+        last_result = self._failed("Codex CLI attempt did not start")
+        for attempt in range(1, maximum_attempts + 1):
+            guard.ensure_healthy()
+            guard.beat()
+            self.logger.event(
+                "codex_cli_attempt_started", attempt=attempt,
+                maximum_attempts=maximum_attempts,
+                capability_level=execution_profile.capability_level,
+            )
+            try:
+                last_result, side_effects = self._execute(
+                    task, project, execution_profile, guard, attempt
+                )
+            except CodexCliAttemptError as error:
+                guard.ensure_healthy()
+                last_result = self._failed(str(error))
+                side_effects = not error.retryable
+            if last_result.get("status") != "FAILED":
+                return last_result
+            retryable = not side_effects
+            if not retryable or attempt >= maximum_attempts:
+                if not retryable and attempt < maximum_attempts:
+                    last_result = self._failed(
+                        str(last_result.get("error") or "Codex CLI attempt failed")
+                        + "; execution retry suppressed after possible side effects"
+                    )
+                return last_result
+            guard.ensure_healthy()
+            guard.beat()
+            self.logger.event("codex_cli_attempt_retry", attempt=attempt, next_attempt=attempt + 1)
+        return last_result
 
     def _project_context(self, task: dict[str, Any]) -> ProjectContext:
         scopes = task.get("scope")
@@ -329,13 +360,15 @@ class CodexCliRunner:
         self,
         task: dict[str, Any],
         project: ProjectContext,
-        profile: str,
+        execution_profile: ExecutionProfile,
         guard: HeartbeatGuard,
-    ) -> dict[str, Any]:
-        profile_settings = self.settings.profiles[profile]
-        prompt = self._build_prompt(task, project)
+        attempt: int,
+    ) -> tuple[dict[str, Any], bool]:
+        prompt = self._build_prompt(task, project, attempt)
         stdout = BoundedText(self.settings.max_stdout_chars)
         stderr = BoundedText(self.settings.max_stderr_chars)
+        timed_out = False
+        return_code: int | None = None
         with tempfile.TemporaryDirectory(prefix="local-agent-loop-codex-") as temporary:
             schema_path = Path(temporary) / "final-result.schema.json"
             schema_path.write_text(
@@ -350,7 +383,7 @@ class CodexCliRunner:
                 "--color",
                 "never",
                 "--model",
-                profile_settings.model,
+                execution_profile.model,
                 "--sandbox",
                 self.settings.sandbox,
                 "--cd",
@@ -358,10 +391,13 @@ class CodexCliRunner:
                 "--output-schema",
                 str(schema_path),
                 "-c",
-                f'model_reasoning_effort="{profile_settings.reasoning_effort}"',
+                f'model_reasoning_effort="{execution_profile.reasoning}"',
                 "-",
             ]
-            self.logger.event("codex_cli_started", profile=profile, project=project.relative_path)
+            self.logger.event(
+                "codex_cli_started", capability_level=execution_profile.capability_level,
+                attempt=attempt, project=project.relative_path,
+            )
             process = self._start_process(command)
             self._process = process
             readers = [
@@ -372,13 +408,14 @@ class CodexCliRunner:
             try:
                 process.stdin.write(prompt)
                 process.stdin.close()
-                deadline = time.monotonic() + self.settings.timeout_seconds
+                deadline = time.monotonic() + execution_profile.attempt_timeout_seconds
                 while process.poll() is None:
                     guard.ensure_healthy()
                     if time.monotonic() >= deadline:
-                        raise CodexCliTimeout("Codex CLI execution timed out")
+                        timed_out = True
+                        break
                     time.sleep(0.05)
-                return_code = process.returncode
+                return_code = process.poll()
             finally:
                 if process.poll() is None:
                     self._terminate_process_tree(process)
@@ -391,15 +428,27 @@ class CodexCliRunner:
             stdout_truncated=stdout.truncated,
             stderr_truncated=stderr.truncated,
         )
+        side_effects = self._output_may_have_side_effects(stdout.value())
+        if timed_out:
+            raise CodexCliAttemptError(
+                "Codex CLI attempt timed out",
+                retryable=not side_effects,
+            )
         if return_code != 0:
             public_error = sanitize_public_text(stderr.value()) or f"Codex CLI exited with code {return_code}"
             if AUTH_ERROR.search(public_error):
                 return self._waiting(
                     "Codex CLI 账户、登录状态或模型权限不可用。",
                     "请在 Runner 外部恢复 Codex CLI 登录或模型权限后重新排队。",
-                )
-            return self._failed(f"Codex CLI exited with code {return_code}: {public_error}")
-        return self._parse_final_result(stdout.value())
+                ), side_effects
+            raise CodexCliAttemptError(
+                f"Codex CLI exited with code {return_code}: {public_error}",
+                retryable=not side_effects,
+            )
+        try:
+            return self._parse_final_result(stdout.value()), side_effects
+        except CodexCliRunnerError as error:
+            raise CodexCliAttemptError(str(error), retryable=not side_effects) from error
 
     def _start_process(self, command: list[str]) -> subprocess.Popen[str]:
         kwargs: dict[str, Any] = {
@@ -468,6 +517,25 @@ class CodexCliRunner:
                 process.wait(timeout=self.settings.termination_grace_seconds)
             except (OSError, subprocess.SubprocessError):
                 self.logger.event("codex_cli_termination_failed", pid=process.pid)
+        if process.poll() is None:
+            raise CodexCliRunnerError("Codex CLI process tree could not be terminated")
+
+    @staticmethod
+    def _output_may_have_side_effects(output: str) -> bool:
+        side_effect_types = {"command_execution", "file_change", "mcp_tool_call"}
+        for line in output.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") in side_effect_types:
+                return True
+            if event.get("type") in {"file_change", "command_execution"}:
+                return True
+        return False
 
     def _parse_final_result(self, output: str) -> dict[str, Any]:
         candidates: list[str] = []
@@ -492,7 +560,7 @@ class CodexCliRunner:
                 continue
         raise CodexCliRunnerError("Codex CLI produced no valid final result")
 
-    def _build_prompt(self, task: dict[str, Any], project: ProjectContext) -> str:
+    def _build_prompt(self, task: dict[str, Any], project: ProjectContext, attempt: int) -> str:
         authority = self.settings.prompt_path.read_text(encoding="utf-8")
         payload = {
             "id": task.get("id"),
@@ -504,6 +572,7 @@ class CodexCliRunner:
                 for dependency in task.get("depends_on") or []
             ],
             "project": project.relative_path,
+            "execution_attempt": attempt,
         }
         return f"{authority.rstrip()}\n\n# 当前任务\n\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
 
@@ -542,7 +611,7 @@ class CodexCliRunner:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Single-task Local Agent Loop Codex CLI Runner")
-    root.add_argument("--profile", required=True, choices=EXECUTION_PROFILES)
+    root.add_argument("--capability-level", required=True, choices=CAPABILITY_LEVELS)
     root.add_argument("--config", default=str(CONFIG_PATH))
     root.add_argument("--db")
     return root
@@ -552,15 +621,13 @@ def main() -> None:
     args = parser().parse_args()
     config = load_initialization_config(Path(args.config))
     settings = CodexCliSettings.from_config(config)
-    if args.profile not in settings.profiles:
-        raise CodexCliRunnerError("execution profile is not enabled for Codex CLI")
-    execution_id = f"codex-cli-{args.profile}-{uuid.uuid4()}"
+    execution_id = f"codex-cli-{args.capability_level.lower()}-{uuid.uuid4()}"
     runner = CodexCliRunner(
         SubprocessLoopController(Path(args.db) if args.db else None),
         config,
         settings,
     )
-    result = runner.run(execution_id, args.profile)
+    result = runner.run(execution_id, args.capability_level)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

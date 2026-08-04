@@ -37,11 +37,9 @@ assert(!html.includes('setConnection("live", "DB.V.1549")'), "顶部数据库版
 assert(!html.includes('DB.V.${TASK_SCHEMA_VERSION}'), "顶部数据库版本不得误用 schema_version");
 assert(html.includes('WAITING_CONFLICT: "等待冲突"'), "缺少 WAITING_CONFLICT 状态");
 assert(html.includes('CONFIRMED: "已确认"'), "缺少 CONFIRMED 状态");
-assert(html.includes('const TASK_SCHEMA_VERSION = "3.3.0"'), "Dashboard Schema 版本不是 3.3.0");
-for (const profile of ["routine", "standard", "advanced", "deep", "complex", "exceptional"]) {
-  assert(new RegExp(`\\b${profile}:\\s*"`).test(html), `缺少 ${profile} 任务档位`);
-}
-assert(html.includes("const EXECUTION_PROFILES = Object.keys(PROFILE_LABELS);"), "任务档位列表未从标签配置生成");
+assert(html.includes('const TASK_SCHEMA_VERSION = "3.4.0"'), "Dashboard Schema 版本不是 3.4.0");
+assert(html.includes('const CAPABILITY_LEVELS = ["L1", "L2", "L3", "L4", "L5"];'), "缺少 L1 至 L5 能力等级");
+assert(!html.includes('const EXECUTION_PROFILES ='), "Dashboard 不应以旧 execution_profile 作为队列维度");
 assert(html.includes('const PRIORITY_ORDER = { blocker: 0, critical: 1, high: 2, medium: 3, low: 4 }'), "缺少五级优先级排序");
 assert(html.includes("@media (max-width: 760px)"), "缺少移动端响应式规则");
 assert(/\.content-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) minmax\(280px, 0\.26fr\);/.test(html), "主内容区未进一步缩窄右栏并扩大任务列表");
@@ -54,17 +52,17 @@ assert(/\.table-wrap\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;[\s\S]
 assert(/\.side-section\s*\{[\s\S]*?overflow:\s*auto;/.test(html), "右侧监控栏未使用内部滚动");
 assert(/@media \(max-width: 1080px\)[\s\S]*?body\s*\{[\s\S]*?overflow:\s*auto;[\s\S]*?display:\s*block;/.test(html), "窄桌面未恢复自然页面滚动");
 assert(html.includes('id="projectFilter" class="header-filter-button"'), "项目筛选未迁移为表头图标控件");
-assert(html.includes('id="profileFilter" class="header-filter-button"'), "任务档位筛选未迁移为表头图标控件");
+assert(html.includes('id="profileFilter" class="header-filter-button"'), "能力等级筛选未迁移为表头图标控件");
 assert(html.includes('id="statusFilter" class="header-filter-button"'), "状态筛选未迁移为表头图标控件");
 assert(html.includes('id="priorityFilter" class="header-filter-button"'), "优先级筛选未迁移为表头图标控件");
 assert(html.includes('id="environmentFilter" class="header-filter-button"'), "运行环境筛选未使用表头图标控件");
 assert(!html.includes('class="project-select"'), "顶部工具栏仍保留项目下拉框");
-assert(!html.includes('class="profile-select"'), "顶部工具栏仍保留任务档位下拉框");
+assert(!html.includes('class="profile-select"'), "顶部工具栏仍保留能力等级下拉框");
 assert(html.includes('id="headerFilterMenu" class="header-filter-menu" role="menu" hidden'), "缺少表头筛选菜单容器");
 assert(html.includes('aria-label="筛选项目"'), "项目筛选图标缺少可访问名称");
 assert(html.includes('title="筛选项目"'), "项目筛选图标缺少提示文本");
-assert(html.includes('aria-label="筛选任务档位"'), "任务档位筛选图标缺少可访问名称");
-assert(html.includes('title="筛选任务档位"'), "任务档位筛选图标缺少提示文本");
+assert(html.includes('aria-label="筛选能力等级"'), "能力等级筛选图标缺少可访问名称");
+assert(html.includes('title="筛选能力等级"'), "能力等级筛选图标缺少提示文本");
 assert(html.includes('aria-label="筛选状态"'), "状态筛选图标缺少可访问名称");
 assert(html.includes('title="筛选状态"'), "状态筛选图标缺少提示文本");
 assert(html.includes('aria-label="筛选优先级"'), "优先级筛选图标缺少可访问名称");
@@ -149,7 +147,7 @@ assert(/\.metric-value\s*\{[\s\S]*?display:\s*block;/.test(html), "顶部统计�
 assert((html.match(/class="metric(?: metric-filter)?"/g) ?? []).length === 6, "顶部统计项未保持六项统一结构");
 assert(/@media \(max-width: 760px\)[\s\S]*?\.metric \{ min-height: 44px;/.test(html), "窄窗口统计项未保持稳定整体高度");
 assert(html.includes('if (ignoredHeaderFilter !== "project" && currentProject !== "all" && !taskProjects(task).includes(currentProject)) return false;'), "统计卡筛选未与项目条件保持交集");
-assert(html.includes('if (ignoredHeaderFilter !== "profile" && currentProfile !== "all" && task.execution_profile !== currentProfile) return false;'), "统计卡筛选未与任务档位条件保持交集");
+assert(html.includes('if (ignoredHeaderFilter !== "profile" && currentProfile !== "all" && task.capability_level !== currentProfile) return false;'), "统计卡筛选未与能力等级条件保持交集");
 assert(html.includes('data-label="运行环境">${environmentCell(task)}'), "任务列表未展示运行环境");
 assert(html.includes('<span class="detail-label">运行环境</span>'), "任务详情未展示运行环境");
 assert(html.includes('return Object.entries(candidate?.runtime_config?.runtime_environments ?? {});'), "运行环境列表未从初始化配置读取");
@@ -261,40 +259,36 @@ assert(html.includes('setFeedback("success", "已复制")'), "复制成功缺少
 assert(html.includes('setFeedback("failed", "复制失败")'), "复制失败缺少反馈");
 assert(/\.task-copy-button\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/.test(html), "复制按钮未使用固定点击区域");
 assert(/\.task-title-line\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 28px;/.test(html), "标题和复制按钮未使用稳定布局");
-assert(html.includes('class="profile-row profile-level-${escapeHtml(profile)}"'), "任务档位缺少统一六行矩阵结构");
-assert((html.match(/class="profile-row profile-level-\$\{escapeHtml\(profile\)\}"/g) ?? []).length === 1, "任务档位应由脚本统一渲染六行");
-assert(html.includes("const PROFILE_CODEX_LABELS = {"), "任务档位卡片缺少 Codex 等级配置");
-assert(html.includes('routine: "Codex 1", standard: "Codex 2", advanced: "Codex 3", deep: "Codex 4", complex: "Codex 5", exceptional: "Codex 6"'), "任务档位未按 Codex 1 至 6 配置");
-assert(html.includes('const channelEnvironments = ["codex_automation", "codex_cli"];'), "调度矩阵未固定两个通道");
-assert(html.includes('activeCounts[agent.execution_profile]?.[agent.runtime_environment]'), "活动 execution 未按环境与档位组合统计");
-assert(html.includes('const activeChannels = EXECUTION_PROFILES.flatMap'), "侧栏摘要未按活动通道统计");
-assert(html.includes('`${activeChannels} 通道活动`'), "侧栏摘要未显示通道活动数");
-assert(html.includes('automationChannelConfig(profile)'), "矩阵缺少客户端通道配置");
-assert(html.includes('cliChannelConfig(profile)'), "矩阵缺少 CLI 通道配置");
-assert(html.includes('config?.scheduled === true ? "定时配置" : "未配置"'), "客户端通道未按定时配置语义显示");
-assert(html.includes('configured ? "Dispatcher 配置" : "未配置"'), "CLI 通道未按 Dispatcher 配置语义显示");
-assert(html.includes('if (profile === "exceptional") return { mode: "人工"'), "Exceptional 未使用人工通道语义");
-assert(html.includes('codexCliProfileConfig(profile)'), "CLI 通道未使用独立模型映射");
-assert(html.includes('class="profile-codex-label"'), "任务档位卡片未显示 Codex 等级标题");
-assert(!html.includes('class="profile-initial"'), "任务档位卡片不应显示旧首字母标题");
-assert(html.includes('共享上限 ${escapeHtml(limit)}'), "共享上限未在每行只显示一次");
-assert(html.includes('data-runtime-environment="${environment}"'), "12 个通道未带环境标识");
+assert(html.includes('class="profile-row profile-level-${escapeHtml(level)}"'), "能力等级缺少统一 L1-L5 矩阵结构");
+assert(html.includes('id="profileLevelHelp"'), "调度容量缺少配置提示入口");
+assert(html.includes('id="profileLevelTooltip"'), "调度容量缺少配置提示内容区");
+assert(html.includes("function renderProfileLevelHelp()"), "调度容量未生成 L1-L5 配置提示");
+assert(html.includes('class="profile-level-tooltip-item"'), "等级提示缺少模型组合条目");
+assert(html.includes('const environments = runtimeEnvironmentEntries();'), "调度矩阵未从初始化配置读取三平台");
+assert(html.includes('platform_max_active_executions'), "调度矩阵未展示平台容量");
+assert(html.includes('global_max_active_executions'), "调度矩阵未展示全局容量");
+assert(html.includes('agents.filter((agent) => agent.runtime_environment === environment).length'), "平台活动数未按真实 execution 统计");
+assert(html.includes('agent.provider_id === providerId && agent.capability_level === level'), "活动 execution 未按平台、Provider 和能力等级统计");
+assert(html.includes('executionConfig(environment, providerId, level)'), "调度矩阵未使用初始化执行配置");
+assert(html.includes('attempt_timeout_seconds'), "调度矩阵未展示单次超时配置");
+assert(html.includes('max_retries'), "调度矩阵未展示重试配置");
+assert(html.includes('class="profile-codex-label"'), "调度矩阵缺少能力等级标题");
+assert(!html.includes('已部署'), "调度矩阵不得伪造部署状态");
 assert(!html.includes('已部署'), "调度矩阵不得伪造部署状态");
 assert(!html.includes('运行正常'), "调度矩阵不得伪造运行状态");
-for (const profile of ["routine", "standard", "advanced", "deep", "complex", "exceptional"]) {
-  assert(html.includes(`profile-level-${profile}`), `${profile} 缺少独立等级色`);
+for (const level of ["L1", "L2", "L3", "L4", "L5"]) {
+  assert(html.includes(`profile-level-${level}`), `${level} 缺少独立等级色`);
 }
-assert(/\.profile-row\.profile-level-routine\s*\{[^}]*border-left-color:\s*#68a873/.test(html), "Routine 未使用绿色等级色");
-assert(/\.profile-row\.profile-level-exceptional\s*\{[^}]*border-left-color:\s*#b94b4b/.test(html), "Exceptional 未使用红色等级色");
+assert(/\.profile-row\.profile-level-L1\s*\{[^}]*border-left-color:\s*#68a873/.test(html), "L1 未使用绿色等级色");
+assert(/\.profile-row\.profile-level-L5\s*\{[^}]*border-left-color:\s*#b94b4b/.test(html), "L5 未使用红色等级色");
 assert(html.includes('class="profile-channel-active"'), "环境通道缺少活动数");
-assert(html.includes('class="profile-channel-mode"'), "环境通道缺少调度模式");
-assert(/\.profile-channels\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/.test(html), "宽窗口未并排展示双通道");
-assert(/@media \(max-width: 1080px\)[\s\S]*?\.profile-channels\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/.test(html), "窄窗口未纵向展示双通道");
-assert((html.match(/class="side-heading"/g) ?? []).length === 1, "右侧仅应保留任务档位折叠标题");
-assert((html.match(/class="side-heading-group"/g) ?? []).length === 1, "任务档位标题未使用统一的左侧标题摘要组");
-assert((html.match(/class="side-heading-summary"/g) ?? []).length === 1, "任务档位标题未保留摘要样式");
-assert(html.includes('aria-expanded="true" aria-controls="profileContent"'), "任务档位未默认展开或缺少关联内容区");
-assert(html.includes('id="profileContent" class="side-content is-expanded"'), "任务档位内容区未默认展开");
+assert(html.includes('<div class="profile-channels">${entries}</div>'), "每个能力等级未渲染平台配置块");
+assert(/#profileList\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);/.test(html), "档位列表未使用单列布局");
+assert((html.match(/class="side-heading"/g) ?? []).length === 1, "右侧仅应保留调度容量折叠标题");
+assert((html.match(/class="side-heading-group"/g) ?? []).length === 1, "调度容量标题未使用统一的左侧标题摘要组");
+assert((html.match(/class="side-heading-summary"/g) ?? []).length === 1, "调度容量标题未保留摘要样式");
+assert(html.includes('aria-expanded="true" aria-controls="profileContent"'), "调度容量未默认展开或缺少关联内容区");
+assert(html.includes('id="profileContent" class="side-content is-expanded"'), "调度容量内容区未默认展开");
 for (const removedId of ["alertContent", "agentContent", "activityContent"]) {
   assert(!html.includes(`id="${removedId}"`), `${removedId} 不应保留为空白占位`);
 }
@@ -329,7 +323,7 @@ if (scripts.length === 1) {
   }
 }
 
-for (const label of ["任务总览", "任务", "任务档位", "状态历史"]) {
+for (const label of ["任务总览", "任务", "调度容量", "状态历史"]) {
   assert(html.includes(label), `缺少界面区域：${label}`);
 }
 

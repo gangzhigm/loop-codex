@@ -501,3 +501,189 @@ ConnectionAbortedError: [WinError 10053] ä½ çš„ä¸»æœºä¸­çš„è½¯ä»¶ä¸­æ­¢äº†ä¸€ä¸ª
 2026-08-03T16:20:37.637+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
 2026-08-03T16:21:44.442+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
 2026-08-03T16:21:44.751+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-03T18:35:35.286+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-03T18:35:35.641+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T18:38:32.138+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T19:08:32.122+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T19:38:32.124+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T20:08:32.131+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T20:38:32.169+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T21:08:32.146+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T21:38:32.171+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T22:08:32.173+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T22:38:32.208+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T23:08:32.174+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-03T23:38:32.185+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T00:08:32.194+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T00:38:32.201+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T01:08:32.210+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T01:38:32.248+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T02:08:32.235+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T02:38:32.262+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T03:08:32.280+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T03:38:32.274+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T04:08:32.266+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T04:38:32.289+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T05:08:32.304+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T05:38:32.272+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T06:08:32.274+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T06:38:32.290+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T07:08:32.293+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T07:38:32.298+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T08:08:32.308+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T08:38:32.311+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T09:08:32.337+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T09:25:00.850+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T09:25:03.648+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-04T09:30:39.546+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T09:30:39.958+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-04T09:31:24.847+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T09:38:33.110+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T09:49:36.908+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T09:55:28.210+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T09:56:58.228+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T09:57:42.242+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T09:59:56.435+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:01:43.735+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:02:12.444+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:02:13.501+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:03:32.031+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:04:56.390+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:05:29.488+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:05:37.936+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:06:27.318+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T10:08:33.523+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T10:38:33.367+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T11:08:33.005+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T11:38:33.149+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T12:08:32.714+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T12:38:32.578+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T13:08:32.696+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T13:38:32.620+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T13:51:36.413+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fmini-cart-reference.png HTTP/1.1" 403 -
+2026-08-04T13:51:36.714+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fagreement-error-reference.png HTTP/1.1" 403 -
+2026-08-04T13:51:38.359+08:00 127.0.0.1 "GET /api/attachment?task_id=MINI-CHECKOUT-BENEFIT-CARD-STYLE-001&path=assets%2FMINI-CHECKOUT-BENEFIT-CARD-STYLE-001%2Freference.png HTTP/1.1" 200 -
+2026-08-04T13:51:40.734+08:00 127.0.0.1 "GET /api/attachment?task_id=MINI-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FMINI-PDP-BETTER-WORLD-CONTENT-001%2Fdialog-reference.png HTTP/1.1" 200 -
+2026-08-04T13:51:40.734+08:00 127.0.0.1 "GET /api/attachment?task_id=MINI-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FMINI-PDP-BETTER-WORLD-CONTENT-001%2Fentry-reference.png HTTP/1.1" 200 -
+2026-08-04T14:08:40.701+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T14:24:07.329+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 63127)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 235, in do_GET
+    self.send_json(HTTPStatus.OK, payload)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 217, in send_json
+    self.send_bytes(status, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 213, in send_bytes
+    self.end_headers()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 598, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 602, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionResetError: [WinError 10054] Ô¶³ÌÖ÷»úÇ¿ÆÈ¹Ø±ÕÁËÒ»¸öÏÖÓÐµÄÁ¬½Ó¡£
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 496, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 484, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 239, in do_GET
+    self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 217, in send_json
+    self.send_bytes(status, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 213, in send_bytes
+    self.end_headers()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 598, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 602, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionResetError: [WinError 10054] Ô¶³ÌÖ÷»úÇ¿ÆÈ¹Ø±ÕÁËÒ»¸öÏÖÓÐµÄÁ¬½Ó¡£
+----------------------------------------
+2026-08-04T14:38:33.280+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T14:40:39.808+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T14:40:50.658+08:00 127.0.0.1 "GET /api/attachment?task_id=MINI-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FMINI-PDP-BETTER-WORLD-CONTENT-001%2Fentry-reference.png HTTP/1.1" 200 -
+2026-08-04T14:40:50.965+08:00 127.0.0.1 "GET /api/attachment?task_id=MINI-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FMINI-PDP-BETTER-WORLD-CONTENT-001%2Fdialog-reference.png HTTP/1.1" 200 -
+2026-08-04T14:40:52.995+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fmini-cart-reference.png HTTP/1.1" 403 -
+2026-08-04T14:40:53.294+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fagreement-error-reference.png HTTP/1.1" 403 -
+2026-08-04T14:40:55.564+08:00 127.0.0.1 "GET /api/attachment?task_id=MINI-CHECKOUT-BENEFIT-CARD-STYLE-001&path=assets%2FMINI-CHECKOUT-BENEFIT-CARD-STYLE-001%2Freference.png HTTP/1.1" 200 -
+2026-08-04T14:41:39.805+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T14:41:48.420+08:00 127.0.0.1 "GET /api/attachment?task_id=QUOTE-TIME-TOOLTIP-001&path=assets%2FQUOTE-TIME-TOOLTIP-001%2Freference.png HTTP/1.1" 200 -
+2026-08-04T15:05:09.336+08:00 127.0.0.1 "GET /api/attachment?task_id=QUOTE-TIME-TOOLTIP-001&path=assets%2FQUOTE-TIME-TOOLTIP-001%2Freference.png HTTP/1.1" 200 -
+2026-08-04T15:05:13.918+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T15:05:28.937+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T15:05:33.518+08:00 127.0.0.1 "GET /api/attachment?task_id=PC-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FPC-PDP-BETTER-WORLD-CONTENT-001%2Fentry-reference.png HTTP/1.1" 200 -
+2026-08-04T15:05:34.114+08:00 127.0.0.1 "GET /api/attachment?task_id=PC-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FPC-PDP-BETTER-WORLD-CONTENT-001%2Fdialog-reference.png HTTP/1.1" 200 -
+2026-08-04T15:08:33.381+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T15:34:18.831+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T15:38:33.396+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T15:40:26.544+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T15:40:33.717+08:00 127.0.0.1 "GET /api/attachment?task_id=PC-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FPC-PDP-BETTER-WORLD-CONTENT-001%2Fentry-reference.png HTTP/1.1" 200 -
+2026-08-04T15:40:33.761+08:00 127.0.0.1 "GET /api/attachment?task_id=PC-PDP-BETTER-WORLD-CONTENT-001&path=assets%2FPC-PDP-BETTER-WORLD-CONTENT-001%2Fdialog-reference.png HTTP/1.1" 200 -
+2026-08-04T15:41:15.188+08:00 127.0.0.1 "GET /api/attachment?task_id=CART-CHECKOUT-BENEFIT-CARD-STYLE-001&path=assets%2FCART-CHECKOUT-BENEFIT-CARD-STYLE-001%2Freference.png HTTP/1.1" 200 -
+2026-08-04T15:41:23.686+08:00 127.0.0.1 "GET /api/attachment?task_id=MINI-CHECKOUT-BENEFIT-CARD-STYLE-001&path=assets%2FMINI-CHECKOUT-BENEFIT-CARD-STYLE-001%2Freference.png HTTP/1.1" 200 -
+2026-08-04T15:41:27.011+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-PC-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fagreement-error-reference.png HTTP/1.1" 403 -
+2026-08-04T15:41:27.013+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-PC-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fpc-cart-reference.png HTTP/1.1" 403 -
+2026-08-04T15:41:32.655+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fmini-cart-reference.png HTTP/1.1" 403 -
+2026-08-04T15:41:32.681+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fagreement-error-reference.png HTTP/1.1" 403 -
+2026-08-04T15:41:35.433+08:00 127.0.0.1 "GET /api/attachment?task_id=CART-CHECKOUT-BENEFIT-CARD-STYLE-001&path=assets%2FCART-CHECKOUT-BENEFIT-CARD-STYLE-001%2Freference.png HTTP/1.1" 200 -
+2026-08-04T16:08:33.635+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T16:29:13.931+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T16:29:24.862+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-PC-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fagreement-error-reference.png HTTP/1.1" 403 -
+2026-08-04T16:29:25.166+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-PC-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fpc-cart-reference.png HTTP/1.1" 403 -
+2026-08-04T16:29:32.854+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T16:29:35.243+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fmini-cart-reference.png HTTP/1.1" 403 -
+2026-08-04T16:29:35.244+08:00 127.0.0.1 "GET /api/attachment?task_id=GIFT-CARD-AGREEMENT-MINI-001&path=assets%2FGIFT-CARD-AGREEMENT-DUAL-END-001%2Fagreement-error-reference.png HTTP/1.1" 403 -
+2026-08-04T16:29:42.131+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T16:38:34.277+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T17:02:43.784+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T17:02:48.728+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T17:03:03.238+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T17:03:10.028+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-04T17:08:33.468+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T17:37:37.158+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-04T17:38:33.602+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T17:57:08.659+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+2026-08-04T17:58:08.199+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+2026-08-04T17:58:16.118+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 503 -
+2026-08-04T17:59:08.247+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+2026-08-04T18:00:08.195+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+2026-08-04T18:00:32.682+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 503 -
+2026-08-04T18:01:08.824+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+2026-08-04T18:01:51.015+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 503 -
+2026-08-04T18:02:04.318+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-04T18:02:04.649+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T18:02:45.979+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T18:07:21.609+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T18:08:34.114+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T18:13:35.413+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T18:16:22.016+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-04T18:20:22.696+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -

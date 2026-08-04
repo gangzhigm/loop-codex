@@ -5,18 +5,20 @@ import json
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from loopdb import (
+    CAPABILITY_LEVELS,
     CONFIG_PATH,
     DEPENDENCY_COMPLETE_STATUSES,
-    EXECUTION_PROFILES,
     all_tasks,
     connect,
+    global_parallel_limit,
     load_initialization_config,
     now_shanghai,
+    platform_parallel_limit,
+    resolve_execution_profile,
     state_payload,
 )
 
@@ -42,9 +44,9 @@ class DispatcherSettings:
     timeout_seconds: float
     log_path: Path
     hidden: bool
-    supported_profiles: tuple[str, ...]
-    max_parallel_tasks: int
-    profile_parallel_limits: dict[str, int]
+    supported_capability_levels: tuple[str, ...]
+    global_max_active_executions: int
+    platform_max_active_executions: int
 
     @classmethod
     def from_config(
@@ -70,7 +72,7 @@ class DispatcherSettings:
         timeout = raw.get("timeout_seconds")
         log_value = raw.get("log_path")
         hidden = raw.get("hidden")
-        supported = raw.get("supported_execution_profiles")
+        supported = raw.get("supported_capability_levels")
         if not isinstance(interval, int) or interval < 1:
             raise DispatcherError("dispatcher interval_minutes is invalid")
         if not isinstance(task_name, str) or not task_name.strip():
@@ -84,12 +86,28 @@ class DispatcherSettings:
         if not isinstance(log_value, str) or not log_value.strip():
             raise DispatcherError("dispatcher log_path is invalid")
         if not isinstance(supported, list) or not supported or len(supported) != len(set(supported)):
-            raise DispatcherError("dispatcher supported_execution_profiles is invalid")
-        if any(profile not in EXECUTION_PROFILES or profile == "exceptional" for profile in supported):
-            raise DispatcherError("dispatcher contains an unsupported execution profile")
-        enabled = cli.get("supported_execution_profiles")
-        if not isinstance(enabled, list) or not set(supported).issubset(enabled):
-            raise DispatcherError("dispatcher profiles must be enabled for codex_cli")
+            raise DispatcherError("dispatcher supported_capability_levels is invalid")
+        if any(level not in CAPABILITY_LEVELS for level in supported):
+            raise DispatcherError("dispatcher contains an unsupported capability level")
+        enabled = ((config.get("execution_profiles") or {}).get(RUNTIME_ENVIRONMENT) or {}).get(
+            "capabilities"
+        )
+        if not isinstance(enabled, dict) or not set(supported).issubset(enabled):
+            raise DispatcherError("dispatcher capability levels must be configured for codex_cli")
+        profiles = [
+            resolve_execution_profile(RUNTIME_ENVIRONMENT, None, level, config)
+            for level in supported
+        ]
+        termination_grace = cli.get("termination_grace_seconds")
+        if not isinstance(termination_grace, (int, float)) or termination_grace <= 0:
+            raise DispatcherError("dispatcher Codex CLI termination grace is invalid")
+        required_timeout = max(
+            profile["attempt_timeout_seconds"] * (profile["max_retries"] + 1)
+            + termination_grace * (profile["max_retries"] + 1)
+            for profile in profiles
+        )
+        if float(timeout) <= required_timeout:
+            raise DispatcherError("dispatcher timeout must cover every complete execution attempt")
         root = base_dir.resolve()
         expected_working = Path(working_value).resolve()
         if expected_working != root:
@@ -99,13 +117,17 @@ class DispatcherSettings:
         runner_path = (root / "scripts" / "codex_cli_runner.py").resolve()
         if not database_path.is_relative_to(root) or not log_path.is_relative_to(root) or not runner_path.is_file():
             raise DispatcherError("dispatcher paths are unsafe or unavailable")
-        maximum = execution.get("max_parallel_tasks")
-        limits = execution.get("profile_parallel_limits")
+        maximum = execution.get("global_max_active_executions")
+        limits = execution.get("platform_max_active_executions")
         if not isinstance(maximum, int) or maximum < 1 or not isinstance(limits, dict):
             raise DispatcherError("dispatcher execution limits are invalid")
-        profile_limits = {profile: limits.get(profile) for profile in supported}
-        if any(not isinstance(limit, int) or limit < 1 for limit in profile_limits.values()):
-            raise DispatcherError("dispatcher profile limits are invalid")
+        platform_maximum = limits.get(RUNTIME_ENVIRONMENT)
+        if not isinstance(platform_maximum, int) or platform_maximum < 1:
+            raise DispatcherError("dispatcher platform limit is invalid")
+        if maximum != global_parallel_limit(config) or platform_maximum != platform_parallel_limit(
+            RUNTIME_ENVIRONMENT, config
+        ):
+            raise DispatcherError("dispatcher execution limits are inconsistent")
         return cls(
             config_path=config_path.resolve(),
             database_path=database_path,
@@ -117,9 +139,9 @@ class DispatcherSettings:
             timeout_seconds=float(timeout),
             log_path=log_path,
             hidden=hidden,
-            supported_profiles=tuple(supported),
-            max_parallel_tasks=maximum,
-            profile_parallel_limits=profile_limits,
+            supported_capability_levels=tuple(supported),
+            global_max_active_executions=maximum,
+            platform_max_active_executions=platform_maximum,
         )
 
 
@@ -145,13 +167,17 @@ def dependencies_complete(task: dict[str, Any], statuses: dict[str, str]) -> boo
     )
 
 
-def select_candidate(tasks: list[dict[str, Any]], supported_profiles: tuple[str, ...]) -> dict[str, Any] | None:
+def select_candidate(
+    tasks: list[dict[str, Any]], supported_capability_levels: tuple[str, ...]
+) -> dict[str, Any] | None:
     statuses = {str(task.get("id")): str(task.get("status")) for task in tasks}
     for task in tasks:
         if (
             task.get("status") == "PENDING"
             and task.get("runtime_environment") == RUNTIME_ENVIRONMENT
-            and task.get("execution_profile") in supported_profiles
+            and task.get("provider_id") is None
+            and task.get("capability_level") in supported_capability_levels
+            and task.get("execution_policy") == "automatic"
             and dependencies_complete(task, statuses)
         ):
             return task
@@ -188,41 +214,74 @@ class CodexCliDispatcher:
 
     def run(self) -> dict[str, Any]:
         tasks, active_agents = self.snapshot_reader(self.settings, self.config)
-        candidate = select_candidate(tasks, self.settings.supported_profiles)
+        candidate = select_candidate(tasks, self.settings.supported_capability_levels)
         if candidate is None:
             self.logger.event("NO_TASK")
             return {"outcome": "NO_TASK"}
         task_id = str(candidate["id"])
-        profile = str(candidate["execution_profile"])
-        if len(active_agents) >= self.settings.max_parallel_tasks:
-            self.logger.event("SLOT_FULL", task_id=task_id, profile=profile, limit_scope="global")
-            return {"outcome": "SLOT_FULL", "task_id": task_id, "profile": profile, "limit_scope": "global"}
-        active_for_profile = sum(agent.get("execution_profile") == profile for agent in active_agents)
-        if active_for_profile >= self.settings.profile_parallel_limits[profile]:
-            self.logger.event("SLOT_FULL", task_id=task_id, profile=profile, limit_scope="profile")
-            return {"outcome": "SLOT_FULL", "task_id": task_id, "profile": profile, "limit_scope": "profile"}
+        capability_level = str(candidate["capability_level"])
+        if len(active_agents) >= self.settings.global_max_active_executions:
+            self.logger.event(
+                "SLOT_FULL", task_id=task_id, capability_level=capability_level,
+                limit_scope="global",
+            )
+            return {
+                "outcome": "SLOT_FULL", "task_id": task_id, "capability_level": capability_level,
+                "limit_scope": "global",
+            }
+        active_for_platform = sum(
+            agent.get("runtime_environment") == RUNTIME_ENVIRONMENT for agent in active_agents
+        )
+        if active_for_platform >= self.settings.platform_max_active_executions:
+            self.logger.event(
+                "SLOT_FULL", task_id=task_id, capability_level=capability_level,
+                limit_scope="platform",
+            )
+            return {
+                "outcome": "SLOT_FULL", "task_id": task_id, "capability_level": capability_level,
+                "limit_scope": "platform",
+            }
         command = [
             sys.executable,
             str(self.settings.runner_path),
-            "--profile",
-            profile,
+            "--capability-level",
+            capability_level,
             "--config",
             str(self.settings.config_path),
             "--db",
             str(self.settings.database_path),
         ]
-        self.logger.event("RUNNER_STARTED", task_id=task_id, profile=profile)
+        self.logger.event(
+            "RUNNER_STARTED", task_id=task_id, capability_level=capability_level
+        )
         try:
             completed = self.launcher(command, self.settings.working_directory, self.settings.timeout_seconds)
         except subprocess.TimeoutExpired:
-            self.logger.event("RUNNER_TIMEOUT", task_id=task_id, profile=profile)
-            return {"outcome": "RUNNER_TIMEOUT", "task_id": task_id, "profile": profile}
+            self.logger.event(
+                "RUNNER_TIMEOUT", task_id=task_id, capability_level=capability_level
+            )
+            return {
+                "outcome": "RUNNER_TIMEOUT", "task_id": task_id,
+                "capability_level": capability_level,
+            }
         except OSError as error:
-            self.logger.event("RUNNER_START_FAILED", task_id=task_id, profile=profile, error_type=type(error).__name__)
-            return {"outcome": "RUNNER_START_FAILED", "task_id": task_id, "profile": profile}
+            self.logger.event(
+                "RUNNER_START_FAILED", task_id=task_id, capability_level=capability_level,
+                error_type=type(error).__name__,
+            )
+            return {
+                "outcome": "RUNNER_START_FAILED", "task_id": task_id,
+                "capability_level": capability_level,
+            }
         outcome = "RUNNER_FINISHED" if completed.returncode == 0 else "RUNNER_FAILED"
-        self.logger.event(outcome, task_id=task_id, profile=profile, exit_code=completed.returncode)
-        return {"outcome": outcome, "task_id": task_id, "profile": profile, "exit_code": completed.returncode}
+        self.logger.event(
+            outcome, task_id=task_id, capability_level=capability_level,
+            exit_code=completed.returncode,
+        )
+        return {
+            "outcome": outcome, "task_id": task_id, "capability_level": capability_level,
+            "exit_code": completed.returncode,
+        }
 
 
 def parser() -> argparse.ArgumentParser:
