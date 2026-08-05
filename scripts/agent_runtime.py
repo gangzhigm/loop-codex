@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import inspect
 import json
 import os
 import queue
@@ -24,6 +25,7 @@ from loopdb import (
     load_initialization_config,
     resolve_execution_profile,
 )
+from secret_store import SecretStore, create_secret_store
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,7 +36,20 @@ SENSITIVE_COMPONENT = re.compile(
     r"(^|[._-])(secret|secrets|credential|credentials|api[_-]?key|access[_-]?token|private[_-]?key)([._-]|$)",
     re.IGNORECASE,
 )
+SENSITIVE_ENVIRONMENT_NAME = re.compile(
+    r"(secret|credential|password|api[_-]?key|access[_-]?token|private[_-]?key|authorization)",
+    re.IGNORECASE,
+)
 SHELL_META = re.compile(r"[|&;<>`\r\n]")
+
+
+def safe_subprocess_environment() -> dict[str, str]:
+    """Copy process settings without propagating injected credentials to child processes."""
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not SENSITIVE_ENVIRONMENT_NAME.search(name)
+    }
 
 
 class AgentRuntimeError(RuntimeError):
@@ -177,7 +192,7 @@ class SubprocessLoopController:
         if self.database is not None:
             command.extend(["--db", str(self.database.resolve())])
         command.extend(arguments)
-        environment = os.environ.copy()
+        environment = safe_subprocess_environment()
         environment["PYTHONIOENCODING"] = "utf-8"
         completed = subprocess.run(
             command,
@@ -863,7 +878,7 @@ class SingleTaskAgent:
         }
 
     def _git_snapshot(self, repository: Path) -> dict[str, Any]:
-        environment = os.environ.copy()
+        environment = safe_subprocess_environment()
         environment.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_PAGER": "cat"})
         git_name = shutil.which("git", path=os.environ.get("PATH", ""))
         if not git_name or Path(git_name).resolve().is_relative_to(self.workspace):
@@ -1001,12 +1016,23 @@ class SingleTaskAgent:
         return f"runtime error: {type(error).__name__}"
 
 
-def load_provider(specification: str) -> ModelProvider:
+def load_provider(
+    specification: str,
+    config: dict[str, Any],
+    secret_store: SecretStore | None = None,
+) -> ModelProvider:
     if ":" not in specification:
         raise AgentRuntimeError("provider must use module:factory syntax")
     module_name, attribute = specification.split(":", 1)
     factory = getattr(importlib.import_module(module_name), attribute)
-    provider = factory()
+    store = secret_store or create_secret_store(config)
+    try:
+        inspect.signature(factory).bind(config=config, secret_store=store)
+    except (TypeError, ValueError):
+        raise AgentRuntimeError(
+            "provider factory must accept config and secret_store keyword arguments"
+        ) from None
+    provider = factory(config=config, secret_store=store)
     if not callable(getattr(provider, "complete", None)):
         raise AgentRuntimeError("provider factory did not return a ModelProvider")
     return provider
@@ -1017,6 +1043,7 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--runtime-environment", required=True, choices=CANONICAL_RUNTIME_ENVIRONMENTS)
     root.add_argument("--provider-id", required=True)
     root.add_argument("--capability-level", required=True, choices=CAPABILITY_LEVELS)
+    root.add_argument("--execution-policy", required=True, choices=("automatic",))
     root.add_argument("--provider", required=True, help="Python module:factory returning a ModelProvider")
     root.add_argument("--execution-id", required=True)
     root.add_argument("--config", default=str(CONFIG_PATH))
@@ -1028,7 +1055,7 @@ def main() -> None:
     args = parser().parse_args()
     config = load_initialization_config(Path(args.config))
     workspace = Path(config["workspace"]["task_root"])
-    provider = load_provider(args.provider)
+    provider = load_provider(args.provider, config)
     agent = SingleTaskAgent(
         provider=provider,
         controller=SubprocessLoopController(Path(args.db) if args.db else None),

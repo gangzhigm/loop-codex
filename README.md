@@ -11,6 +11,7 @@
 - 运行环境：`codex_automation`、`codex_cli`、`self_hosted_agent`；当前定时自动化固定为 `codex_automation`
 - Codex CLI Runner：`scripts/codex_cli_runner.py` 每次只领取并执行一个 `codex_cli` 任务，不包含调度循环或服务常驻
 - 自建 Agent：`scripts/agent_runtime.py` 提供与具体模型无关的单任务工具循环；真实模型适配由外部 Provider 工厂注入
+- SecretStore：默认 `os_keyring`；Windows 原生使用 Credential Manager，macOS/Linux 通过系统 keyring 适配器访问 Keychain/Secret Service；显式 `environment` 仅用于进程级临时注入
 - 并发：全局最多 8 个活动 execution，并同时受每个平台最多 5 个活动 execution 约束
 - Windows 健康任务：默认每 30 分钟运行一次，连续 3 次恢复失败告警
 - scope 冲突：默认按项目加锁
@@ -18,7 +19,7 @@
 - 时区：`Asia/Shanghai`
 - 文本编码：UTF-8
 
-SQLite 只保存任务及其执行一致性数据：任务内容和历史、每项任务所选运行环境、能力等级、Provider、执行策略、execution、租约、scope 锁与任务冲突。运行环境目录及入口配置、自动化周期、并发参数和服务部署配置只在 `config/initialization.json`；项目清单实时读取；服务健康状态只在 `runtime/health-state.json`。
+SQLite 只保存任务及其执行一致性数据：任务内容和历史、每项任务所选运行环境、能力等级、Provider、执行策略、execution、租约、scope 锁与任务冲突。运行环境目录及入口配置、自动化周期、并发参数、SecretStore 后端和非敏感 `secret_ref`、服务部署配置只在 `config/initialization.json`；密钥值只在所选系统密钥库或显式进程环境中；项目清单实时读取；服务健康状态只在 `runtime/health-state.json`。
 
 ## 角色
 
@@ -98,12 +99,21 @@ py -3 .\scripts\agent_runtime.py `
   --provider your_provider_package:create_provider
 ```
 
-Provider 工厂返回实现 `complete(request, timeout_seconds)` 的对象，并把任何模型 API 响应转换为协议版本 `1.0` 的 `tool_calls` 或 `final` 对象。Runtime 不读取模型密钥，不接受 DeepSeek 专有字段，也不会轮询或领取第二项。`scripts/deepseek_provider.py` 提供 DeepSeek Chat Completions 适配器，采用标准库 HTTP、非流式响应、限次退避重试和本地工具参数校验；模型调用本身不执行工具，重试只发生在工具结果尚未返回运行时之前。
+Provider 工厂必须接受 `config` 与 `secret_store` 关键字参数，返回实现 `complete(request, timeout_seconds)` 的对象，并把任何模型 API 响应转换为协议版本 `1.0` 的 `tool_calls` 或 `final` 对象。Runtime 创建统一 SecretStore 并注入 Provider；Provider 不得另建密钥存储或直接读取持久化凭据。`scripts/deepseek_provider.py` 提供 DeepSeek Chat Completions 适配器，采用标准库 HTTP、非流式响应、限次退避重试和本地工具参数校验；模型调用本身不执行工具，重试只发生在工具结果尚未返回运行时之前。
 
-DeepSeek 的非敏感端点、模型、超时、重试和 Provider 配置位于 `config/initialization.json`。密钥只从指定的外部环境变量注入；缺失会快速失败且不打印其值。启动时 Provider 仅接受 `self_hosted_agent/deepseek` 及配置允许的能力等级：
+DeepSeek 的非敏感端点、模型、超时、重试和 `secret_ref` 位于 `config/initialization.json`。密钥由统一 SecretStore 按引用读取；缺失、账户不符、权限不足或后端不可用会快速失败且不打印其值。先用隐藏输入初始化并查看不含原值或掩码的状态：
 
 ```powershell
-$env:DEEPSEEK_API_KEY = "由安全注入系统提供"
+py -3 .\scripts\secretctl.py status deepseek
+py -3 .\scripts\secretctl.py set deepseek
+py -3 .\scripts\secretctl.py verify deepseek
+py -3 .\scripts\secretctl.py rotate deepseek
+py -3 .\scripts\secretctl.py delete deepseek
+```
+
+`set`、`rotate` 从隐藏终端输入读取且要求重复输入；`rotate` 与 `delete` 还要求人工确认。添加 `--connect` 会再次提示可能产生一次 Provider 调用，只有输入 `CONNECT` 才联网。临时冒烟需要在配置中显式选择 `secret_management.backend=environment`，并由启动进程注入与 `deepseek.secret_ref` 同名的环境变量；该后端不持久化，`secretctl` 不会假装把子进程环境写回父进程。
+
+```powershell
 py -3 .\scripts\agent_runtime.py `
   --runtime-environment self_hosted_agent `
   --provider-id deepseek `
@@ -113,7 +123,7 @@ py -3 .\scripts\agent_runtime.py `
   --provider deepseek_provider:create_provider
 ```
 
-停止方式是让单次运行自然结束；需要人工停止时终止该进程，未能提交 `finish` 的 execution 将由现有心跳/租约机制回收。回滚只需停止 DeepSeek 入口并恢复本次变更；不要修改任务数据库或把密钥写入配置。未获得 `credential_access` 和可能产生费用调用的明确批准前，真实 DeepSeek 链路仍未经验证。
+停止方式是让单次运行自然结束；需要人工停止时终止该进程，未能提交 `finish` 的 execution 将由现有心跳/租约机制回收。备份不包含密钥；密钥库丢失或迁移账户后必须重新运行 `secretctl.py set deepseek`。不要修改任务数据库或把密钥写入配置。未获得任务内 `credential_access` 批准前，Provider 不读取密钥；本轮也没有写入真实系统凭据或调用真实模型。
 
 ## 文件
 
@@ -128,6 +138,8 @@ py -3 .\scripts\agent_runtime.py `
 - `scripts/codex_cli_runner.py`：Codex CLI 单任务 claim、heartbeat、进程管理、结果校验和 finish 入口。
 - `scripts/agent_runtime.py`：通用自建 Agent 的单次运行入口、Provider 协议与受限工具层。
 - `scripts/deepseek_provider.py`：DeepSeek Chat Completions 到中立 Provider 协议的适配器。
+- `scripts/secret_store.py`：统一 SecretStore 契约、系统密钥库与显式环境后端。
+- `scripts/secretctl.py`：隐藏输入、状态、校验、轮换和删除命令。
 - `scripts/dashboard_server.py`：本地 HTTP 状态服务与受限归档接口。
 - `scripts/health_run.py`：Dashboard 健康检查和恢复。
 - `scripts/install_health_task.ps1`：按初始化配置注册或更新 Windows 健康任务。

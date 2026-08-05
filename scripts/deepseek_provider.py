@@ -1,23 +1,26 @@
 """DeepSeek Chat Completions adapter for the neutral Local Agent Loop provider protocol.
 
-This module deliberately uses only the Python standard library.  The API key is obtained
-only when a provider is constructed, from the explicitly configured environment variable.
+The API key is fetched through the shared SecretStore only for an approved provider request.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import socket
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from agent_runtime import ExecutionProfile
-from loopdb import CAPABILITY_LEVELS, CONFIG_PATH, load_initialization_config, resolve_execution_profile
+from loopdb import CAPABILITY_LEVELS, load_initialization_config, resolve_execution_profile
+from secret_store import (
+    SecretStore,
+    SecretStoreError,
+    create_secret_store,
+    validate_secret_value,
+)
 
 
 class DeepSeekProviderError(RuntimeError):
@@ -42,7 +45,7 @@ class DeepSeekSettings:
     max_retries: int
     retry_backoff_seconds: float
     max_retry_backoff_seconds: float
-    api_key_environment_variable: str
+    secret_ref: str
     capability_profiles: dict[str, tuple[str, str]]
 
     @classmethod
@@ -68,7 +71,7 @@ class DeepSeekSettings:
                 max_retries=int(value["max_retries"]),
                 retry_backoff_seconds=float(value["retry_backoff_seconds"]),
                 max_retry_backoff_seconds=float(value["max_retry_backoff_seconds"]),
-                api_key_environment_variable=str(value["api_key_environment_variable"]),
+                secret_ref=str(value["secret_ref"]),
                 capability_profiles=capability_profiles,
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -79,7 +82,7 @@ class DeepSeekSettings:
             or not 0 <= settings.max_retries <= 10
             or settings.retry_backoff_seconds < 0
             or settings.max_retry_backoff_seconds < settings.retry_backoff_seconds
-            or not settings.api_key_environment_variable
+            or not settings.secret_ref
             or set(settings.capability_profiles) != set(CAPABILITY_LEVELS)
         ):
             raise DeepSeekProviderError("DeepSeek configuration is invalid")
@@ -90,13 +93,13 @@ class DeepSeekProvider:
     def __init__(
         self,
         settings: DeepSeekSettings,
-        environment: Mapping[str, str] | None = None,
+        secret_store: SecretStore,
         *,
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self.settings = settings
-        self._environment = environment if environment is not None else os.environ
+        self._secret_store = secret_store
         self._opener = opener
         self._sleeper = sleeper
 
@@ -105,12 +108,21 @@ class DeepSeekProvider:
         cls,
         config: Mapping[str, Any],
         *,
-        environment: Mapping[str, str] | None = None,
+        secret_store: SecretStore | None = None,
+        environment: dict[str, str] | None = None,
+        keyring_module: Any | None = None,
+        current_account: str | None = None,
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> "DeepSeekProvider":
         settings = DeepSeekSettings.from_config(config)
-        return cls(settings, environment=environment, opener=opener, sleeper=sleeper)
+        store = secret_store or create_secret_store(
+            config,
+            environment=environment,
+            keyring_module=keyring_module,
+            current_account=current_account,
+        )
+        return cls(settings, store, opener=opener, sleeper=sleeper)
 
     def validate_startup(self, profile: ExecutionProfile) -> None:
         if profile.runtime_environment != "self_hosted_agent" or profile.provider_id != "deepseek":
@@ -124,18 +136,34 @@ class DeepSeekProvider:
                 "DeepSeek provider does not support this execution profile",
                 requires_human=True,
             )
+        try:
+            self._secret_store.check_access()
+        except SecretStoreError:
+            raise DeepSeekProviderError(
+                "DeepSeek SecretStore backend or process account is unavailable",
+                requires_human=True,
+            ) from None
 
     def complete(self, request: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
         if request.get("credential_access_approved") is not True:
             raise DeepSeekProviderError(
                 "DeepSeek credential access requires explicit task approval", requires_human=True
             )
-        api_key = self._environment.get(self.settings.api_key_environment_variable, "")
-        if not isinstance(api_key, str) or not api_key.strip():
+        try:
+            api_key = self._secret_store.get(self.settings.secret_ref)
+        except SecretStoreError:
             raise DeepSeekProviderError(
-                "DeepSeek API key is unavailable from the configured external injection",
+                "DeepSeek API key is unavailable through the configured SecretStore",
                 requires_human=True,
-            )
+            ) from None
+        try:
+            return self._complete_with_key(request, timeout_seconds, api_key)
+        finally:
+            api_key = ""
+
+    def _complete_with_key(
+        self, request: dict[str, Any], timeout_seconds: float, api_key: str
+    ) -> dict[str, Any]:
         payload = self._request_payload(request)
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         timeout = min(float(timeout_seconds), self.settings.timeout_seconds)
@@ -160,12 +188,12 @@ class DeepSeekProvider:
                     raise DeepSeekProviderError(
                         f"DeepSeek API returned HTTP {error.code}",
                         requires_human=error.code in {401, 403},
-                    ) from error
+                    ) from None
                 last_error = f"DeepSeek API returned HTTP {error.code}"
             except (URLError, TimeoutError, socket.timeout, OSError) as error:
                 last_error = f"DeepSeek API connection failed: {type(error).__name__}"
             if attempt >= self.settings.max_retries:
-                raise DeepSeekProviderError(last_error, retryable_request=True)
+                raise DeepSeekProviderError(last_error, retryable_request=True) from None
             self._sleeper(min(
                 self.settings.max_retry_backoff_seconds,
                 self.settings.retry_backoff_seconds * (2 ** attempt),
@@ -297,7 +325,62 @@ class DeepSeekProvider:
         return {"type": "final", "result": result}
 
 
-def create_provider() -> DeepSeekProvider:
+def verify_deepseek_credential(
+    candidate: str,
+    settings: DeepSeekSettings,
+    *,
+    opener: Callable[..., Any] = urlopen,
+) -> bool:
+    """Make one explicit, potentially billable request to validate a candidate credential."""
+    validate_secret_value(candidate)
+    model, _reasoning = settings.capability_profiles["L1"]
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "Reply with OK."}],
+            "max_tokens": 1,
+            "stream": False,
+            "thinking": {"type": "disabled"},
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    try:
+        response = opener(
+            Request(
+                settings.api_base_url + "/chat/completions",
+                data=body,
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + candidate},
+                method="POST",
+            ),
+            timeout=settings.timeout_seconds,
+        )
+        with response:
+            raw = response.read()
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload.get("choices"), list) or not payload["choices"]:
+            raise DeepSeekProviderError("DeepSeek connection validation returned an invalid response")
+    except HTTPError as error:
+        error.close()
+        raise DeepSeekProviderError(
+            f"DeepSeek connection validation returned HTTP {error.code}",
+            requires_human=error.code in {401, 403},
+        ) from None
+    except DeepSeekProviderError:
+        raise
+    except (URLError, TimeoutError, socket.timeout, OSError):
+        raise DeepSeekProviderError("DeepSeek connection validation could not reach the provider") from None
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError):
+        raise DeepSeekProviderError("DeepSeek connection validation returned an invalid response") from None
+    finally:
+        candidate = ""
+    return True
+
+
+def create_provider(
+    *,
+    config: Mapping[str, Any] | None = None,
+    secret_store: SecretStore | None = None,
+) -> DeepSeekProvider:
     """Factory for --provider deepseek_provider:create_provider."""
-    config_path = Path(os.environ.get("LOCAL_AGENT_LOOP_CONFIG", str(CONFIG_PATH)))
-    return DeepSeekProvider.from_config(load_initialization_config(config_path))
+    loaded_config = config or load_initialization_config()
+    return DeepSeekProvider.from_config(loaded_config, secret_store=secret_store)

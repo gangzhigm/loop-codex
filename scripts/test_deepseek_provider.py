@@ -8,10 +8,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import Mock
 
 from agent_runtime import ExecutionProfile, RuntimeSettings, SafeLogger, SingleTaskAgent, ToolSandbox
-from deepseek_provider import DeepSeekProvider, DeepSeekProviderError, DeepSeekSettings
+from deepseek_provider import (
+    DeepSeekProvider,
+    DeepSeekProviderError,
+    DeepSeekSettings,
+    verify_deepseek_credential,
+)
 from loopdb import CAPABILITY_LEVELS, load_initialization_config
+from secret_store import EnvironmentBackend, SecretStore
 
 
 class ScriptedHandler(BaseHTTPRequestHandler):
@@ -88,6 +95,10 @@ def final_response() -> tuple[int, dict[str, Any]]:
 
 
 class DeepSeekProviderTests(unittest.TestCase):
+    @staticmethod
+    def store(environment: dict[str, str]) -> SecretStore:
+        return SecretStore(EnvironmentBackend(environment), "DeepSeek Provider Tests")
+
     def settings(self, base_url: str) -> DeepSeekSettings:
         profiles = {
             level: (
@@ -102,7 +113,7 @@ class DeepSeekProviderTests(unittest.TestCase):
             max_retries=2,
             retry_backoff_seconds=0.01,
             max_retry_backoff_seconds=0.05,
-            api_key_environment_variable="DEEPSEEK_API_KEY",
+            secret_ref="DEEPSEEK_API_KEY",
             capability_profiles=profiles,
         )
 
@@ -121,19 +132,24 @@ class DeepSeekProviderTests(unittest.TestCase):
 
     def test_missing_external_key_fails_without_value(self) -> None:
         config = load_initialization_config()
+        config["secret_management"]["backend"] = "environment"
         provider = DeepSeekProvider.from_config(config, environment={})
-        with self.assertRaisesRegex(DeepSeekProviderError, "external injection"):
+        with self.assertRaisesRegex(DeepSeekProviderError, "SecretStore"):
             provider.complete(self.request(), 2)
 
     def test_credential_is_not_accessed_without_task_approval(self) -> None:
-        provider = DeepSeekProvider(self.settings("https://api.deepseek.com"), {"DEEPSEEK_API_KEY": "test-only-token"})
+        store = Mock()
+        provider = DeepSeekProvider(self.settings("https://api.deepseek.com"), store)
         with self.assertRaisesRegex(DeepSeekProviderError, "explicit task approval"):
             request = self.request()
             request.pop("credential_access_approved")
             provider.complete(request, 2)
+        store.get.assert_not_called()
 
     def test_local_fake_service_runs_tool_loop_and_finishes(self) -> None:
         with TemporaryDirectory() as temporary, LocalServer([tool_response(), final_response()]) as server:
+            token = "local-provider-test-token"
+            log_stream = io.StringIO()
             workspace = Path(temporary)
             project = workspace / "project"
             project.mkdir()
@@ -141,8 +157,12 @@ class DeepSeekProviderTests(unittest.TestCase):
             (project / "file.txt").write_text("before\n", encoding="utf-8")
             task = {"id": "DEEPSEEK-TEST", "description": "Patch the scoped file. APPROVED_ACTIONS: credential_access", "scope": ["project/"], "acceptance": ["File is updated."], "depends_on": [], "runtime_environment": "self_hosted_agent", "provider_id": "deepseek", "capability_level": "L2"}
             controller = FakeController(task)
-            provider = DeepSeekProvider(self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}, sleeper=lambda _: None)
-            agent = SingleTaskAgent(provider, controller, workspace, RuntimeSettings(4, 2, 2, 60, 20_000, 10_000), SafeLogger(io.StringIO()), config=load_initialization_config())
+            provider = DeepSeekProvider(
+                self.settings(server.url),
+                self.store({"DEEPSEEK_API_KEY": token}),
+                sleeper=lambda _: None,
+            )
+            agent = SingleTaskAgent(provider, controller, workspace, RuntimeSettings(4, 2, 2, 60, 20_000, 10_000), SafeLogger(log_stream), config=load_initialization_config())
             result = agent.run("test-execution", "self_hosted_agent", "L2", "deepseek")
 
             self.assertEqual(result["result"]["status"], "SUCCEEDED")
@@ -156,25 +176,53 @@ class DeepSeekProviderTests(unittest.TestCase):
             self.assertEqual(ScriptedHandler.requests[0]["body"]["thinking"], {"type": "enabled"})
             self.assertIn("final-result contract", ScriptedHandler.requests[0]["body"]["messages"][0]["content"])
             self.assertEqual(ScriptedHandler.requests[1]["body"]["messages"][-1]["role"], "tool")
+            persisted_surface = json.dumps(
+                {"result": result, "finish": controller.result, "requests": ScriptedHandler.requests},
+                ensure_ascii=False,
+            ) + log_stream.getvalue()
+            self.assertNotIn(token, persisted_surface)
 
     def test_retry_is_bounded_for_429_and_5xx(self) -> None:
         with LocalServer([(429, {}), (500, {}), final_response()]) as server:
             waits: list[float] = []
-            provider = DeepSeekProvider(self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}, sleeper=waits.append)
+            provider = DeepSeekProvider(
+                self.settings(server.url),
+                self.store({"DEEPSEEK_API_KEY": "test-only-token"}),
+                sleeper=waits.append,
+            )
             response = provider.complete(self.request(), 2)
             self.assertEqual(response["type"], "final")
             self.assertEqual(waits, [0.01, 0.02])
             self.assertEqual(len(ScriptedHandler.requests), 3)
 
     def test_auth_failure_is_not_retried(self) -> None:
+        token = "auth-failure-test-token"
         with LocalServer([(401, {})]) as server:
-            provider = DeepSeekProvider(self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}, sleeper=lambda _: self.fail("should not retry"))
-            with self.assertRaisesRegex(DeepSeekProviderError, "HTTP 401"):
+            provider = DeepSeekProvider(
+                self.settings(server.url),
+                self.store({"DEEPSEEK_API_KEY": token}),
+                sleeper=lambda _: self.fail("should not retry"),
+            )
+            with self.assertRaisesRegex(DeepSeekProviderError, "HTTP 401") as captured:
                 provider.complete(self.request(), 2)
             self.assertEqual(len(ScriptedHandler.requests), 1)
+        self.assertNotIn(token, str(captured.exception))
+        self.assertIsNone(captured.exception.__cause__)
+
+    def test_connection_verification_uses_one_local_request_without_exposing_value(self) -> None:
+        token = "connection-test-token"
+        with LocalServer([final_response()]) as server:
+            self.assertTrue(verify_deepseek_credential(token, self.settings(server.url)))
+        self.assertEqual(len(ScriptedHandler.requests), 1)
+        self.assertTrue(ScriptedHandler.requests[0]["authorization_present"])
+        self.assertEqual(ScriptedHandler.requests[0]["body"]["max_tokens"], 1)
+        self.assertNotIn(token, json.dumps(ScriptedHandler.requests[0]["body"]))
 
     def test_startup_rejects_other_environment_and_unsupported_profile(self) -> None:
-        provider = DeepSeekProvider(self.settings("https://api.deepseek.com"), {"DEEPSEEK_API_KEY": "test-only-token"})
+        provider = DeepSeekProvider(
+            self.settings("https://api.deepseek.com"),
+            self.store({"DEEPSEEK_API_KEY": "test-only-token"}),
+        )
         with self.assertRaisesRegex(DeepSeekProviderError, "self_hosted_agent"):
             provider.validate_startup(ExecutionProfile("codex_cli", None, "L2", "x", "high", 600, 0))
         with self.assertRaisesRegex(DeepSeekProviderError, "execution profile"):
@@ -190,7 +238,8 @@ class DeepSeekProviderTests(unittest.TestCase):
     def test_pro_non_thinking_profile_is_sent_to_api(self) -> None:
         with LocalServer([final_response()]) as server:
             provider = DeepSeekProvider(
-                self.settings(server.url), {"DEEPSEEK_API_KEY": "test-only-token"}
+                self.settings(server.url),
+                self.store({"DEEPSEEK_API_KEY": "test-only-token"}),
             )
             response = provider.complete(self.request("L3"), 2)
         self.assertEqual(response["type"], "final")

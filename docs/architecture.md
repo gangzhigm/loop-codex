@@ -12,9 +12,20 @@ Operator / Worker / Self-hosted Agent ---> data/loop-agent.sqlite3 <--- Dashboar
                  Worker / 健康任务配置       Windows 任务计划程序
 
 E:\code\根目录清单.md --实时解析项目路由--> loopctl / Dashboard Server
+
+config/initialization.json --backend/service/secret_ref--> SecretStore ---> OS keyring
+                                                               `-------> explicit process environment
 ```
 
-SQLite 只包含任务及其执行一致性表：`tasks`（包括任务所选的 `runtime_environment`、`capability_level`、`provider_id`、`execution_policy` 和独立的 nullable `archived_at`）、7 张任务子表、`executions`、`scope_locks` 和 `task_conflicts`。它不保存运行环境目录及入口配置、模型映射、自动化周期、metadata、settings、projects、change requests、health events 或 service state。旧 `execution_profile` 只在过渡期输入与展示兼容层中推导，不是 Schema 3.4.0 的队列键。
+SQLite 只包含任务及其执行一致性表：`tasks`（包括任务所选的 `runtime_environment`、`capability_level`、`provider_id`、`execution_policy` 和独立的 nullable `archived_at`）、7 张任务子表、`executions`、`scope_locks` 和 `task_conflicts`。它不保存密钥、Authorization、可逆密文、密钥片段、运行环境目录及入口配置、模型映射、自动化周期、metadata、settings、projects、change requests、health events 或 service state。旧 `execution_profile` 只在过渡期输入与展示兼容层中推导，不是 Schema 3.4.0 的队列键。
+
+## SecretStore 边界
+
+`scripts/secret_store.py` 是 Dashboard、初始化命令、Supervisor/Runtime 和 Provider 唯一允许使用的密钥访问契约，统一提供 `set/get/status/verify/rotate/delete`。状态与审计结果只包含 backend、`secret_ref`、可用性、是否变化和 Asia/Shanghai 时间，不返回原值、掩码、后四位或可逆材料。`config/initialization.json` 只保存 `secret_management.backend/service/access_account` 与 Provider 的 `secret_ref` 等非敏感引用。
+
+`os_keyring` 在 Windows 通过 WinCred API 使用当前登录账户的 Credential Manager；macOS/Linux 使用系统 keyring 适配器，分别要求可用的 Keychain 与 Secret Service 后端。后端缺失、锁定、权限不足或账户与 `access_account` 不符时 fail closed，不会回退到 JSON、SQLite、日志或明文文件。`environment` 只有在配置显式选择时生效，把 `secret_ref` 解释为当前进程变量名；它不持久化，也不能由子进程初始化命令写回父进程。
+
+轮换在进程级同引用锁内完成：候选值先写入同一安全后端的临时引用，回读并完成格式与可选连接验证后才替换主引用；提交验证失败时恢复旧值并清理候选引用。底层系统密钥库不提供跨进程事务，因此外部并发写入者仍必须由部署编排串行化；代码不会把这一限制伪装成分布式原子事务。外部 Secret Manager 目前只定义 `SecretBackendAdapter` 的能力检测与读写删除契约，未配置具体服务器适配器时明确报未实现。
 
 ## Codex CLI Runner 边界
 
@@ -30,7 +41,7 @@ stdout 与 stderr 由独立线程持续排空并只保留配置上限内的尾�
 
 ## 自建 Agent 边界
 
-`scripts/agent_runtime.py` 是不依赖 Codex 客户端自动化或 Codex CLI 的单次执行入口。Provider 只负责将外部模型请求与响应转换为中立协议：请求包含任务上下文、消息、工具 schema 和最终结果 schema；响应只能是 `tool_calls` 或 `final`。Runtime 不识别 DeepSeek 专有字段，负责一次 claim、任务路由复核、适用 `AGENTS.md` 与既有 Git 状态采集、工具执行、定时 heartbeat、结果契约校验和 UTF-8 stdin finish。
+`scripts/agent_runtime.py` 是不依赖 Codex 客户端自动化或 Codex CLI 的单次执行入口。它从初始化配置创建一次 SecretStore 并通过 `factory(config=..., secret_store=...)` 注入 Provider；Provider 工厂不接受该契约时启动失败。Provider 只负责将外部模型请求与响应转换为中立协议：请求包含任务上下文、消息、工具 schema 和最终结果 schema；响应只能是 `tool_calls` 或 `final`。Runtime 不识别 DeepSeek 专有字段，负责一次 claim、任务路由复核、适用 `AGENTS.md` 与既有 Git 状态采集、工具执行、定时 heartbeat、结果契约校验和 UTF-8 stdin finish。
 
 模型上下文只使用领取任务的 `id`、`description`、`scope`、`acceptance` 和已满足依赖标记，不传入完整队列状态。日志只记录步骤、工具名和错误类型，不记录模型密钥、Authorization、文件全文、完整提示词或隐藏推理。
 
@@ -40,7 +51,7 @@ stdout 与 stderr 由独立线程持续排空并只保留配置上限内的尾�
 
 ## DeepSeek 提供方
 
-`scripts/deepseek_provider.py` 将中立协议映射为 DeepSeek 的非流式 Chat Completions 请求，并把 `tool_calls` 或最终 JSON 转回中立响应。仅该 Provider 限制启动参数为 `runtime_environment=self_hosted_agent`、`provider_id=deepseek`，并根据初始化配置拒绝不支持的能力等级；因此 Codex 自动化和 Codex CLI 入口不能借此领取 DeepSeek 任务。密钥仅在已领取任务含有明确 `APPROVED_ACTIONS: credential_access` 时从 `deepseek.api_key_environment_variable` 指定的外部环境变量读取，缺失时失败，且日志与异常不包含值。
+`scripts/deepseek_provider.py` 将中立协议映射为 DeepSeek 的非流式 Chat Completions 请求，并把 `tool_calls` 或最终 JSON 转回中立响应。仅该 Provider 限制启动参数为 `runtime_environment=self_hosted_agent`、`provider_id=deepseek`，并根据初始化配置拒绝不支持的能力等级；因此 Codex 自动化和 Codex CLI 入口不能借此领取 DeepSeek 任务。密钥仅在已领取任务含有明确 `APPROVED_ACTIONS: credential_access` 时通过注入的 SecretStore 读取，在请求结束后释放本地引用；密钥不会进入命令行、环境快照、工具输出、日志或公开异常链。
 
 适配器只重试 429、500、502、503、504 和连接错误，次数与指数退避上限来自配置；401/403、格式错误、空响应、截断和未知结束原因不重试。因为 Provider 在交还中立工具调用前完成重试，运行时不会因重试重复执行已产生副作用的本地工具。返回的函数名和 JSON 参数仍在运行时按本地 allowlist 与精确参数结构校验，之后才进入 scope、敏感路径和人工批准检查。
 
@@ -51,6 +62,8 @@ stdout 与 stderr 由独立线程持续排空并只保留配置上限内的尾�
 - [Error Codes](https://api-docs.deepseek.com/quick_start/error_codes)：401、429、500、503 的官方语义和建议。
 
 当前官方 API 页面列出的模型名和能力会变化；实现的默认模型是核对时列出的 `deepseek-v4-flash`。真实凭据、真实 API 调用和费用均未获授权，故只以本地假 HTTP 服务验证。
+
+SecretStore 平台依据于 2026-08-05（Asia/Shanghai）核对，以下官方入口均返回 HTTP 200：[Windows CredWrite](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew)、[Apple Keychain Services](https://developer.apple.com/documentation/security/keychain-services)、[freedesktop Secret Service](https://specifications.freedesktop.org/secret-service/latest/)。这些来源确认平台 API/服务边界；具体桌面会话是否已解锁、Linux 是否安装可用 keyring 适配器仍由运行时能力检测裁决。
 
 运行环境允许值、显示名称、入口参数、Worker 周期、健康任务周期、租约、并发数、Dashboard 地址和健康阈值只存在于 `config/initialization.json`。项目路由实时读取 `E:\code\根目录清单.md`。健康检查的当前状态和最近事件写入 `runtime/health-state.json`。浏览器不直接读取 SQLite，而是访问本机 HTTP 服务。
 

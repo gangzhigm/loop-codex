@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import io
+import os
 import subprocess
+import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 from typing import Any
@@ -21,6 +24,7 @@ from agent_runtime import (
     validate_final_result,
 )
 from loopdb import connect, initialize_schema, insert_task, load_initialization_config, now_shanghai
+from secret_store import EnvironmentBackend, SecretStore
 
 
 class ScriptedProvider:
@@ -120,6 +124,45 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(settings.max_file_bytes, 524_288)
         self.assertEqual(settings.max_tool_output_chars, 50_000)
         self.assertEqual(settings.provider_termination_grace_seconds, 5)
+
+    def test_provider_factory_receives_shared_config_and_secret_store(self) -> None:
+        module = types.ModuleType("test_injected_provider")
+        captured: dict[str, Any] = {}
+        provider = ScriptedProvider([])
+
+        def factory(*, config: dict[str, Any], secret_store: SecretStore) -> ScriptedProvider:
+            captured.update({"config": config, "secret_store": secret_store})
+            return provider
+
+        module.create_provider = factory
+        sys.modules[module.__name__] = module
+        store = SecretStore(EnvironmentBackend({}), "Agent Runtime Tests")
+        try:
+            loaded = agent_runtime.load_provider(
+                f"{module.__name__}:create_provider", self.config, store
+            )
+        finally:
+            sys.modules.pop(module.__name__, None)
+        self.assertIs(loaded, provider)
+        self.assertIs(captured["config"], self.config)
+        self.assertIs(captured["secret_store"], store)
+
+    def test_child_process_environment_filters_injected_credentials(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": "safe-path",
+                "DEEPSEEK_API_KEY": "test-only-secret",
+                "SERVICE_PASSWORD": "test-only-password",
+                "NORMAL_SETTING": "visible",
+            },
+            clear=True,
+        ):
+            environment = agent_runtime.safe_subprocess_environment()
+        self.assertEqual(environment["PATH"], "safe-path")
+        self.assertEqual(environment["NORMAL_SETTING"], "visible")
+        self.assertNotIn("DEEPSEEK_API_KEY", environment)
+        self.assertNotIn("SERVICE_PASSWORD", environment)
 
     def run_agent(self, provider: ScriptedProvider, claim: dict[str, Any] | None = None) -> tuple[dict[str, Any], FakeController]:
         controller = FakeController(claim or {"outcome": "CLAIMED", "task": self.task()})

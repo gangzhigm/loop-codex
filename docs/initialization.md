@@ -18,6 +18,7 @@
 - 文本读写：UTF-8
 - Codex CLI Runner：单次进程、单次 claim、单任务、单登记项目；默认总超时 3600 秒
 - 自建 Agent：单次进程，默认最多 24 个模型步骤；模型/工具超时 120 秒；不安装 Windows 服务
+- SecretStore：默认 `os_keyring`，密钥不进入 SQLite、普通配置、日志、任务结果、命令行或持久化报告
 
 `config/initialization.json` 是初始化和部署配置模板的唯一来源。运行环境列表、显示名称和执行入口参数只在该配置中维护；SQLite 仅在任务行保存所选 `runtime_environment`，并继续保存任务和执行一致性数据。项目清单实时读取；健康状态写入 `runtime/health-state.json`。
 
@@ -89,6 +90,49 @@ $resultJson = $result | ConvertTo-Json -Depth 8 -Compress
 $resultJson | py -3 E:\code\local-agent-loop\scripts\loopctl.py finish $executionId $taskId -
 ```
 
+### SecretStore 初始化
+
+`config/initialization.json` 只保存以下非敏感路由信息：
+
+```json
+{
+  "secret_management": {
+    "backend": "os_keyring",
+    "service": "Local Agent Loop",
+    "access_account": "Admin"
+  },
+  "deepseek": {
+    "secret_ref": "DEEPSEEK_API_KEY"
+  }
+}
+```
+
+`access_account` 必须与 Dashboard、初始化命令和 self-hosted Agent/Supervisor 的实际运行账户一致。换成 Windows 服务账户、macOS launchd 用户或 Linux systemd 用户时，先在该账户会话中更新此值并重新初始化同一 `secret_ref`；账户不符、后端不可用、引用缺失或权限不足都会快速失败，不能通过读取别的账户配置或降级到明文文件绕过。
+
+`os_keyring` 的平台行为：
+
+- Windows：本实现直接调用 WinCred，把通用凭据保存到当前账户的 Credential Manager。
+- macOS：需要 Python `keyring` 能发现可用的 Keychain 后端；其他实现即使有非零优先级也会被拒绝。
+- Linux 桌面：需要 Python `keyring` 能发现已解锁的 Secret Service/libsecret 后端；无桌面会话、chainer 或明文替代后端都保持不可用。
+
+2026-08-05（Asia/Shanghai）已核对并成功访问官方入口：[Windows CredWrite](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew)、[Apple Keychain Services](https://developer.apple.com/documentation/security/keychain-services)、[freedesktop Secret Service](https://specifications.freedesktop.org/secret-service/latest/)。这些资料确认存储接口，不保证当前机器的密钥库已解锁；实际能力以 `secretctl.py status` 为准。
+
+DeepSeek 初始化命令不接受明文参数，`set` 和 `rotate` 只用隐藏终端输入并要求重复输入：
+
+```powershell
+py -3 .\scripts\secretctl.py status deepseek
+py -3 .\scripts\secretctl.py set deepseek
+py -3 .\scripts\secretctl.py verify deepseek
+py -3 .\scripts\secretctl.py rotate deepseek
+py -3 .\scripts\secretctl.py delete deepseek
+```
+
+`rotate` 必须输入 `ROTATE`，候选值先写入同一安全后端的临时引用并回读验证，成功后才替换主引用；失败恢复旧值。`delete` 必须输入 `DELETE`。`set/verify/rotate --connect` 会提示一次连接校验可能产生 Provider 调用，只有输入 `CONNECT` 才发送；默认校验只检查安全后端回读和格式，不联网。
+
+状态和操作结果只输出 backend、`secret_ref`、状态、是否变化与带 Asia/Shanghai 时区的时间，不输出原值、掩码、后四位或 Authorization。项目和数据库备份不包含系统密钥库内容；系统重装、密钥库丢失或运行账户迁移后，用新账户重新运行 `set`。第一版没有具体外部 Secret Manager 实现，只有稳定 adapter 契约；选择未知 backend 会明确失败。
+
+`environment` 只用于一次性冒烟或受控部署，必须显式把 `secret_management.backend` 改为 `environment`，并在启动 self-hosted Agent 的同一进程环境中注入与 `deepseek.secret_ref` 同名的变量。它不持久化；`secretctl` 拒绝 `set/rotate/delete`，因为子进程无法可靠修改父进程环境。禁止把注入命令写入仓库、日志或任务结果。
+
 ### Codex CLI Runner 启停
 
 `codex_cli` 配置只保存非敏感运行参数：可执行文件名、提示词路径、允许档位、档位到模型与思考参数的映射、`use_user_config`、沙箱、总超时、终止宽限和 stdout/stderr 上限。`use_user_config=true` 是默认兼容模式，CLI 可自行使用本机已有认证与 provider 配置；Runner 不读取、复制、输出或迁移这些内容。设置为 `false` 才额外传入 `--ignore-user-config`。不得在配置中加入登录信息、令牌、认证文件路径或复制用户 Codex 配置。
@@ -136,38 +180,42 @@ def complete(request: dict, timeout_seconds: float) -> dict:
     ...
 ```
 
-Provider 必须自行完成真实模型 API 的鉴权、请求和响应标准化，但不得把密钥、Authorization 或隐藏推理放入返回对象或日志。Runtime 的标准响应仅有两种：`{"type":"tool_calls","calls":[...]}` 和 `{"type":"final","result":{...}}`。
+Provider 工厂必须接受 `config` 和统一的 `secret_store` 关键字参数。Provider 通过该接口完成鉴权，不得另建密钥存储或直接读取持久化凭据；也不得把密钥、Authorization 或隐藏推理放入返回对象或日志。Runtime 的标准响应仅有两种：`{"type":"tool_calls","calls":[...]}` 和 `{"type":"final","result":{...}}`。
 
 一次运行示例：
 
 ```powershell
 py -3 .\scripts\agent_runtime.py `
-  --runtime-environment deepseek `
-  --profile standard `
+  --runtime-environment self_hosted_agent `
+  --provider-id deepseek `
+  --capability-level L2 `
+  --execution-policy automatic `
   --execution-id deepseek-worker-<GUID> `
   --provider your_provider_package:create_provider
 ```
 
-`--runtime-environment`、`--profile`、`--execution-id` 和 `--provider` 都必须显式给出。进程只 claim 一次；`NO_TASK`、`SLOT_FULL`、`CONFLICT` 立即退出，`CLAIMED` 只处理该任务。正常停止由单次执行自然退出；人工中断会尽力以 `FAILED` finish。强制结束导致无法 finish 时，后续任意领取会按现有心跳/租约规则回收 execution。当前不创建 Windows 服务、不保存 PID、不自动重启。
+`--runtime-environment`、`--provider-id`、`--capability-level`、`--execution-policy automatic`、`--execution-id` 和 `--provider` 都必须显式给出。进程只 claim 一次；`NO_TASK`、`SLOT_FULL`、`CONFLICT` 立即退出，`CLAIMED` 只处理该任务。正常停止由单次执行自然退出；人工中断会尽力以 `FAILED` finish。强制结束导致无法 finish 时，后续任意领取会按现有心跳/租约规则回收 execution。当前不创建 Windows 服务、不保存 PID、不自动重启。
 
-DeepSeek Provider 使用 `scripts/deepseek_provider.py`，启动时从 `deepseek.api_key_environment_variable` 指定的外部环境变量读取密钥；配置、日志、SQLite 和任务结果均不得保存该值。
+DeepSeek Provider 使用 `scripts/deepseek_provider.py`，由 Runtime 注入统一 SecretStore，并仅在已领取任务明确包含 `APPROVED_ACTIONS: credential_access` 后按 `deepseek.secret_ref` 读取密钥。Provider 实例不缓存密钥；配置、日志、SQLite、任务结果、命令行和环境快照均不得保存该值。
 
 ```powershell
-$env:DEEPSEEK_API_KEY = "由外部安全注入提供"
 py -3 .\scripts\agent_runtime.py `
-  --runtime-environment deepseek `
-  --profile standard `
+  --runtime-environment self_hosted_agent `
+  --provider-id deepseek `
+  --capability-level L2 `
+  --execution-policy automatic `
   --execution-id deepseek-worker-<GUID> `
   --provider deepseek_provider:create_provider
 ```
 
-DeepSeek Provider 只接受 `deepseek` 环境及 `deepseek.supported_execution_profiles` 中的档位；401/403、格式错误、空响应或截断会直接失败，429、5xx 和连接错误才会按配置限次退避。正常停止为单次运行结束；人工终止时由心跳/租约回收。回滚时停止 DeepSeek 入口并恢复本次 Provider、配置和文档变更，禁止通过直接写 SQLite 处理运行中的任务。真实 API 调用与任何凭据读取需要任务中的明确 `credential_access` 批准，未批准时只运行本地假服务测试。
+DeepSeek Provider 只接受 `self_hosted_agent/deepseek` 及配置允许的能力等级；401/403、格式错误、空响应或截断会直接失败，429、5xx 和连接错误才会按配置限次退避。正常停止为单次运行结束；人工终止时由心跳/租约回收。回滚时停止 DeepSeek 入口并恢复本次 Provider、配置和文档变更，禁止通过直接写 SQLite 处理运行中的任务。真实 API 调用与任何凭据读取需要任务中的明确 `credential_access` 批准，未批准时只运行本地假服务测试。
 
 自建 Agent 参数来自 `self_hosted_agent`：`max_steps`、模型与工具超时、单文件字节上限和工具输出字符上限。调整后先运行：
 
 ```powershell
 py -3 -B .\scripts\test_agent_runtime.py -v
 py -3 -B .\scripts\test_deepseek_provider.py -v
+py -3 -B .\scripts\test_secret_store.py -v
 py -3 -B .\scripts\test_loop.py -v
 py -3 .\scripts\loopctl.py validate
 ```

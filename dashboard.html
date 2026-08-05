@@ -911,74 +911,6 @@
       gap: 8px;
     }
 
-    .profile-level-help-wrap {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-    }
-
-    .profile-level-help {
-      display: inline-grid;
-      width: 16px;
-      height: 16px;
-      place-items: center;
-      border: 1px solid var(--line-strong);
-      border-radius: 50%;
-      color: var(--muted);
-      background: var(--surface-subtle);
-      cursor: help;
-      font-size: 11px;
-      font-weight: 800;
-      line-height: 1;
-      outline: 0;
-    }
-
-    .profile-level-help:focus-visible {
-      color: var(--accent);
-      border-color: var(--accent);
-      outline: 2px solid var(--accent-soft);
-      outline-offset: 1px;
-    }
-
-    .profile-level-tooltip {
-      position: absolute;
-      top: calc(100% + 8px);
-      left: 0;
-      z-index: 30;
-      display: grid;
-      width: max-content;
-      max-width: min(280px, calc(100vw - 32px));
-      gap: 7px;
-      padding: 10px;
-      border: 1px solid var(--line-strong);
-      border-radius: 5px;
-      color: var(--ink);
-      background: var(--surface);
-      box-shadow: 0 8px 20px rgba(24, 33, 43, 0.16);
-      font-size: 10px;
-      line-height: 1.3;
-      opacity: 0;
-      pointer-events: none;
-      transform: translateY(-3px);
-      transition: opacity 120ms ease, transform 120ms ease;
-    }
-
-    .profile-level-help-wrap:hover .profile-level-tooltip,
-    .profile-level-help:focus-visible + .profile-level-tooltip {
-      opacity: 1;
-      pointer-events: auto;
-      transform: translateY(0);
-    }
-
-    .profile-level-tooltip-item {
-      display: grid;
-      gap: 2px;
-      min-width: 190px;
-    }
-
-    .profile-level-tooltip-item strong { color: var(--ink); font-size: 11px; }
-    .profile-level-tooltip-item span { color: var(--muted); white-space: nowrap; }
-
     .side-heading-summary {
       min-width: 0;
       overflow: hidden;
@@ -1034,9 +966,11 @@
 
     .profile-row {
       display: grid;
-      gap: 8px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
       min-width: 0;
-      padding: 9px 0;
+      min-height: 34px;
+      padding: 6px 10px;
       border-bottom: 1px solid var(--line);
       border-left: 4px solid var(--line);
       color: #24313b;
@@ -1048,117 +982,21 @@
     .profile-row.profile-level-L4 { border-left-color: #d98239; }
     .profile-row.profile-level-L5 { border-left-color: #b94b4b; }
 
-    .profile-heading-row {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 10px;
-      min-width: 0;
-      padding-left: 10px;
-    }
-
-    .profile-codex-label {
+    .profile-level-label {
       color: #24313b;
+      min-width: 0;
       font-size: 13px;
       font-weight: 800;
       line-height: 1.15;
     }
 
-    .profile-limit {
+    .profile-capacity {
       color: var(--muted);
       flex: 0 0 auto;
       font-size: 11px;
       font-variant-numeric: tabular-nums;
       line-height: 1.2;
     }
-
-    .profile-channels {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 6px;
-      min-width: 0;
-      padding-left: 10px;
-    }
-
-    .profile-channel {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      column-gap: 7px;
-      row-gap: 2px;
-      min-width: 0;
-      padding: 5px 0;
-      border-top: 1px solid #e6e9ed;
-    }
-
-    .profile-channel-name {
-      min-width: 0;
-      color: #364553;
-      font-size: 11px;
-      font-weight: 700;
-      line-height: 1.25;
-    }
-
-    .profile-channel-active {
-      color: var(--ink);
-      font-size: 12px;
-      font-variant-numeric: tabular-nums;
-      font-weight: 760;
-      line-height: 1.25;
-    }
-
-    /* The profile matrix is intentionally visual-only: twelve channel tiles in two columns. */
-    #profileContent {
-      display: block;
-    }
-
-    #profileList {
-      grid-template-columns: minmax(0, 1fr);
-      gap: 4px;
-    }
-
-    #profileList > .profile-row,
-    .profile-channels {
-      display: contents;
-    }
-
-    .profile-heading-row {
-      display: none;
-    }
-
-    .profile-channel {
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
-      width: 100%;
-      height: 30px;
-      min-width: 0;
-      padding: 0 10px;
-      border: 0;
-      border-radius: 4px;
-      overflow: hidden;
-      color: transparent;
-      font-size: 0;
-      line-height: 0;
-      text-align: left;
-    }
-
-    .profile-channel-active {
-      display: none;
-    }
-
-    .profile-channel-active {
-      display: block;
-      flex: 0 0 auto;
-      margin-left: auto;
-    }
-
-    .profile-channel-name { color: #24313b; }
-
-    .profile-level-L1 .profile-channel { background: #c3e5c9; }
-    .profile-level-L2 .profile-channel { background: #d9e9ad; }
-    .profile-level-L3 .profile-channel { background: #f0dfa1; }
-    .profile-level-L4 .profile-channel { background: #f5c999; }
-    .profile-level-L5 .profile-channel { background: #e8a4a4; }
 
     .agent-dot {
       width: 9px;
@@ -1369,7 +1207,6 @@
       .empty-state { min-height: 280px; }
       .side-section { display: block; overflow: visible; }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
-      .profile-channels { grid-template-columns: minmax(0, 1fr); }
     }
 
     @media (max-width: 760px) {
@@ -1518,7 +1355,7 @@
 
       <aside class="side-section" aria-label="运行详情">
         <section class="side-block">
-          <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">调度容量</span><span class="profile-level-help-wrap"><span id="profileLevelHelp" class="profile-level-help" tabindex="0" role="img" aria-label="查看 L1 至 L5 执行配置">!</span><span id="profileLevelTooltip" class="profile-level-tooltip" role="tooltip"></span></span><span id="profileCount" class="side-heading-summary">0/8</span></span></button>
+          <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">调度容量</span><span id="profileCount" class="side-heading-summary">0/8</span></span></button>
           <div id="profileContent" class="side-content is-expanded"><ul id="profileList" class="profile-list"><li class="muted">暂无任务</li></ul></div>
         </section>
       </aside>
@@ -1605,7 +1442,6 @@
       workspaceUpdated: document.querySelector("#workspaceUpdated"),
       profileList: document.querySelector("#profileList"),
       profileCount: document.querySelector("#profileCount"),
-      profileLevelTooltip: document.querySelector("#profileLevelTooltip"),
       taskDialog: document.querySelector("#taskDialog"),
       dialogTitle: document.querySelector("#dialogTitle"),
       dialogSubtitle: document.querySelector("#dialogSubtitle"),
@@ -1903,21 +1739,6 @@
 
     function providerLabel(providerId) {
       return providerId ? ` · ${providerId}` : "";
-    }
-
-    function renderProfileLevelHelp() {
-      elements.profileLevelTooltip.innerHTML = CAPABILITY_LEVELS.map((level) => {
-        const entries = runtimeEnvironmentEntries().flatMap(([environment, runtime]) => {
-          if (environment === "self_hosted_agent") {
-            return Object.keys(state?.runtime_config?.execution_profiles?.[environment]?.providers ?? {}).map((providerId) => {
-              const config = executionConfig(environment, providerId, level);
-              return `${runtime.name}${providerLabel(providerId)}: ${executionConfigLabel(config)}`;
-            });
-          }
-          return [`${runtime.name}: ${executionConfigLabel(executionConfig(environment, null, level))}`];
-        });
-        return `<div class="profile-level-tooltip-item"><strong>${escapeHtml(level)}</strong><span>${escapeHtml(entries.join(" | "))}</span></div>`;
-      }).join("");
     }
 
     function profileCell(task) {
@@ -2305,31 +2126,18 @@
     }
 
     function renderProfiles(tasks, agents) {
-      const environments = runtimeEnvironmentEntries();
-      const platformLimits = state?.settings?.platform_max_active_executions ?? {};
+      const levelProfiles = { L1: "routine", L2: "standard", L3: "advanced", L4: "deep", L5: "complex" };
+      const profileParallelLimits = state?.settings?.profile_parallel_limits ?? {};
       const totalActive = agents.length;
       const totalLimit = state?.settings?.global_max_active_executions ?? "--";
       elements.profileCount.textContent = `${totalActive}/${totalLimit}`;
-      renderProfileLevelHelp();
-      const capacityRows = environments.map(([environment, runtime]) => {
-        const active = agents.filter((agent) => agent.runtime_environment === environment).length;
-        return `<div class="profile-channel" title="真实 RUNNING execution；等待和终态不占容量"><span class="profile-channel-name">${escapeHtml(runtime.name)}</span><strong class="profile-channel-active">${active}/${escapeHtml(platformLimits[environment] ?? "--")}</strong></div>`;
-      }).join("");
       const capabilityRows = CAPABILITY_LEVELS.map((level) => {
-        const pending = tasks.filter((task) => task.capability_level === level && task.status === "PENDING").length;
-        const entries = environments.flatMap(([environment, runtime]) => {
-          const providers = environment === "self_hosted_agent"
-            ? Object.keys(state?.runtime_config?.execution_profiles?.[environment]?.providers ?? {})
-            : [null];
-          return providers.map((providerId) => {
-            const config = executionConfig(environment, providerId, level);
-            const active = agents.filter((agent) => agent.runtime_environment === environment && agent.provider_id === providerId && agent.capability_level === level).length;
-            return `<div class="profile-channel" title="${escapeHtml(executionConfigLabel(config))}"><span class="profile-channel-name">${escapeHtml(`${runtime.name}${providerLabel(providerId)} · ${executionConfigLabel(config)}`)}</span><strong class="profile-channel-active">${pending}/${active}</strong></div>`;
-          });
-        }).join("");
-        return `<li class="profile-row profile-level-${escapeHtml(level)}" role="group" aria-label="${escapeHtml(`${level} 执行配置`)}"><div class="profile-heading-row"><span class="profile-codex-label">${escapeHtml(level)}</span><span class="profile-limit">待执行/活动</span></div><div class="profile-channels">${entries}</div></li>`;
+        const profile = levelProfiles[level];
+        const active = agents.filter((agent) => agent.capability_level === level).length;
+        const limit = profileParallelLimits[profile] ?? profileParallelLimits[level] ?? totalLimit;
+        return `<li class="profile-row profile-level-${escapeHtml(level)}" role="group" aria-label="${escapeHtml(`${level}，${profile}：活动 execution ${active}，并发上限 ${limit}`)}" title="${escapeHtml(profile)}"><span class="profile-level-label">${escapeHtml(level)}</span><strong class="profile-capacity">${active}/${escapeHtml(limit)}</strong></li>`;
       }).join("");
-      elements.profileList.innerHTML = `<li class="profile-row profile-level-L1" role="group" aria-label="平台容量"><div class="profile-heading-row"><span class="profile-codex-label">平台容量</span><span class="profile-limit">全局 ${escapeHtml(totalActive)}/${escapeHtml(totalLimit)}</span></div><div class="profile-channels">${capacityRows}</div></li>${capabilityRows}`;
+      elements.profileList.innerHTML = capabilityRows;
     }
 
     function setExpandedSidePanel(button) {

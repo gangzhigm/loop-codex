@@ -126,6 +126,11 @@
       ]
     }
   },
+  "secret_management": {
+    "backend": "os_keyring",
+    "service": "Local Agent Loop",
+    "access_account": "Admin"
+  },
   "deepseek": {
     "api_base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
@@ -133,6 +138,7 @@
     "max_retries": 2,
     "retry_backoff_seconds": 1,
     "max_retry_backoff_seconds": 8,
+    "secret_ref": "DEEPSEEK_API_KEY",
     "api_key_environment_variable": "DEEPSEEK_API_KEY",
     "supported_execution_profiles": [
       "routine",
