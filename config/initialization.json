@@ -163,7 +163,12 @@
   "dashboard": {
     "host": "127.0.0.1",
     "port": 4178,
-    "poll_interval_ms": 2000
+    "poll_interval_ms": 2000,
+    "secret_api": {
+      "enabled": true,
+      "max_body_bytes": 16384,
+      "replay_cache_size": 1024
+    }
   },
   "automations": {
     "worker_interval_minutes": 20,
