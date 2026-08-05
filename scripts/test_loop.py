@@ -778,6 +778,119 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertIn("archived_at", payload)
         self.assertIsNone(payload["archived_at"])
 
+    def test_human_answer_can_resolve_last_blocker_without_another_attempt(self) -> None:
+        self.add_task("HUMAN-RESOLVE", "project-1")
+        self.claim("exec-human-resolve")
+        waiting_report = {
+            "status": "WAITING_HUMAN",
+            "summary": "构建产物已验证，只等待确认生产域名。",
+            "verification": ["dist exists", "entry assets resolve"],
+            "question": "生产域名是否正确？",
+        }
+        self.run_ctl(
+            "finish",
+            "exec-human-resolve",
+            "HUMAN-RESOLVE",
+            input_text=json.dumps(waiting_report, ensure_ascii=False),
+        )
+
+        result = self.run_ctl(
+            "resolve-human",
+            "HUMAN-RESOLVE",
+            "--response",
+            "该生产域名正确。",
+        )
+        self.assertEqual(result["outcome"], "HUMAN_RESOLVED")
+        self.assertEqual(result["status"], "SUCCEEDED")
+
+        database = connect(self.db_path)
+        task = database.execute(
+            "SELECT status, completed_at, progress_percent, result_summary, human_required, "
+            "human_question, human_responded_at, human_response, attempt FROM tasks "
+            "WHERE id='HUMAN-RESOLVE'"
+        ).fetchone()
+        history = database.execute(
+            "SELECT from_status, to_status, actor FROM task_history "
+            "WHERE task_id='HUMAN-RESOLVE' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        verification_count = database.execute(
+            "SELECT count(*) FROM task_verifications WHERE task_id='HUMAN-RESOLVE'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(task["status"], "SUCCEEDED")
+        self.assertIsNotNone(task["completed_at"])
+        self.assertEqual(task["progress_percent"], 100)
+        self.assertEqual(task["result_summary"], waiting_report["summary"])
+        self.assertEqual(task["human_required"], 0)
+        self.assertEqual(task["human_question"], waiting_report["question"])
+        self.assertIsNotNone(task["human_responded_at"])
+        self.assertEqual(task["human_response"], "该生产域名正确。")
+        self.assertEqual(task["attempt"], 1)
+        self.assertEqual(tuple(history), ("WAITING_HUMAN", "SUCCEEDED", "human-resolution"))
+        self.assertEqual(verification_count, 2)
+
+    def test_human_resolution_rejects_unverified_or_unrelated_pending_task(self) -> None:
+        self.add_task("UNVERIFIED-WAIT", "project-1")
+        self.claim("exec-unverified-wait")
+        self.run_ctl(
+            "finish",
+            "exec-unverified-wait",
+            "UNVERIFIED-WAIT",
+            input_text=json.dumps(
+                {"status": "WAITING_HUMAN", "summary": "need input", "question": "continue?"}
+            ),
+        )
+        error = self.run_ctl_error(
+            "resolve-human", "UNVERIFIED-WAIT", "--response", "yes"
+        )
+        self.assertIn("缺少 Worker 验证记录", error["message"])
+
+        self.add_task("PLAIN-PENDING", "project-2")
+        error = self.run_ctl_error(
+            "resolve-human",
+            "PLAIN-PENDING",
+            "--response",
+            "done",
+            "--summary",
+            "done",
+        )
+        self.assertIn("刚从 WAITING_HUMAN 误重排", error["message"])
+
+    def test_just_requeued_human_task_can_be_resolved_before_new_claim(self) -> None:
+        self.add_task("REQUEUED-RESOLVE", "project-1")
+        self.claim("exec-requeued-resolve")
+        self.run_ctl(
+            "finish",
+            "exec-requeued-resolve",
+            "REQUEUED-RESOLVE",
+            input_text=json.dumps(
+                {
+                    "status": "WAITING_HUMAN",
+                    "summary": "build complete",
+                    "verification": ["artifact verified"],
+                    "question": "is endpoint approved?",
+                }
+            ),
+        )
+        self.run_ctl("requeue", "REQUEUED-RESOLVE", "--reason", "answer supplied")
+        result = self.run_ctl(
+            "resolve-human",
+            "REQUEUED-RESOLVE",
+            "--response",
+            "endpoint approved",
+            "--summary",
+            "Production build completed and configuration was approved.",
+        )
+        self.assertEqual(result["status"], "SUCCEEDED")
+        database = connect(self.db_path)
+        task = database.execute(
+            "SELECT status, attempt, result_summary FROM tasks WHERE id='REQUEUED-RESOLVE'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(task), (
+            "SUCCEEDED", 1, "Production build completed and configuration was approved."
+        ))
+
     def test_archive_and_unarchive_are_idempotent_and_preserve_task_data(self) -> None:
         for status in sorted(ARCHIVABLE_STATUSES):
             task_id = f"ARCHIVE-{status}"

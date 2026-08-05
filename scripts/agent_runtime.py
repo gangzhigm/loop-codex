@@ -14,7 +14,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 sys.dont_write_bytecode = True
 
@@ -54,6 +54,98 @@ def safe_subprocess_environment() -> dict[str, str]:
 
 class AgentRuntimeError(RuntimeError):
     pass
+
+
+DIAGNOSTIC_CATEGORIES = frozenset({
+    "authentication",
+    "connection",
+    "empty_or_malformed_response",
+    "invalid_final_json",
+    "invalid_tool_call",
+    "local_protocol",
+    "rate_limited",
+    "request_invalid",
+    "request_timeout",
+    "server_error",
+    "truncated_response",
+    "unsupported_finish_reason",
+})
+TRANSIENT_DIAGNOSTIC_CATEGORIES = frozenset({
+    "connection",
+    "rate_limited",
+    "request_timeout",
+    "server_error",
+})
+
+
+@dataclass(frozen=True)
+class ProviderDiagnostic:
+    """Fixed-shape, public metadata for a provider failure."""
+
+    category: str
+    retryable: bool = False
+    retry_exhausted: bool = False
+    http_status: int | None = None
+    finish_reason: str | None = None
+    agent_attempt: int | None = None
+    model_step: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.category not in DIAGNOSTIC_CATEGORIES:
+            raise ValueError("provider diagnostic category is not allowed")
+        if self.retryable and self.category not in TRANSIENT_DIAGNOSTIC_CATEGORIES:
+            raise ValueError("only transient provider diagnostics may be retryable")
+        if self.retry_exhausted and not self.retryable:
+            raise ValueError("retry exhaustion requires a retryable diagnostic")
+        if self.http_status is not None and not 100 <= self.http_status <= 599:
+            raise ValueError("provider diagnostic HTTP status is invalid")
+        if self.finish_reason is not None and self.finish_reason not in {
+            "length", "content_filter", "insufficient_system_resource", "stop", "tool_calls",
+        }:
+            raise ValueError("provider diagnostic finish reason is not allowed")
+        if self.agent_attempt is not None and self.agent_attempt < 1:
+            raise ValueError("provider diagnostic attempt is invalid")
+        if self.model_step is not None and self.model_step < 1:
+            raise ValueError("provider diagnostic model step is invalid")
+
+    def with_context(self, *, agent_attempt: int | None = None, model_step: int | None = None) -> "ProviderDiagnostic":
+        return ProviderDiagnostic(
+            category=self.category,
+            retryable=self.retryable,
+            retry_exhausted=self.retry_exhausted,
+            http_status=self.http_status,
+            finish_reason=self.finish_reason,
+            agent_attempt=agent_attempt if agent_attempt is not None else self.agent_attempt,
+            model_step=model_step if model_step is not None else self.model_step,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "category": self.category,
+            "http_status": self.http_status,
+            "retryable": self.retryable,
+            "retry_exhausted": self.retry_exhausted,
+            "finish_reason": self.finish_reason,
+            "agent_attempt": self.agent_attempt,
+            "model_step": self.model_step,
+        }
+
+    def public_text(self) -> str:
+        fields = [f"category={self.category}"]
+        for key, value in self.as_dict().items():
+            if key != "category" and value is not None:
+                fields.append(f"{key}={str(value).lower() if isinstance(value, bool) else value}")
+        return "provider diagnostic: " + ", ".join(fields)
+
+
+class TrustedDiagnosticError(AgentRuntimeError):
+    """An error whose public details are limited to ProviderDiagnostic."""
+
+    def __init__(self, diagnostic: ProviderDiagnostic, *, requires_human: bool = False) -> None:
+        self.diagnostic = diagnostic
+        self.retryable_request = diagnostic.retryable and not diagnostic.retry_exhausted
+        self.requires_human = requires_human
+        super().__init__(diagnostic.public_text())
 
 
 class ToolRejected(AgentRuntimeError):
@@ -799,6 +891,7 @@ class SingleTaskAgent:
                 "agent_attempt_started", attempt=attempt, maximum_attempts=maximum_attempts,
                 capability_level=execution_profile.capability_level,
             )
+            attempt_error: Exception | None = None
             try:
                 last_result = self._model_loop(
                     context,
@@ -811,22 +904,36 @@ class SingleTaskAgent:
             except OwnedWorkStillRunning:
                 raise
             except Exception as error:
+                attempt_error = error
                 guard.ensure_healthy()
+                diagnostic = self._trusted_diagnostic(error, agent_attempt=attempt)
                 if getattr(error, "requires_human", False):
                     return self._waiting(
                         "Provider 配置、权限或凭据需要人工处理。",
                         self._public_error(error),
+                        diagnostic,
                     )
-                self.logger.event("agent_attempt_failed", attempt=attempt, error=type(error).__name__)
-                last_result = self._failed(self._public_error(error))
+                event_fields: dict[str, Any] = {"attempt": attempt, "error": type(error).__name__}
+                if diagnostic is not None:
+                    event_fields.update(diagnostic.as_dict())
+                self.logger.event("agent_attempt_failed", **event_fields)
+                last_result = self._failed(self._public_error(error), diagnostic)
             if last_result.get("status") != "FAILED":
                 return last_result
-            retryable = sandbox.side_effect_count == 0
+            transient_failure = self._is_retryable_attempt_failure(attempt_error)
+            retryable = transient_failure and sandbox.side_effect_count == 0
             if not retryable or attempt >= maximum_attempts:
-                if not retryable and attempt < maximum_attempts:
+                if transient_failure and sandbox.side_effect_count and attempt < maximum_attempts:
                     last_result = self._failed(
                         str(last_result.get("error") or "agent attempt failed")
                         + "; execution retry suppressed after a local side effect"
+                    )
+                elif attempt_error is not None and attempt < maximum_attempts:
+                    self.logger.event(
+                        "agent_attempt_not_retried",
+                        attempt=attempt,
+                        error=type(attempt_error).__name__,
+                        reason="deterministic_or_unclassified_failure",
                     )
                 return last_result
             guard.ensure_healthy()
@@ -929,11 +1036,13 @@ class SingleTaskAgent:
             try:
                 raw = self._call_provider(request, deadline)
             except Exception as error:
-                if isinstance(error, ModelRequestTimeout) or getattr(error, "retryable_request", False):
-                    self._remaining_attempt_seconds(deadline)
-                    guard.ensure_healthy()
-                    self.logger.event("model_request_retryable_failure", step=step, error=type(error).__name__)
-                    continue
+                diagnostic = self._trusted_diagnostic(error, model_step=step)
+                if isinstance(error, TrustedDiagnosticError) and diagnostic is not None:
+                    error.diagnostic = diagnostic
+                event_fields: dict[str, Any] = {"step": step, "error": type(error).__name__}
+                if diagnostic is not None:
+                    event_fields.update(diagnostic.as_dict())
+                self.logger.event("model_request_failed", **event_fields)
                 raise
             response = validate_model_response(raw)
             self.logger.event("model_response", step=step, type=response["type"])
@@ -996,21 +1105,52 @@ class SingleTaskAgent:
         return remaining
 
     @staticmethod
-    def _failed(error: str) -> dict[str, Any]:
-        return {"status": "FAILED", "summary": "自建 Agent 本轮执行失败。", "error": error[:4000]}
+    def _failed(error: str, diagnostic: ProviderDiagnostic | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "status": "FAILED", "summary": "自建 Agent 本轮执行失败。", "error": error[:4000],
+        }
+        if diagnostic is not None:
+            result["diagnostic"] = diagnostic.as_dict()
+        return result
 
     @staticmethod
-    def _waiting(summary: str, question: str) -> dict[str, Any]:
-        return {
+    def _waiting(
+        summary: str, question: str, diagnostic: ProviderDiagnostic | None = None
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "status": "WAITING_HUMAN",
             "summary": summary[:4000],
             "question": question[:4000],
             "options": ["批准后重新排队", "保持等待"],
             "next_step": "等待人工决定后重新排队。",
         }
+        if diagnostic is not None:
+            result["diagnostic"] = diagnostic.as_dict()
+        return result
+
+    @staticmethod
+    def _trusted_diagnostic(
+        error: Exception, *, agent_attempt: int | None = None, model_step: int | None = None
+    ) -> ProviderDiagnostic | None:
+        if isinstance(error, TrustedDiagnosticError):
+            return error.diagnostic.with_context(
+                agent_attempt=agent_attempt, model_step=model_step
+            )
+        return None
+
+    @staticmethod
+    def _is_retryable_attempt_failure(error: Exception | None) -> bool:
+        if isinstance(error, (AgentAttemptTimeout, ModelRequestTimeout)):
+            return True
+        if isinstance(error, TrustedDiagnosticError):
+            diagnostic = error.diagnostic
+            return diagnostic.retryable and diagnostic.retry_exhausted
+        return False
 
     @staticmethod
     def _public_error(error: Exception) -> str:
+        if isinstance(error, TrustedDiagnosticError):
+            return error.diagnostic.public_text()
         if isinstance(error, AgentRuntimeError):
             return str(error)[:1000]
         return f"runtime error: {type(error).__name__}"

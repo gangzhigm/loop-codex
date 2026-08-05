@@ -1039,6 +1039,89 @@ def command_confirm(args: argparse.Namespace) -> None:
         database.close()
 
 
+def command_resolve_human(args: argparse.Namespace) -> None:
+    response = str(args.response or "").strip()
+    if not response:
+        raise LoopError("人工答复不能为空")
+    database = connect(args.db)
+    try:
+        transaction(database)
+        task = database.execute("SELECT * FROM tasks WHERE id=?", (args.task_id,)).fetchone()
+        if not task:
+            raise LoopError("任务不存在")
+        require_expected_row_version(args, task["row_version"])
+        if task["archived_at"] is not None:
+            raise LoopError("已归档任务必须先取消归档")
+        if task["status"] not in {"WAITING_HUMAN", "PENDING"}:
+            raise LoopError("只有等待人工的任务可以由人工答复直接完成")
+        if database.execute(
+            "SELECT 1 FROM executions WHERE task_id=? AND status='RUNNING'", (args.task_id,)
+        ).fetchone():
+            raise LoopError("任务存在活动 execution，不能由人工答复直接完成")
+        if database.execute(
+            "SELECT 1 FROM scope_locks WHERE task_id=?", (args.task_id,)
+        ).fetchone():
+            raise LoopError("任务仍持有 scope 锁，不能由人工答复直接完成")
+
+        if task["status"] == "PENDING":
+            latest_history = database.execute(
+                "SELECT from_status, to_status FROM task_history WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                (args.task_id,),
+            ).fetchone()
+            if not latest_history or tuple(latest_history) != ("WAITING_HUMAN", "PENDING"):
+                raise LoopError("PENDING 任务仅可在刚从 WAITING_HUMAN 误重排且尚未再次领取时直接完成")
+            if not str(args.summary or "").strip():
+                raise LoopError("已重新排队的任务直接完成时必须提供 summary")
+        elif not task["human_required"]:
+            raise LoopError("任务没有待解决的人工问题")
+
+        verification_count = database.execute(
+            "SELECT count(*) FROM task_verifications WHERE task_id=?", (args.task_id,)
+        ).fetchone()[0]
+        if verification_count < 1:
+            raise LoopError("缺少 Worker 验证记录，不能仅凭人工答复直接完成")
+
+        summary = str(args.summary or task["progress_summary"] or "").strip()
+        if not summary:
+            raise LoopError("完成摘要不能为空")
+        stamp = now_shanghai()
+        previous_status = task["status"]
+        database.execute(
+            """
+            UPDATE tasks SET status='SUCCEEDED', updated_at=?, completed_at=?,
+              progress_percent=100, progress_summary=?, progress_next_step=NULL,
+              result_summary=?, result_error=NULL, human_required=0,
+              human_responded_at=?, human_response=?, row_version=row_version+1
+            WHERE id=?
+            """,
+            (stamp, stamp, summary, summary, stamp, response, args.task_id),
+        )
+        reason = args.reason or f"人工答复已解决最后阻塞项：{response}"
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES(?, ?, ?, 'SUCCEEDED', 'human-resolution', ?)",
+            (args.task_id, stamp, previous_status, reason),
+        )
+        requeued = requeue_resolved_conflicts(database)
+        revision = bump_revision(database, "human-resolution")
+        commit(database)
+        output(
+            {
+                "outcome": "HUMAN_RESOLVED",
+                "task_id": args.task_id,
+                "status": "SUCCEEDED",
+                "row_version": task["row_version"] + 1,
+                "requeued_conflicts": requeued,
+                "revision": revision,
+            }
+        )
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
 def command_archive(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
@@ -1428,6 +1511,13 @@ def parser() -> argparse.ArgumentParser:
     confirm.add_argument("--reason")
     confirm.add_argument("--expected-row-version", type=int)
     confirm.set_defaults(handler=command_confirm)
+    resolve_human = commands.add_parser("resolve-human")
+    resolve_human.add_argument("task_id")
+    resolve_human.add_argument("--response", required=True)
+    resolve_human.add_argument("--summary")
+    resolve_human.add_argument("--reason")
+    resolve_human.add_argument("--expected-row-version", type=int)
+    resolve_human.set_defaults(handler=command_resolve_human)
     archive = commands.add_parser("archive")
     archive.add_argument("task_id")
     archive.add_argument("--reason")

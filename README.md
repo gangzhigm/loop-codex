@@ -44,9 +44,10 @@ py -3 .\scripts\loopctl.py confirm TASK-ID --reason "人工复核通过"
 py -3 .\scripts\loopctl.py archive TASK-ID --reason "终态任务不再参与当前视图"
 py -3 .\scripts\loopctl.py unarchive TASK-ID --reason "重新放回当前视图"
 py -3 .\scripts\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action requeue
+py -3 .\scripts\loopctl.py resolve-human TASK-ID --response "人工确认内容"
 ```
 
-`cancel` 保留历史，不物理删除任务。`requeue` 可重新排队草稿、等待、失败或成功任务；`confirm` 只接受 `SUCCEEDED`，形成 `SUCCEEDED -> CONFIRMED` 的人工复核链路。归档是独立的 nullable `archived_at` 属性，`archive/unarchive` 不改变状态、结果或尝试次数，且重复执行不会重复写历史。已归档任务需要先取消归档，才能修改、取消或重新排队。
+`cancel` 保留历史，不物理删除任务。`requeue` 可重新排队草稿、等待、失败或成功任务；当 Worker 已完成全部实现和验证、`WAITING_HUMAN` 只缺最后一个人工事实时，`resolve-human` 要求非空 Worker verification、无活动 execution 和明确人工答复，可直接形成 `WAITING_HUMAN -> SUCCEEDED`，避免无意义重跑。刚被误重排但尚未再次领取的任务也可受控纠正，并必须显式提供完成摘要。`confirm` 只接受 `SUCCEEDED`，形成 `SUCCEEDED -> CONFIRMED` 的人工复核链路。归档是独立的 nullable `archived_at` 属性，`archive/unarchive` 不改变状态、结果或尝试次数，且重复执行不会重复写历史。已归档任务需要先取消归档，才能修改、取消或重新排队。
 
 Dashboard 的“已结束”分段为未归档终态任务提供归档按钮；`WAITING_HUMAN` 隔离任务的详情提供重新排队、标记失败和继续等待入口。本地 `POST /api/task-action` 只接受固定的 `archive/recover` 结构并以固定参数调用 `loopctl.py`。归档与恢复都使用乐观 `row_version`；恢复还校验 execution ID、`STALLED/TIMED_OUT` 与 `QUARANTINED`，并要求明确确认旧 Codex 会话结束。
 
@@ -109,6 +110,12 @@ py -3 .\scripts\agent_runtime.py `
 ```
 
 Provider 工厂必须接受 `config` 与 `secret_store` 关键字参数，返回实现 `complete(request, timeout_seconds)` 的对象，并把任何模型 API 响应转换为协议版本 `1.0` 的 `tool_calls` 或 `final` 对象。Runtime 创建统一 SecretStore 并注入 Provider；Provider 不得另建密钥存储或直接读取持久化凭据。`scripts/deepseek_provider.py` 提供 DeepSeek Chat Completions 适配器，采用标准库 HTTP、非流式响应、限次退避重试和本地工具参数校验；模型调用本身不执行工具，重试只发生在工具结果尚未返回运行时之前。
+
+DeepSeek Provider 的公开失败诊断是允许列表式结构：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。类别仅包括鉴权、限流、服务端、连接、请求超时、空或畸形响应、截断响应、无效工具调用、无效最终 JSON、本地协议和未知结束原因。401/403 和本地配置/批准问题进入 `WAITING_HUMAN`；429、5xx、连接或请求超时会受 Provider 配置约束重试，并在耗尽后标记 `retry_exhausted=true`。Runtime 只接受该受信任诊断契约；未知异常只公开固定前缀和异常类型。诊断、事件和最终结果绝不包含 API key、Authorization、请求或响应正文、完整提示词、工具参数值、业务文件内容或隐藏推理。
+
+两个 `max_retries` 属于不同边界：`deepseek.max_retries=2` 表示每个模型步骤首次 HTTP 请求失败后最多再请求 2 次；`execution_profiles.self_hosted_agent.providers.deepseek.capabilities.<level>.max_retries=2` 表示一次完整 Agent attempt 失败后最多再启动 2 个干净 attempt。只有 Provider 请求预算已耗尽的瞬态类别，或明确的请求/attempt 超时，才能在没有本地副作用时进入后一层；400、无效工具调用、无效 final JSON、截断、`max_steps` 和未知错误不重启完整工具循环。持续 5xx 的最坏边界因此是每个 attempt 3 次请求、最多 3 个 attempt，共 9 次请求。日志分别使用 `provider_request_retry`、`provider_request_retries_exhausted` 和 `agent_attempt_retry`，不会把两层重试混为一谈。
+
+Runtime 在每轮工具调用后保留对应的 assistant `tool_calls`，Provider 再把每个 runtime `tool_result` 映射为带匹配 `tool_call_id` 的 `tool` 消息；重复只读调用继续追加成有序消息链。最终轮要求 JSON object，并由 Runtime 按协议 1.0 的 `SUCCEEDED/FAILED/WAITING_HUMAN` 契约再次校验。`max_steps` 计算模型轮次，不计算 Provider 内部 HTTP 重试。现有安全诊断与本地假 HTTP 服务可以确认这些控制流和分类，但没有保存此前两次真实失败的原始 Provider 响应形态，因此无法确认它们分别属于哪个具体类别；本轮未读取真实凭据，也未调用真实 Provider。
 
 DeepSeek 的非敏感端点、模型、超时、重试和 `secret_ref` 位于 `config/initialization.json`。密钥由统一 SecretStore 按引用读取；缺失、账户不符、权限不足或后端不可用会快速失败且不打印其值。先用隐藏输入初始化并查看不含原值或掩码的状态：
 

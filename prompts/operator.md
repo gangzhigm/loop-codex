@@ -95,7 +95,7 @@
 - `PENDING`：定义完整，等待 Worker 领取。
 - `RUNNING`：Worker 正在执行，Operator 不修改任务定义。
 - `WAITING_CONFLICT`：由 scope 锁管理，Operator 通常不手工干预。
-- `WAITING_HUMAN`：任务执行过程中等待人工答复；答复解决最后阻塞项后同步重新排队。
+- `WAITING_HUMAN`：任务执行过程中等待人工答复。若答复本身解决最后阻塞项、没有剩余实现或验证工作、任务已有非空 Worker verification 且不存在活动 execution，使用 `loopctl.py resolve-human <task-id> --response <答复>` 直接转为 `SUCCEEDED`；若答复会改变实现、仍需补充验证或没有充分 Worker 证据，才重新排队。
 - `SUCCEEDED`：Worker 已完成，等待人工复核；人工要求返工时可重新排队。
 - `CONFIRMED`：人工复核通过；它不是归档状态，除非用户明确要求，不重新打开。
 - `FAILED`：可按人工决定修改后重新排队。
@@ -112,7 +112,7 @@
 ## 归档规则
 
 - 归档是独立属性：`archived_at == null` 表示未归档，非空表示已归档；归档不得改变任务 `status`。
-- “标记已完成”对应 `SUCCEEDED`，不是 `CONFIRMED`，也不是归档；Operator 不得冒充 Worker 写入完成结果。
+- “标记已完成”对应 `SUCCEEDED`，不是 `CONFIRMED`，也不是归档。Operator 不得无证据冒充 Worker 写入完成结果；但 Worker 已提交验证、只等待一个最终人工事实时，可用受控的 `resolve-human` 合并既有 Worker 证据与人工答复，不需要重复执行任务。
 - “人工复核通过”对应 `CONFIRMED`；只有 `SUCCEEDED` 可以通过 `confirm` 转为 `CONFIRMED`。
 - 只允许归档 `CONFIRMED`、`CANCELLED` 和 `FAILED` 终态任务；活动任务不得归档。
 - 归档或取消归档必须使用 `loopctl.py archive/unarchive`，保留原状态并写入 actor、时间和 reason，不得绕过状态机。

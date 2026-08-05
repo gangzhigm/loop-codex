@@ -2,11 +2,94 @@
   "component": "dashboard-server",
   "status": "HEALTHY",
   "pid": 14228,
-  "checked_at": "2026-08-05T15:08:34.585+08:00",
-  "last_checked_at": "2026-08-05T15:08:34.585+08:00",
+  "checked_at": "2026-08-05T17:38:34.455+08:00",
+  "last_checked_at": "2026-08-05T17:38:34.455+08:00",
   "consecutive_failures": 0,
   "message": "Dashboard Server 正常。",
   "events": [
+    {
+      "at": "2026-08-05T17:38:34.455+08:00",
+      "component": "dashboard-server",
+      "status": "HEALTHY",
+      "message": "Dashboard Server 正常。",
+      "details": {
+        "pid": 14228,
+        "failures": 0
+      }
+    },
+    {
+      "at": "2026-08-05T17:08:34.628+08:00",
+      "component": "dashboard-server",
+      "status": "HEALTHY",
+      "message": "Dashboard Server 正常。",
+      "details": {
+        "pid": 14228,
+        "failures": 0
+      }
+    },
+    {
+      "at": "2026-08-05T16:38:34.506+08:00",
+      "component": "dashboard-server",
+      "status": "HEALTHY",
+      "message": "Dashboard Server 正常。",
+      "details": {
+        "pid": 14228,
+        "failures": 0
+      }
+    },
+    {
+      "at": "2026-08-05T16:08:34.291+08:00",
+      "component": "dashboard-server",
+      "status": "HEALTHY",
+      "message": "Dashboard Server 正常。",
+      "details": {
+        "pid": 14228,
+        "failures": 0
+      }
+    },
+    {
+      "at": "2026-08-05T15:38:34.593+08:00",
+      "component": "dashboard-server",
+      "status": "HEALTHY",
+      "message": "Dashboard Server 正常。",
+      "details": {
+        "pid": 14228,
+        "failures": 0
+      }
+    },
+    {
+      "at": "2026-08-05T15:21:29.772+08:00",
+      "component": "provider-secret",
+      "status": "VALID",
+      "message": "Provider Secret 状态已更新。",
+      "details": {
+        "provider_id": "deepseek",
+        "operation": "verify",
+        "validation_scope": "local"
+      }
+    },
+    {
+      "at": "2026-08-05T15:21:29.089+08:00",
+      "component": "provider-secret",
+      "status": "VALID",
+      "message": "Provider Secret 状态已更新。",
+      "details": {
+        "provider_id": "deepseek",
+        "operation": "verify",
+        "validation_scope": "connection"
+      }
+    },
+    {
+      "at": "2026-08-05T15:21:20.885+08:00",
+      "component": "provider-secret",
+      "status": "VALID",
+      "message": "Provider Secret 状态已更新。",
+      "details": {
+        "provider_id": "deepseek",
+        "operation": "set",
+        "validation_scope": "connection"
+      }
+    },
     {
       "at": "2026-08-05T15:08:34.585+08:00",
       "component": "dashboard-server",
@@ -924,86 +1007,6 @@
       "message": "Dashboard Server 正常。",
       "details": {
         "pid": 22104,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T17:38:39.709+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 22104,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T17:08:38.488+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 22104,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T16:38:37.208+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 22104,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T16:08:35.591+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 8460,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T15:38:43.434+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 8460,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T15:08:54.256+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 8460,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T14:38:54.956+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 8460,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-03T14:08:39.012+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 8460,
         "failures": 0
       }
     }

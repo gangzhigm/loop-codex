@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
@@ -19,6 +20,8 @@ from agent_runtime import (
     ScopePolicy,
     SingleTaskAgent,
     SubprocessLoopController,
+    ProviderDiagnostic,
+    TrustedDiagnosticError,
     ToolRejected,
     ToolSandbox,
     validate_final_result,
@@ -117,13 +120,18 @@ class AgentRuntimeTests(unittest.TestCase):
         return task
 
     def test_repository_config_defines_bounded_runtime_settings(self) -> None:
-        settings = RuntimeSettings.from_config(load_initialization_config())
+        config = load_initialization_config()
+        settings = RuntimeSettings.from_config(config)
         self.assertEqual(settings.max_steps, 24)
         self.assertEqual(settings.model_timeout_seconds, 120)
         self.assertEqual(settings.tool_timeout_seconds, 120)
         self.assertEqual(settings.max_file_bytes, 524_288)
         self.assertEqual(settings.max_tool_output_chars, 50_000)
         self.assertEqual(settings.provider_termination_grace_seconds, 5)
+        profile = agent_runtime.ExecutionProfile.resolve(
+            config, "self_hosted_agent", "deepseek", "L2"
+        )
+        self.assertEqual(profile.max_retries, 2)
 
     def test_provider_factory_receives_shared_config_and_secret_store(self) -> None:
         module = types.ModuleType("test_injected_provider")
@@ -240,7 +248,8 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn("git_commit", result["result"]["question"])
         self.assertEqual(controller.finishes[0][2]["status"], "WAITING_HUMAN")
 
-    def test_provider_request_timeout_can_continue_inside_same_attempt(self) -> None:
+    def test_provider_request_timeout_restarts_one_clean_agent_attempt(self) -> None:
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 1
         provider = ScriptedProvider([TimeoutError("provider timeout"), success_result("continued")])
         result, controller = self.run_agent(provider)
         self.assertEqual(result["result"]["status"], "SUCCEEDED")
@@ -249,23 +258,77 @@ class AgentRuntimeTests(unittest.TestCase):
 
     def test_full_attempt_retry_succeeds_once_and_exhausts_deterministically(self) -> None:
         self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 1
-        provider = ScriptedProvider([RuntimeError("transient"), success_result("second attempt")])
+        transient = ProviderDiagnostic(
+            "server_error", http_status=503, retryable=True, retry_exhausted=True
+        )
+        provider = ScriptedProvider([TrustedDiagnosticError(transient), success_result("second attempt")])
         result, controller = self.run_agent(provider)
         self.assertEqual(result["result"]["status"], "SUCCEEDED")
         self.assertEqual(len(provider.requests), 2)
         self.assertEqual(len(controller.claims), 1)
         self.assertEqual(len(controller.finishes), 1)
 
-        provider = ScriptedProvider([RuntimeError("first"), RuntimeError("second")])
+        provider = ScriptedProvider([
+            TrustedDiagnosticError(transient), TrustedDiagnosticError(transient)
+        ])
         result, _ = self.run_agent(provider)
         self.assertEqual(result["result"]["status"], "FAILED")
         self.assertEqual(len(provider.requests), 2)
+
+    def test_trusted_provider_diagnostic_adds_attempt_step_without_private_text(self) -> None:
+        private = "private-provider-response-body"
+        diagnostic = ProviderDiagnostic(
+            "server_error", http_status=503, retryable=True, retry_exhausted=True
+        )
+        log_stream = io.StringIO()
+        provider = ScriptedProvider([TrustedDiagnosticError(diagnostic)])
+        controller = FakeController({"outcome": "CLAIMED", "task": self.task()})
+        agent = SingleTaskAgent(
+            provider, controller, self.workspace, self.settings,
+            logger=SafeLogger(log_stream), config=self.config,
+        )
+        result = agent.run("trusted-diagnostic", "self_hosted_agent", "L2", "deepseek")
+        failed = result["result"]
+        self.assertEqual(failed["status"], "FAILED")
+        self.assertEqual(failed["diagnostic"], {
+            "category": "server_error", "http_status": 503, "retryable": True,
+            "retry_exhausted": True, "finish_reason": None, "agent_attempt": 1,
+            "model_step": 1,
+        })
+        self.assertIn("category=server_error", failed["error"])
+        self.assertNotIn(private, json.dumps({"result": failed, "log": log_stream.getvalue()}))
+
+    def test_unknown_provider_exception_keeps_only_the_exception_type(self) -> None:
+        private = "private-upstream-request-body"
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 2
+        provider = ScriptedProvider([RuntimeError(private), success_result("must not retry")])
+        result, _ = self.run_agent(provider)
+        failed = result["result"]
+        self.assertEqual(failed["status"], "FAILED")
+        self.assertEqual(failed["error"], "runtime error: RuntimeError")
+        self.assertNotIn("diagnostic", failed)
+        self.assertNotIn(private, json.dumps(failed))
+        self.assertEqual(len(provider.requests), 1)
+
+    def test_trusted_authentication_diagnostic_becomes_waiting_human(self) -> None:
+        provider = ScriptedProvider([
+            TrustedDiagnosticError(ProviderDiagnostic("authentication", http_status=401), requires_human=True)
+        ])
+        result, controller = self.run_agent(provider)
+        waiting = result["result"]
+        self.assertEqual(waiting["status"], "WAITING_HUMAN")
+        self.assertEqual(waiting["diagnostic"]["category"], "authentication")
+        self.assertEqual(waiting["diagnostic"]["agent_attempt"], 1)
+        self.assertEqual(waiting["diagnostic"]["model_step"], 1)
+        self.assertEqual(controller.finishes[0][2]["status"], "WAITING_HUMAN")
 
     def test_local_side_effect_suppresses_complete_attempt_retry(self) -> None:
         self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 1
         provider = ScriptedProvider([
             tool_call("apply_patch", {"path": "project/file.txt", "old": "before", "new": "after"}),
-            RuntimeError("failed after edit"),
+            TrustedDiagnosticError(ProviderDiagnostic(
+                "connection", retryable=True, retry_exhausted=True
+            )),
             success_result("must not run"),
         ])
         result, _ = self.run_agent(provider)
@@ -326,19 +389,55 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(controller.finishes[0][2]["status"], "FAILED")
 
     def test_invalid_final_result_becomes_failed(self) -> None:
-        provider = ScriptedProvider([{"type": "final", "result": {"status": "SUCCEEDED", "summary": "no proof"}}])
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 2
+        provider = ScriptedProvider([
+            {"type": "final", "result": {"status": "SUCCEEDED", "summary": "no proof"}},
+            success_result("must not retry"),
+        ])
         result, _ = self.run_agent(provider)
         self.assertEqual(result["result"]["status"], "FAILED")
         self.assertIn("verification", result["result"]["error"])
+        self.assertEqual(len(provider.requests), 1)
+
+    def test_invalid_tool_arguments_do_not_restart_agent_attempt(self) -> None:
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 2
+        provider = ScriptedProvider([
+            tool_call("read_file", {"path": 42}),
+            success_result("must not retry"),
+        ])
+        result, _ = self.run_agent(provider)
+        self.assertEqual(result["result"]["status"], "FAILED")
+        self.assertIn("invalid arguments", result["result"]["error"])
+        self.assertEqual(len(provider.requests), 1)
 
     def test_max_steps_exhaustion_is_failed(self) -> None:
         self.settings = RuntimeSettings(**{**self.settings.__dict__, "max_steps": 2})
+        self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 2
         provider = ScriptedProvider(
             [tool_call("read_file", {"path": "project/file.txt"}, "one"), tool_call("read_file", {"path": "project/file.txt"}, "two")]
         )
         result, _ = self.run_agent(provider)
         self.assertEqual(result["result"]["status"], "FAILED")
         self.assertIn("maximum agent steps", result["result"]["error"])
+        self.assertEqual(len(provider.requests), 2)
+
+    def test_attempt_timeout_is_concrete_bounded_failure(self) -> None:
+        profile = self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]
+        profile.update({"attempt_timeout_seconds": 1, "max_retries": 1})
+        self.settings = RuntimeSettings(**{
+            **self.settings.__dict__, "model_timeout_seconds": 2,
+            "provider_termination_grace_seconds": 0.1,
+        })
+
+        def exceed_attempt(_request: dict[str, Any]) -> dict[str, Any]:
+            time.sleep(1.05)
+            return success_result("too late")
+
+        provider = ScriptedProvider([exceed_attempt, exceed_attempt])
+        result, _ = self.run_agent(provider)
+        self.assertEqual(result["result"]["status"], "FAILED")
+        self.assertIn("agent attempt timed out", result["result"]["error"])
+        self.assertEqual(len(provider.requests), 2)
 
     def test_non_claimed_outcome_stops_without_heartbeat_or_finish(self) -> None:
         provider = ScriptedProvider([])

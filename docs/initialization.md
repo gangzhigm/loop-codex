@@ -142,6 +142,14 @@ py -3 .\scripts\secretctl.py delete deepseek
 
 `environment` 只用于一次性冒烟或受控部署，必须显式把 `secret_management.backend` 改为 `environment`，并在启动 self-hosted Agent 的同一进程环境中注入与 `deepseek.secret_ref` 同名的变量。它不持久化；`secretctl` 拒绝 `set/rotate/delete`，因为子进程无法可靠修改父进程环境。禁止把注入命令写入仓库、日志或任务结果。
 
+### DeepSeek 安全诊断
+
+排查 self-hosted DeepSeek 执行失败时，只使用 Runtime 输出的受信任诊断字段：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。`authentication`（含 401/403）和本地配置/批准问题需要人工处理；`rate_limited`、`server_error`、`connection` 和 `request_timeout` 仅在 Provider 配置允许的次数内重试，耗尽后显示 `retry_exhausted=true`。`empty_or_malformed_response`、`truncated_response`、`invalid_tool_call`、`invalid_final_json`、`local_protocol` 与 `unsupported_finish_reason` 不重试。不要依据异常原文、请求/响应正文、Authorization、工具参数或业务文件内容排查，因为这些值不进入事件、任务结果或 SQLite。
+
+配置中的两个同名字段不能混用：顶层 `deepseek.max_retries=2` 是单个模型步骤的 HTTP 请求重试数，含首次请求时最多调用 3 次；`execution_profiles.self_hosted_agent.providers.deepseek.capabilities.<level>.max_retries=2` 是完整 Agent attempt 的重试数，含首次 attempt 时最多执行 3 个 attempt。完整 attempt 只在瞬态 Provider 请求已耗尽，或明确请求/attempt 超时，且本地副作用计数为 0 时重启。持续瞬态故障的理论上限是 3 x 3 = 9 次 Provider 请求；400、无效工具参数、无效 final JSON、截断、`max_steps` 与未知错误均只执行当前 attempt。日志用 `provider_request_retry`、`provider_request_retries_exhausted` 与 `agent_attempt_retry` 区分两层。
+
+每轮响应为 `tool_calls` 时，Runtime 执行受限工具并追加与调用 ID 匹配的 `tool_results`；下一次 Provider 请求映射为按序的 assistant/tool 消息。重复只读调用允许继续收敛，写入等本地副作用一旦发生则禁止完整 attempt 自动重启。最终响应使用 JSON object 模式，并由 Runtime 校验协议 1.0 终态；`max_steps` 计算模型轮次而不是 HTTP 请求次数。当前本地证据没有包含此前两次真实失败的原始响应形态，只能确认安全分类与重试控制流，不能确认那两次失败的具体根因。
+
 ### Dashboard Secret 管理
 
 `dashboard.secret_api` 只保存非敏感服务边界：
@@ -249,7 +257,7 @@ py -3 .\scripts\agent_runtime.py `
   --provider deepseek_provider:create_provider
 ```
 
-DeepSeek Provider 只接受 `self_hosted_agent/deepseek` 及配置允许的能力等级；401/403、格式错误、空响应或截断会直接失败，429、5xx 和连接错误才会按配置限次退避。正常停止为单次运行结束；人工终止时由心跳/租约回收。回滚时停止 DeepSeek 入口并恢复本次 Provider、配置和文档变更，禁止通过直接写 SQLite 处理运行中的任务。真实 API 调用与任何凭据读取需要任务中的明确 `credential_access` 批准，未批准时只运行本地假服务测试。
+DeepSeek Provider 只接受 `self_hosted_agent/deepseek` 及配置允许的能力等级；401/403、400、格式错误、空响应或截断会直接失败，429、5xx、连接和请求超时才会按 Provider 请求配置限次退避。Provider 请求耗尽后的完整 Agent attempt 是否重试，再由 execution profile、瞬态分类和本地副作用计数共同裁决。正常停止为单次运行结束；人工终止时由心跳/租约回收。回滚时停止 DeepSeek 入口并恢复本次 Provider、配置和文档变更，禁止通过直接写 SQLite 处理运行中的任务。真实 API 调用与任何凭据读取需要任务中的明确 `credential_access` 批准，未批准时只运行本地假服务测试。
 
 自建 Agent 参数来自 `self_hosted_agent`：`max_steps`、模型与工具超时、单文件字节上限和工具输出字符上限。调整后先运行：
 

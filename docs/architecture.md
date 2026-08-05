@@ -45,7 +45,7 @@ stdout 与 stderr 由独立线程持续排空并只保留配置上限内的尾�
 
 `scripts/agent_runtime.py` 是不依赖 Codex 客户端自动化或 Codex CLI 的单次执行入口。它从初始化配置创建一次 SecretStore 并通过 `factory(config=..., secret_store=...)` 注入 Provider；Provider 工厂不接受该契约时启动失败。Provider 只负责将外部模型请求与响应转换为中立协议：请求包含任务上下文、消息、工具 schema 和最终结果 schema；响应只能是 `tool_calls` 或 `final`。Runtime 不识别 DeepSeek 专有字段，负责一次 claim、任务路由复核、适用 `AGENTS.md` 与既有 Git 状态采集、工具执行、定时 heartbeat、结果契约校验和 UTF-8 stdin finish。
 
-模型上下文只使用领取任务的 `id`、`description`、`scope`、`acceptance` 和已满足依赖标记，不传入完整队列状态。日志只记录步骤、工具名和错误类型，不记录模型密钥、Authorization、文件全文、完整提示词或隐藏推理。
+模型上下文只使用领取任务的 `id`、`description`、`scope`、`acceptance` 和已满足依赖标记，不传入完整队列状态。日志只记录步骤、工具名和错误类型，不记录模型密钥、Authorization、文件全文、完整提示词或隐藏推理。Provider 失败只有继承 Runtime 受信任诊断契约时才能进入事件及 `FAILED`/`WAITING_HUMAN` 结果；固定字段为 `category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。未知异常只降级为固定消息与异常类型，绝不透传异常文本。
 
 工具层提供 UTF-8 文本读取、正则搜索、精确文本 patch/新文件创建和受限命令执行。所有路径在解析符号链接后必须位于领取 scope；绝对路径、`..`、`.env*`、`.reasonix`、版本控制元数据、常见密钥及凭据命名默认拒绝。命令不经过 shell，只允许固定形态的 `git status/diff` 和 `rg`，可执行文件必须从工作区外解析，并关闭本地 fsmonitor、外部 diff、textconv、子模块与 ripgrep 配置执行面。解释器、重定向、任意子进程和未知命令默认拒绝。
 
@@ -55,7 +55,9 @@ stdout 与 stderr 由独立线程持续排空并只保留配置上限内的尾�
 
 `scripts/deepseek_provider.py` 将中立协议映射为 DeepSeek 的非流式 Chat Completions 请求，并把 `tool_calls` 或最终 JSON 转回中立响应。仅该 Provider 限制启动参数为 `runtime_environment=self_hosted_agent`、`provider_id=deepseek`，并根据初始化配置拒绝不支持的能力等级；因此 Codex 自动化和 Codex CLI 入口不能借此领取 DeepSeek 任务。密钥仅在已领取任务含有明确 `APPROVED_ACTIONS: credential_access` 时通过注入的 SecretStore 读取，在请求结束后释放本地引用；密钥不会进入命令行、环境快照、工具输出、日志或公开异常链。
 
-适配器只重试 429、500、502、503、504 和连接错误，次数与指数退避上限来自配置；401/403、格式错误、空响应、截断和未知结束原因不重试。因为 Provider 在交还中立工具调用前完成重试，运行时不会因重试重复执行已产生副作用的本地工具。返回的函数名和 JSON 参数仍在运行时按本地 allowlist 与精确参数结构校验，之后才进入 scope、敏感路径和人工批准检查。
+适配器只重试 429、500、502、503、504、连接和请求超时，次数与指数退避上限来自配置；401/403、400、格式错误、空响应、截断和未知结束原因不重试。每个失败被映射为允许列表类别，不会携带上游文本：鉴权、限流、服务端、连接、请求超时、空或畸形响应、截断响应、无效工具调用、无效最终 JSON、本地协议或未知结束原因。`deepseek.max_retries` 只计算同一模型步骤内首次 HTTP 请求之后的额外请求；execution profile 的 `max_retries` 只计算首次完整 Agent attempt 之后的额外 attempt。Provider 请求耗尽后仅瞬态类别可进入后一层，并且任何已发生本地副作用的 attempt 都禁止重启；确定性和无法分类的错误不重启工具循环。Provider 与 Runtime 分别记录 `provider_request_retry`/`provider_request_retries_exhausted` 和 `agent_attempt_retry`。因为 Provider 在交还中立工具调用前完成请求重试，运行时不会因该层重试重复执行本地工具。返回的函数名和 JSON 参数仍在运行时按本地 allowlist 与精确参数结构校验，之后才进入 scope、敏感路径和人工批准检查。诊断字段不包含 API key、Authorization、请求/响应正文、工具参数值、业务文件内容或隐藏推理。
+
+多轮工具消息按 `assistant(tool_calls) -> tool(tool_call_id)` 成对追加；重复只读调用保留各自 ID 与顺序。Provider 要求最终 HTTP 响应为 JSON object，Runtime 再校验协议 1.0 终态；`max_steps` 只计算模型轮次，Provider 内部请求重试不消耗模型轮次。达到 `max_steps`、attempt timeout 或终态契约失败会形成具体且脱敏的 `FAILED/WAITING_HUMAN`，不会降级成裸 `DeepSeekProviderError`。本地假 HTTP 服务已覆盖这些边界；此前两次真实失败没有可用于分类的原始响应证据，不能据此声明某个类别是其根因。
 
 官方资料于 2026-08-03（Asia/Shanghai）核对：
 
