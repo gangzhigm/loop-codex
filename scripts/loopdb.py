@@ -29,7 +29,7 @@ CAPABILITY_LEVELS = ("L1", "L2", "L3", "L4", "L5")
 EXECUTION_POLICIES = ("automatic", "manual")
 CANONICAL_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "self_hosted_agent")
 LEGACY_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "deepseek")
-# Remove these input aliases after production is Schema 3.4.0 and every launcher uses capability arguments.
+# Remove these input aliases after every launcher uses capability arguments and the compatibility window closes.
 RUNTIME_ENVIRONMENTS = CANONICAL_RUNTIME_ENVIRONMENTS + ("deepseek",)
 CLAIM_RUNTIME_ENVIRONMENTS = RUNTIME_ENVIRONMENTS
 LEGACY_PROFILE_TO_CAPABILITY = {

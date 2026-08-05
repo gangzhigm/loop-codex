@@ -351,7 +351,6 @@ class AttachmentImageTests(unittest.TestCase):
             "QUARANTINED",
         )
 
-
 class SecretApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

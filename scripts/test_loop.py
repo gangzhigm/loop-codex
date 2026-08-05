@@ -472,7 +472,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         database.execute("UPDATE scope_locks SET lease_expires_at='2000-01-01T00:00:00+08:00' WHERE execution_id='exec-old'")
         database.close()
         pending = self.claim("exec-blocked", runtime_environment="codex_cli")
-        self.assertEqual(pending["outcome"], "RECOVERY_REQUIRED")
+        self.assertEqual(pending["outcome"], "NO_TASK")
         self.assertEqual(pending["recovery_required"][0]["recovery_confirmation"], "runner_confirmed_terminated")
         recovered = self.run_ctl("recover", "exec-old", "--runner-confirmed-terminated")
         self.assertEqual(recovered["outcome"], "RECOVERED")
