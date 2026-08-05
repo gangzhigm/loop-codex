@@ -5,14 +5,14 @@
 - 根目录：`E:\code`
 - Loop 目录：`E:\code\local-agent-loop`
 - 数据库：`data/loop-agent.sqlite3`
-- Schema：`3.3.0`
+- Schema：`3.5.0`
 - 项目清单：`E:\code\根目录清单.md`
-- Worker：五个普通档位各一条定时自动化，默认每 20 分钟，每轮最多领取一个匹配档位任务
-- 运行环境：`codex_automation`、`codex_cli`、`deepseek`；五条定时自动化固定使用 `codex_automation`
-- 并发：全局上限 6，并同时受各档位上限约束
-- `exceptional`：无定时自动化，仅人工批准后一次性执行
+- Worker：L1 至 L5 各一条 automatic 定时自动化，默认每 20 分钟，每轮最多领取一个完全匹配的任务
+- 运行环境：`codex_automation`、`codex_cli`、`self_hosted_agent`；五条定时自动化固定使用 `codex_automation`
+- 并发：全局上限 8，并同时受各平台上限 5 约束；能力等级不形成并发池
+- 人工执行：仅 `L5/manual`，无定时自动化，须人工批准一次性执行
 - Windows 健康任务：默认每 30 分钟，连续失败阈值 3
-- Dashboard：`127.0.0.1:4178`
+- Dashboard：`127.0.0.1:4178`；Provider Secret API 只允许该本机同源入口
 - 冲突粒度：项目
 - 时区：`Asia/Shanghai`
 - 文本读写：UTF-8
@@ -24,26 +24,25 @@
 
 初始化必须检查五条普通档位 Codex Worker 自动化和一个 Windows 健康任务。Worker 按初始化配置中的模型、思考程度、错峰时间和入口提示创建或更新并启用；健康任务通过 `install_health_task.ps1` 注册或更新。不得创建 Health Codex 自动化或定时 `exceptional` 自动化。
 
-| 档位 | 模型 | 思考程度 | 定时 | 并发上限 |
-|---|---|---|---:|---:|
-| `routine` | `gpt-5.6-luna` | `medium` | 每 20 分钟，偏移 0 分钟 | 2 |
-| `standard` | `gpt-5.6-terra` | `medium` | 每 20 分钟，偏移 2 分钟 | 3 |
-| `advanced` | `gpt-5.6-terra` | `high` | 每 20 分钟，偏移 4 分钟 | 2 |
-| `deep` | `gpt-5.6-terra` | `xhigh` | 每 20 分钟，偏移 6 分钟 | 1 |
-| `complex` | `gpt-5.6-sol` | `high` | 每 20 分钟，偏移 8 分钟 | 1 |
-| `exceptional` | `gpt-5.6-sol` | `xhigh` | 不定时，人工批准后一次性执行 | 1 |
+| 能力 | 兼容档位 | 模型 | 思考程度 | 定时 |
+|---|---|---|---|---:|
+| `L1` | `routine` | `gpt-5.6-luna` | `medium` | 每 20 分钟，偏移 0 分钟 |
+| `L2` | `standard` | `gpt-5.6-terra` | `medium` | 每 20 分钟，偏移 2 分钟 |
+| `L3` | `advanced` | `gpt-5.6-terra` | `high` | 每 20 分钟，偏移 4 分钟 |
+| `L4` | `deep` | `gpt-5.6-sol` | `high` | 每 20 分钟，偏移 6 分钟 |
+| `L5` | `complex` | `gpt-5.6-sol` | `xhigh` | 每 20 分钟，偏移 8 分钟 |
 
-这些上限不能相加理解为总容量；全局最多仍为 6 个活动 execution。
+所有等级共享全局 8 个活动 execution，并分别计入所属平台的 5 个活动 execution 上限。
 
 ## 2. 从旧 JSON 迁移
 
-已有 Schema 3.0.0、3.1.0 或 3.2.0 SQLite 数据库先原位升级：
+已有 Schema 3.0.0 至 3.4.0 SQLite 数据库先原位升级：
 
 ```powershell
 py -3 .\scripts\loopctl.py migrate
 ```
 
-该命令幂等执行 `3.0.0/3.1.0/3.2.0 -> 3.3.0` 迁移。所有现有任务的 `runtime_environment` 回填为 `codex_automation`；3.2.0 的 `execution_profile`、状态、结果、尝试次数、归档属性、行版本、任务子表和 execution 历史全部保留。3.0.0/3.1.0 的档位回填为 `standard`，从 3.0.0 升级时已有 `CONFIRMED` 仍按旧归档语义回填 `archived_at`。升级前必须暂停所有环境的领取入口、确认没有活动 execution 并保留数据库备份。
+该命令幂等迁移到 3.5.0。3.0.0 至 3.3.0 要求先暂停领取并确认没有活动 execution，再完成 L1-L5、规范运行环境和 execution 快照转换。3.4.0 到 3.5.0 可以保留活动 execution：其 `RUNNING` 状态与 ACTIVE scope lock 原样迁移，不会根据时间戳自动创建隔离或释放 scope。迁移后由下一次 `claim` 独立判断 heartbeat stalled、lease expiry 和 attempt timeout。所有路径保留状态、结果、尝试次数、历史、依赖、scope、归档和 row version，并执行外键与 SQLite 完整性检查。
 
 仅在旧 JSON 系统仍存在时运行一次：
 
@@ -78,9 +77,9 @@ node .\scripts\check-dashboard.mjs .\dashboard.html
 所有领取入口都必须显式声明运行环境，缺失或非法参数由 CLI 拒绝，不能通过默认值跨环境领取：
 
 ```powershell
-py -3 .\scripts\loopctl.py claim <automation-execution-id> --runtime-environment codex_automation --profile standard
-py -3 .\scripts\loopctl.py claim <cli-execution-id> --runtime-environment codex_cli --profile standard
-py -3 .\scripts\loopctl.py claim <deepseek-execution-id> --runtime-environment deepseek --profile standard
+py -3 .\scripts\loopctl.py claim <automation-execution-id> --runtime-environment codex_automation --capability-level L2 --execution-policy automatic
+py -3 .\scripts\loopctl.py claim <cli-execution-id> --runtime-environment codex_cli --capability-level L2 --execution-policy automatic
+py -3 .\scripts\loopctl.py claim <agent-execution-id> --runtime-environment self_hosted_agent --provider-id deepseek --capability-level L2 --execution-policy automatic
 ```
 
 PowerShell 示例：
@@ -89,6 +88,16 @@ PowerShell 示例：
 $resultJson = $result | ConvertTo-Json -Depth 8 -Compress
 $resultJson | py -3 E:\code\local-agent-loop\scripts\loopctl.py finish $executionId $taskId -
 ```
+
+`claim` 返回 `CLAIMED` 才能执行业务任务；`NO_TASK`、`SLOT_FULL`、`CONFLICT` 和 `RECOVERY_REQUIRED` 都立即结束本轮。`RECOVERY_REQUIRED` 表示匹配路由的旧 Codex execution 已退出活动容量，但 scope 仍为 `QUARANTINED`。人工确认旧客户端会话已结束后执行：
+
+```powershell
+py -3 .\scripts\loopctl.py recover <execution-id> --human-confirmed-safe --action requeue
+py -3 .\scripts\loopctl.py recover <execution-id> --human-confirmed-safe --action failed
+py -3 .\scripts\loopctl.py recover <execution-id> --human-confirmed-safe --action wait
+```
+
+三个动作分别为释放隔离并重新排队、释放隔离并标记失败、继续等待且保留隔离。命令幂等并记录 actor、Asia/Shanghai 时间与原因；未确认时不得释放。同一入口也可由 Dashboard 安全恢复面板调用。受控 Codex CLI/self-hosted Runner 在确认旧进程树终止后改用 `--runner-confirmed-terminated`。
 
 ### SecretStore 初始化
 
@@ -132,6 +141,38 @@ py -3 .\scripts\secretctl.py delete deepseek
 状态和操作结果只输出 backend、`secret_ref`、状态、是否变化与带 Asia/Shanghai 时区的时间，不输出原值、掩码、后四位或 Authorization。项目和数据库备份不包含系统密钥库内容；系统重装、密钥库丢失或运行账户迁移后，用新账户重新运行 `set`。第一版没有具体外部 Secret Manager 实现，只有稳定 adapter 契约；选择未知 backend 会明确失败。
 
 `environment` 只用于一次性冒烟或受控部署，必须显式把 `secret_management.backend` 改为 `environment`，并在启动 self-hosted Agent 的同一进程环境中注入与 `deepseek.secret_ref` 同名的变量。它不持久化；`secretctl` 拒绝 `set/rotate/delete`，因为子进程无法可靠修改父进程环境。禁止把注入命令写入仓库、日志或任务结果。
+
+### Dashboard Secret 管理
+
+`dashboard.secret_api` 只保存非敏感服务边界：
+
+```json
+{
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 4178,
+    "secret_api": {
+      "enabled": true,
+      "max_body_bytes": 16384,
+      "replay_cache_size": 1024
+    }
+  }
+}
+```
+
+Dashboard Server 有 Secret API 时固定要求 `host=127.0.0.1`；`--host 0.0.0.0`、局域网地址或其他监听值会直接拒绝启动。浏览器设置抽屉只通过同源 `/api/secrets` 发送一次性密码输入，状态响应不包含现有密钥、掩码、后四位、可逆密文或内部 `secret_ref`。Server 校验 Host、Origin、CSRF token、`application/json`、请求体大小、Provider 白名单和一次性请求 ID，并拒绝 CORS 与重复请求。
+
+配置和替换调用与 CLI、Runtime 相同的 SecretStore。替换和删除必须显式确认；连接验证会提前提示可能产生一次 Provider 调用，只有确认后才由 Server 发起，前端不会直接连接 DeepSeek。提交后 password 控件、表单和临时请求变量立即清空，页面不使用 URL、localStorage、sessionStorage、IndexedDB、缓存或任务附件恢复输入。最近验证元数据只作为非敏感事件进入 `runtime/health-state.json`，不进入 SQLite。
+
+Dashboard、后续 Supervisor 与 SecretStore 初始化必须使用同一 `access_account`。账户不一致时只显示存储不可用和切换运行账户的建议，不得要求重新输入并静默复制第二份密钥。当前实现只支持本机同源管理；远程管理必须等待服务器 Secret 后端完成 HTTPS、认证、授权和审计，不能靠修改监听地址、端口转发或反向代理直接开放。
+
+不读取真实凭据的回归验证：
+
+```powershell
+py -3 -B .\scripts\test_dashboard_server.py -v
+py -3 -B .\scripts\test_secret_store.py -v
+node .\scripts\check-dashboard.mjs .\dashboard.html
+```
 
 ### Codex CLI Runner 启停
 
@@ -194,7 +235,7 @@ py -3 .\scripts\agent_runtime.py `
   --provider your_provider_package:create_provider
 ```
 
-`--runtime-environment`、`--provider-id`、`--capability-level`、`--execution-policy automatic`、`--execution-id` 和 `--provider` 都必须显式给出。进程只 claim 一次；`NO_TASK`、`SLOT_FULL`、`CONFLICT` 立即退出，`CLAIMED` 只处理该任务。正常停止由单次执行自然退出；人工中断会尽力以 `FAILED` finish。强制结束导致无法 finish 时，后续任意领取会按现有心跳/租约规则回收 execution。当前不创建 Windows 服务、不保存 PID、不自动重启。
+`--runtime-environment`、`--provider-id`、`--capability-level`、`--execution-policy automatic`、`--execution-id` 和 `--provider` 都必须显式给出。进程只 claim 一次；`NO_TASK`、`SLOT_FULL`、`CONFLICT` 立即退出，`CLAIMED` 只处理该任务。受控进程超时或中断时，Runner 先确认进程树已终止，再通过安全恢复处置 execution；不会把 Codex 客户端的人工确认要求错误扩展到可控平台。当前不创建 Windows 服务、不保存 PID、不自动重启。
 
 DeepSeek Provider 使用 `scripts/deepseek_provider.py`，由 Runtime 注入统一 SecretStore，并仅在已领取任务明确包含 `APPROVED_ACTIONS: credential_access` 后按 `deepseek.secret_ref` 读取密钥。Provider 实例不缓存密钥；配置、日志、SQLite、任务结果、命令行和环境快照均不得保存该值。
 
@@ -233,11 +274,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_health
 ## 5. 初始化顺序
 
 1. 暂停旧 Worker，确认没有活动 execution，备份 `data/loop-agent.sqlite3`。
-2. 使用 `loopctl.py migrate` 迁移数据库到 Schema 3.3.0；现有任务运行环境回填 `codex_automation`，旧 Schema 3.0.0/3.1.0 任务档位回填 `standard`，随后运行数据库与回归测试。
+2. 使用 `loopctl.py migrate` 迁移数据库到 Schema 3.5.0；3.4.0 的活动 execution 与 ACTIVE scope lock 原样保留，不在迁移时推断隔离，随后运行数据库与回归测试。
 3. 运行 `install_health_task.ps1 -StartNow`，检查 Windows 健康任务、`/healthz` 和 `/api/state`。
 4. 读取初始化配置，逐一检查 `routine`、`standard`、`advanced`、`deep`、`complex` 五条 Worker 自动化的 ID、模型、思考程度、20 分钟周期、错峰、`codex_automation` 路由和入口提示。
 5. 删除旧 Health Codex 自动化，确保健康检查只由 Windows 任务计划程序执行。
 6. 对缺失的普通 Worker 创建，对已有 Worker 更新；不得创建定时 `exceptional` 或重复项。
 7. 删除旧单 Worker 自动化，启用五条普通 Worker，并逐一复核状态。
 
-如果数据库一致性、Dashboard 或并发测试失败，Worker 保持暂停。普通 Worker 返回 `NO_TASK` 时只结束当前轮次，不自动暂停；Operator 发布或重新排队任务时只需恢复被人工暂停的对应档位自动化。不得同时维护 JSON 和 SQLite 两套任务真源。
+如果数据库一致性、Dashboard 或并发测试失败，Worker 保持暂停。普通 Worker 返回 `NO_TASK` 或 `RECOVERY_REQUIRED` 时只结束当前轮次，不自动暂停；后者必须先由 Operator 完成人工安全恢复。不得同时维护 JSON 和 SQLite 两套任务真源。

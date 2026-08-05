@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import http.client
 import json
@@ -20,10 +21,11 @@ from dashboard_server import (
     DashboardServer,
     archive_dashboard_task,
     provider_secret_status,
+    recover_dashboard_task,
     resolve_attachment_image,
 )
 from health_run import process_alive
-from loopdb import connect, initialize_schema, insert_task, load_initialization_config, now_shanghai, state_payload
+from loopdb import DEFAULT_DB, connect, initialize_schema, insert_task, load_initialization_config, now_shanghai, state_payload
 from secret_store import SecretStore, SecretStoreCapabilities
 
 
@@ -128,7 +130,7 @@ class AttachmentImageTests(unittest.TestCase):
             for task in payload["tasks"]
         }
 
-        self.assertEqual(payload["schema_version"], "3.4.0")
+        self.assertEqual(payload["schema_version"], "3.5.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
             {"codex_automation": 5, "codex_cli": 5, "self_hosted_agent": 5},
@@ -259,6 +261,95 @@ class AttachmentImageTests(unittest.TestCase):
             with self.subTest(task_id=task_id, action=action, row_version=row_version):
                 with self.assertRaises(DashboardActionError):
                     archive_dashboard_task(self.db_path, task_id, action, row_version)
+
+    def make_recovery(self, task_id: str = "RECOVERY-TASK") -> tuple[str, int]:
+        self.add_task(task_id, f"assets/{task_id}/reference.png")
+        execution_id = f"L5-worker-{task_id.lower()}"
+        stamp = now_shanghai()
+        self.database.execute(
+            "UPDATE tasks SET status='WAITING_HUMAN', capability_level='L5', assigned_agent=?, "
+            "started_at=?, heartbeat_at=?, human_required=1, human_question='确认旧会话', "
+            "human_options_json='[]', human_requested_at=?, row_version=row_version+1 WHERE id=?",
+            (execution_id, stamp, stamp, stamp, task_id),
+        )
+        self.database.execute(
+            """INSERT INTO executions(
+              execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, finished_at,
+              outcome, runtime_environment, provider_id, capability_level, execution_policy, model,
+              reasoning, attempt_timeout_seconds, max_retries, termination_reason, recovery_required
+            ) VALUES(?, ?, 'STALLED', ?, ?, ?, ?, 'RECOVERY_REQUIRED', 'codex_automation', NULL,
+              'L5', 'automatic', 'gpt-5.6-sol', 'xhigh', 14400, 0, 'HEARTBEAT_STALLED', 1)""",
+            (execution_id, task_id, stamp, stamp, stamp, stamp),
+        )
+        scope = self.database.execute(
+            "SELECT scope_key FROM task_scopes WHERE task_id=?", (task_id,)
+        ).fetchone()[0]
+        self.database.execute(
+            """INSERT INTO scope_locks(
+              scope_key, task_id, execution_id, acquired_at, lease_expires_at, status,
+              quarantined_at, quarantine_reason
+            ) VALUES(?, ?, ?, ?, ?, 'QUARANTINED', ?, '心跳停滞')""",
+            (scope, task_id, execution_id, stamp, stamp, stamp),
+        )
+        row_version = self.database.execute(
+            "SELECT row_version FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()[0]
+        return execution_id, row_version
+
+    def test_dashboard_state_exposes_inactive_execution_and_quarantined_scope(self) -> None:
+        execution_id, _ = self.make_recovery()
+
+        payload = state_payload(self.database, load_initialization_config())
+
+        self.assertEqual(payload["agents"], [])
+        self.assertEqual(payload["recoveries"][0]["execution_id"], execution_id)
+        self.assertEqual(payload["recoveries"][0]["execution_status"], "STALLED")
+        self.assertEqual(payload["recoveries"][0]["scope_status"], "QUARANTINED")
+
+    def test_dashboard_recovery_requires_confirmation_and_requeues_transactionally(self) -> None:
+        execution_id, row_version = self.make_recovery()
+        with self.assertRaisesRegex(DashboardActionError, "明确确认"):
+            recover_dashboard_task(
+                self.db_path, "RECOVERY-TASK", execution_id, "requeue", row_version, False
+            )
+
+        result = recover_dashboard_task(
+            self.db_path, "RECOVERY-TASK", execution_id, "requeue", row_version, True
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["task_status"], "PENDING")
+        task = self.database.execute(
+            "SELECT status, assigned_agent FROM tasks WHERE id='RECOVERY-TASK'"
+        ).fetchone()
+        self.assertEqual((task["status"], task["assigned_agent"]), ("PENDING", None))
+        self.assertEqual(
+            self.database.execute(
+                "SELECT count(*) FROM scope_locks WHERE execution_id=?", (execution_id,)
+            ).fetchone()[0],
+            0,
+        )
+
+    def test_dashboard_continue_waiting_is_idempotent_and_keeps_quarantine(self) -> None:
+        execution_id, row_version = self.make_recovery()
+        first = recover_dashboard_task(
+            self.db_path, "RECOVERY-TASK", execution_id, "wait", row_version, True
+        )
+        next_version = self.database.execute(
+            "SELECT row_version FROM tasks WHERE id='RECOVERY-TASK'"
+        ).fetchone()[0]
+        second = recover_dashboard_task(
+            self.db_path, "RECOVERY-TASK", execution_id, "wait", next_version, True
+        )
+
+        self.assertEqual(first["outcome"], "WAITING")
+        self.assertEqual(second["outcome"], "ALREADY_WAITING")
+        self.assertEqual(
+            self.database.execute(
+                "SELECT status FROM scope_locks WHERE execution_id=?", (execution_id,)
+            ).fetchone()[0],
+            "QUARANTINED",
+        )
 
 
 class SecretApiTests(unittest.TestCase):
@@ -455,6 +546,12 @@ class SecretApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 415)
         status, _headers, _payload = self.request(
+            "POST",
+            body=b'{"provider_id":"deepseek"}',
+            headers={"Content-Type": "text/plain"},
+        )
+        self.assertEqual(status, 415)
+        status, _headers, _payload = self.request(
             "POST", body=b"{}" + b"x" * 4096
         )
         self.assertEqual(status, 413)
@@ -504,6 +601,46 @@ class SecretApiTests(unittest.TestCase):
         self.assertEqual(status["status"], "storage_unavailable")
         self.assertIn("不要把密钥静默复制", status["repair"])
 
+    def test_server_rejects_non_loopback_binding_before_opening_a_listener(self) -> None:
+        with self.assertRaisesRegex(ValueError, "127.0.0.1"):
+            DashboardServer(
+                ("0.0.0.0", 0),
+                self.base_dir / "unused.sqlite3",
+                Path(__file__).resolve().parents[1] / "dashboard.html",
+                self.config,
+                secret_store=self.store,
+                health_state_path=self.health_state,
+                provider_verifiers={},
+            )
+
+
+def run_visual_server(port: int) -> None:
+    temporary = tempfile.TemporaryDirectory()
+    config: dict[str, Any] = copy.deepcopy(load_initialization_config())
+    store = SecretStore(MemorySecretBackend(), "Dashboard Visual Tests", current_account="test-account")
+    server = DashboardServer(
+        ("127.0.0.1", port),
+        DEFAULT_DB,
+        Path(__file__).resolve().parents[1] / "dashboard.html",
+        config,
+        secret_store=store,
+        health_state_path=Path(temporary.name) / "health-state.json",
+        provider_verifiers={"deepseek": lambda _candidate: True},
+    )
+    print(f"visual test server listening on http://127.0.0.1:{port}", flush=True)
+    try:
+        server.serve_forever(poll_interval=0.2)
+    finally:
+        server.server_close()
+        temporary.cleanup()
+
 
 if __name__ == "__main__":
-    unittest.main()
+    if "--visual-server" in sys.argv:
+        visual_parser = argparse.ArgumentParser()
+        visual_parser.add_argument("--visual-server", action="store_true")
+        visual_parser.add_argument("--port", type=int, default=4181)
+        visual_args = visual_parser.parse_args()
+        run_visual_server(visual_args.port)
+    else:
+        unittest.main()

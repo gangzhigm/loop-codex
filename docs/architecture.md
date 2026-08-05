@@ -17,11 +17,13 @@ config/initialization.json --backend/service/secret_ref--> SecretStore ---> OS k
                                                                `-------> explicit process environment
 ```
 
-SQLite 只包含任务及其执行一致性表：`tasks`（包括任务所选的 `runtime_environment`、`capability_level`、`provider_id`、`execution_policy` 和独立的 nullable `archived_at`）、7 张任务子表、`executions`、`scope_locks` 和 `task_conflicts`。它不保存密钥、Authorization、可逆密文、密钥片段、运行环境目录及入口配置、模型映射、自动化周期、metadata、settings、projects、change requests、health events 或 service state。旧 `execution_profile` 只在过渡期输入与展示兼容层中推导，不是 Schema 3.4.0 的队列键。
+SQLite 只包含任务及其执行一致性表：`tasks`（包括任务所选的 `runtime_environment`、`capability_level`、`provider_id`、`execution_policy` 和独立的 nullable `archived_at`）、7 张任务子表、`executions`、`scope_locks` 和 `task_conflicts`。Schema 3.5.0 中 execution 可记录 `STALLED/TIMED_OUT`、终止原因和恢复处置，scope lock 独立记录 `ACTIVE/QUARANTINED`。它不保存密钥、Authorization、可逆密文、密钥片段、运行环境目录及入口配置、模型映射、自动化周期、metadata、settings、projects、change requests、health events 或 service state。旧 `execution_profile` 只在过渡期输入与展示兼容层中推导，不是队列键。
 
 ## SecretStore 边界
 
 `scripts/secret_store.py` 是 Dashboard、初始化命令、Supervisor/Runtime 和 Provider 唯一允许使用的密钥访问契约，统一提供 `set/get/status/verify/rotate/delete`。状态与审计结果只包含 backend、`secret_ref`、可用性、是否变化和 Asia/Shanghai 时间，不返回原值、掩码、后四位或可逆材料。`config/initialization.json` 只保存 `secret_management.backend/service/access_account` 与 Provider 的 `secret_ref` 等非敏感引用。
+
+Dashboard 的 `/api/secrets` 是浏览器到 SecretStore 的本机受控层。GET 状态把内部 `secret_ref` 收敛为 provider_id、configured、backend、status、last_validated_at 等公开字段；写操作直接调用同一个 SecretStore，不创建 Loop 任务、不写 SQLite、不转交 Operator/Worker。设置、轮换和验证结果只把 Provider、操作、验证范围、公开状态与 Asia/Shanghai 时间作为事件写入 `runtime/health-state.json`，健康任务会继续保留这些非敏感事件。
 
 `os_keyring` 在 Windows 通过 WinCred API 使用当前登录账户的 Credential Manager；macOS/Linux 使用系统 keyring 适配器，分别要求可用的 Keychain 与 Secret Service 后端。后端缺失、锁定、权限不足或账户与 `access_account` 不符时 fail closed，不会回退到 JSON、SQLite、日志或明文文件。`environment` 只有在配置显式选择时生效，把 `secret_ref` 解释为当前进程变量名；它不持久化，也不能由子进程初始化命令写回父进程。
 
@@ -67,7 +69,11 @@ SecretStore 平台依据于 2026-08-05（Asia/Shanghai）核对，以下官方�
 
 运行环境允许值、显示名称、入口参数、Worker 周期、健康任务周期、租约、并发数、Dashboard 地址和健康阈值只存在于 `config/initialization.json`。项目路由实时读取 `E:\code\根目录清单.md`。健康检查的当前状态和最近事件写入 `runtime/health-state.json`。浏览器不直接读取 SQLite，而是访问本机 HTTP 服务。
 
-Dashboard 的写入面仅包含 `POST /api/task-action` 归档动作。请求必须且只能包含合法任务 ID、`action=archive` 和任务当前 `row_version`；服务端不接受命令、路径或 SQL，而是用固定参数调用 `loopctl.py confirm/archive`。乐观版本校验拒绝旧页面和并发状态变化；`SUCCEEDED` 严格先记录 `SUCCEEDED -> CONFIRMED` 人工确认，再写独立 `archived_at`，其他允许终态保持原状态直接归档。
+Dashboard 的任务写入面是 `POST /api/task-action`。归档请求只接受合法任务 ID、`action=archive` 和当前 `row_version`；恢复请求只接受固定的 task/execution ID、`action=recover`、`recovery_action=requeue|failed|wait`、当前 `row_version` 与明确安全确认。服务端不接受命令、路径或 SQL，而是用固定参数调用 `loopctl.py`。恢复事务再次校验 execution fencing，页面会分开展示任务 `WAITING_HUMAN`、execution `STALLED/TIMED_OUT`、scope `QUARANTINED` 和已释放活动容量。
+
+Secret 写入面是 `POST /api/secrets`，只接受初始化配置中登记的 Provider 和 `set/rotate/verify/delete` 固定动作。Server 强制绑定 `127.0.0.1`，校验精确 Host、同源 Origin、CSRF token、JSON 类型、请求体上限、动作字段和一次性 UUID；拒绝 CORS 预检、跨站表单、DNS rebinding 和重复请求。连接验证及替换/删除需要前端人工确认和服务端确认字；浏览器不直接访问 Provider。密码值只存在于当前请求，输入不预填，提交后清空 DOM 和临时变量，不写 URL、localStorage、sessionStorage、IndexedDB、缓存或附件。Secret 路径日志只记录规范路径、方法与状态码。
+
+这套边界只适用于本机同源管理。任何远程服务器管理都必须等待服务器 Secret 后端提供 HTTPS、认证、授权和审计；修改 Dashboard host、端口映射或反向代理不能替代这些控制，非 `127.0.0.1` 监听会被 Server 拒绝。
 
 ## 并发模型
 
@@ -81,7 +87,7 @@ holding/frontend/src/App.tsx               -> project:holding
 OSS:bucket/path/file.xlsx                  -> external:OSS:bucket/path/file.xlsx
 ```
 
-同一项目任务默认互斥，运行环境不同也不会绕过 scope 锁。`claim` 在当前环境、Provider、能力等级和执行策略内按队列顺序扫描依赖就绪任务；冲突任务保存 blocker 信息并进入 `WAITING_CONFLICT`，随后继续寻找同一执行配置下其他 scope 可执行的任务。只有所有匹配且依赖就绪的候选都冲突时，本轮 Worker 才返回 `CONFLICT`。阻塞 execution 完成或租约过期后，任务自动回到 `PENDING`。
+同一项目任务默认互斥，运行环境不同也不会绕过 scope 锁。`claim` 在当前环境、Provider、能力等级和执行策略内按队列顺序扫描依赖就绪任务；`ACTIVE` 与 `QUARANTINED` 锁都构成冲突，冲突任务保存 blocker 信息并进入 `WAITING_CONFLICT`，随后继续寻找其他 scope。只有所有依赖就绪候选都冲突时返回 `CONFLICT`；没有可运行候选但存在同路由隔离任务时返回最小化的 `RECOVERY_REQUIRED`，而不是 `NO_TASK`。
 
 ## 状态机
 
@@ -92,9 +98,19 @@ DRAFT --人工重排--> PENDING --领取--> RUNNING --> SUCCEEDED --人工复核
                        |                  +-----> WAITING_HUMAN --人工重排--> PENDING
                        +--冲突--> WAITING_CONFLICT --冲突解除--> PENDING
 
-RUNNING --租约过期且仍可重试--> PENDING
-RUNNING --租约过期且达到上限--> FAILED
+RUNNING --受控 Runner 确认终止并选择重试--> PENDING
+RUNNING --受控 Runner 确认终止并选择失败--> FAILED
 非 RUNNING 状态 --人工取消--> CANCELLED
+```
+
+Codex 客户端存活性分支独立于普通业务完成分支：
+
+```text
+task RUNNING + execution RUNNING + scope ACTIVE
+  -- heartbeat stalled 或 lease expiry --> task WAITING_HUMAN + execution STALLED + scope QUARANTINED
+  -- attempt timeout -------------------> task WAITING_HUMAN + execution TIMED_OUT + scope QUARANTINED
+STALLED -- 后续 attempt timeout --------> TIMED_OUT（容量保持释放，scope 继续隔离）
+人工确认旧会话结束 -- requeue/failed --> 释放旧隔离；wait --> 保持隔离
 ```
 
 依赖只有在上游为 `SUCCEEDED` 或 `CONFIRMED` 时满足。自动执行结果只允许 `SUCCEEDED`、`FAILED`、`WAITING_HUMAN`；`CONFIRMED` 只能人工产生。
@@ -103,17 +119,19 @@ RUNNING --租约过期且达到上限--> FAILED
 
 ## 顺序与租约
 
-候选在各自运行环境、Provider、能力等级和执行策略内按 `blocker`、`critical`、`high`、`medium`、`low`，再按 `created_at` 和 id 排序。仅 `PENDING` 且依赖完成的任务可领取。运行环境、优先级、能力等级、Provider 和执行策略相互独立，高优先级不会自动升高能力等级。`NO_TASK`、`SLOT_FULL` 或 `CONFLICT` 都应立即结束。
+候选在各自运行环境、Provider、能力等级和执行策略内按 `blocker`、`critical`、`high`、`medium`、`low`，再按 `created_at` 和 id 排序。仅 `PENDING` 且依赖完成的任务可领取。运行环境、优先级、能力等级、Provider 和执行策略相互独立，高优先级不会自动升高能力等级。`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED` 都应立即结束。
 
 五个 L1-L5 automatic 能力等级各由一条 `codex_automation` Codex 定时自动化驱动，默认每 20 分钟按 0、2、4、6、8 分钟错峰运行；`L5/manual` 没有定时自动化，只能由 Operator 在人工明确批准后创建一次性执行。`codex_cli` 与 `self_hosted_agent` 由各自 Runner 显式领取，不由这些自动化兜底。AI 客户端会话会在 claim 前启动，但仍遵循统一逻辑队列的主动拉取语义。五条真实自动化的 L1-L5 入口只能在生产维护窗口由 Operator 逐条切换与复核；Worker 不读取或修改自动化状态。
 
-默认 heartbeat stalled 阈值为 300 秒、租约 3600 秒；attempt timeout 则由领取时快照的能力配置独立定义。Codex 客户端 Worker 在阅读完成后、编辑前、长时间操作前后和 finish 前调用 `heartbeat`，但没有独立 Runner、可控进程树或后台心跳线程。故 heartbeat stalled 只表示旧客户端会话存活性未知，不能归类为实现/模型失败或能力等级不足；旧会话仍可能编辑时，不得盲目重排、释放同一 scope 或启动重复执行。必须先由人工确认旧客户端执行结束，再采用受控恢复或重新排队。正常结束将 UTF-8 JSON 通过 stdin 交给 `finish`；`finish` 在同一事务中保存结果、释放 scope 锁并重新排队已解除冲突的任务，不生成 report 文件，也不自动归档任务。
+默认 heartbeat stalled 阈值为 300 秒、可续租 lease 为 3600 秒；attempt timeout 由 execution 快照独立定义，续心跳不会重置 attempt 计时。每次 `claim` 在容量判断前推进三项计时状态：Codex execution 停滞或超时后转为非活动 `STALLED/TIMED_OUT`，任务转为 `WAITING_HUMAN`，活动容量立即释放；scope lock 则转为 `QUARANTINED`，租约到期也不自动删除。heartbeat stalled 只表示旧客户端会话存活性未知，不能归类为实现/模型失败或能力等级不足。
+
+人工确认旧 Codex 会话已结束后，`recover --human-confirmed-safe --action requeue|failed|wait` 在一个事务中处置 execution、task、scope lock、冲突任务和历史。`requeue/failed` 仅按旧 execution ID 删除其隔离，`wait` 保持隔离；row version 与 execution ID 共同 fencing，已 `STALLED/TIMED_OUT` 的 execution 无法 heartbeat/finish，也不能删除后续新 attempt 的 ACTIVE 锁。受控 Runner 使用 `--runner-confirmed-terminated`，因为它能确认旧进程树退出，不需要套用 Codex 客户端的人工存活性判断。
 
 自建 Agent 在整个模型和工具循环期间使用后台心跳，并在各工具调用前后主动续租。模型/工具超时、心跳失败、进程中断、最大步骤耗尽或无效结构化结果会形成真实 `FAILED`；缺少高风险批准会形成 `WAITING_HUMAN`。只有 `finish` 返回 `FINISHED` 才视为状态更新成功。
 
 Codex CLI Runner 同样只有在 `finish` 返回 `FINISHED` 后才视为任务状态已更新；它不轮询或领取第二项，也不创建持久化 report、`CONFIRMED` 或 `archived_at`。正常退出后不保留 CLI 会话，超时和中断路径会回收进程树；若操作系统拒绝终止或 `finish` 自身不可用，Runner 只能报告真实运行错误，后续领取仍由既有心跳/租约机制回收 execution 与 scope 锁。
 
-Schema 3.0.0 至 3.3.0 到 3.4.0 的迁移使用受控的 `loopctl.py migrate`。迁移要求没有活动 execution，并重建任务与 execution 路由字段为非空 `capability_level`、`execution_policy` 及规范运行环境；旧 `routine` 至 `exceptional` 映射为 L1-L5/automatic-or-manual，旧 `deepseek` 映射为 `self_hosted_agent/deepseek`。迁移保留状态、结果、归档属性、行版本、任务子表与 execution 历史，并在结束后执行外键与完整性检查；重复运行返回已是当前版本。
+Schema 3.0.0 至 3.4.0 到 3.5.0 的迁移使用受控的 `loopctl.py migrate`。3.0.0 至 3.3.0 要求没有活动 execution，并完成规范路由与执行快照迁移；3.4.0 迁移允许活动 execution，原样保留其 `RUNNING` 状态与 ACTIVE scope lock，只扩展恢复字段。迁移本身不根据旧时间戳创建 `STALLED/TIMED_OUT/QUARANTINED`，因此不会自动解除或误判真实旧会话；迁移后的下一次 `claim` 才按当前时钟推进状态。所有路径保留任务、execution、历史、结果、依赖、scope、归档和 row version，并执行外键与 quick check。
 
 ## 安全边界
 
@@ -127,7 +145,8 @@ Dashboard Server 默认绑定 `127.0.0.1:4178`：
 
 - `/`：监控页。
 - `/api/state`：合并任务库、运行环境与入口配置、项目清单和运行时健康状态；任务与活动 execution 都返回 `runtime_environment`。
-- `/api/task-action`：仅接受 POST 归档动作，校验任务 ID 与 `row_version` 后复用 `loopctl.py` 状态机。
+- `/api/task-action`：接受固定结构的 POST 归档或安全恢复动作，校验 task/execution fencing 与 `row_version` 后复用 `loopctl.py` 状态机。
+- `/api/secrets`：GET 返回非敏感 Provider Secret 状态，POST 通过同源安全门禁调用统一 SecretStore。
 - `/healthz`：Schema、任务数和活动 execution 健康信息。
 
 Windows 任务计划程序默认每 30 分钟直接运行一次 `health_run.py`，不调用 Codex 模型。服务正常时写入 `HEALTHY`；不可用时尝试恢复；连续达到阈值后写入 `NEEDS_ATTENTION`，但仍继续尝试自愈。Windows 恢复流程会核对端口监听 PID 的命令行，只停止本项目 Dashboard，并禁止多个 Dashboard 共享监听端口。健康状态保存在 `runtime/health-state.json`，独立短时锁避免健康任务重入。

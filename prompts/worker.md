@@ -8,13 +8,13 @@
 2. 从自动化入口取得当前 `<capability-level>`、`<execution-policy>` 和固定的 `<runtime-environment>`；后两者分别必须为 `automatic` 与 `codex_automation`，任一值缺失、非法或不匹配时立即失败，不得默认猜测。生成唯一 execution-id（`<capability-level>-worker-` 加 GUID），运行：`py -3 E:\code\local-agent-loop\scripts\loopctl.py claim <execution-id> --runtime-environment codex_automation --capability-level <capability-level> --execution-policy automatic`。
 
    过渡期仅当入口明确提供旧 `<profile>`、但未提供 `<capability-level>` 时，按 `routine -> L1`、`standard -> L2`、`advanced -> L3`、`deep -> L4`、`complex -> L5` 映射，并仍以 `--capability-level` 发起 claim；`exceptional` 不属于普通 Worker。映射不是默认猜测：入口同时提供两者时必须相符，否则立即失败。生产维护窗口由 Operator 完成五条真实自动化切换与复核前，旧入口可继续使用这一兼容规则。
-3. 返回 `NO_TASK`、`SLOT_FULL` 或 `CONFLICT` 时，报告结果并立即结束；不要等待，不要领取第二个任务。
+3. 返回 `NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED` 时，报告结果并立即结束；不要等待，不要领取第二个任务。`RECOVERY_REQUIRED` 表示同路由任务已退出活动容量但 scope 仍隔离，必须由 Operator 确认旧 Codex 会话结束并受控恢复，Worker 不得自行恢复。
 4. 返回 `CLAIMED` 时，先确认 task.runtime_environment 为 `codex_automation`、task.capability_level 与当前 `<capability-level>` 完全一致、task.execution_policy 为 `automatic`；任一不一致时不得执行，并按协议报告系统错误。只执行输出 task 的 description、scope 和 acceptance。用 `E:\code\根目录清单.md` 定位项目，确认目录存在，读取各项目适用 `AGENTS.md`，检查 Git 状态和已有差异。目录缺失或必要事实无法确认时，以 `WAITING_HUMAN` 完成本轮。
 5. 只修改 scope 内文件。删除、发布、git_commit、external_message、credential_access 未获明确批准时必须 `WAITING_HUMAN`。
 6. 阅读完成后、编辑前、每个长时间操作前后及 finish 前运行：`py -3 E:\code\local-agent-loop\scripts\loopctl.py heartbeat <execution-id> <task-id>`。heartbeat 只证明当前 Codex 客户端会话仍可能存活并续租，不是单次 attempt 的超时计时器；attempt timeout 由领取时快照的执行配置独立裁决。
 7. 在内存中生成 UTF-8 JSON 结果，状态只允许 `SUCCEEDED`、`FAILED`、`WAITING_HUMAN`。`SUCCEEDED` 必须有非空 verification；`FAILED` 必须有 error；`WAITING_HUMAN` 必须有 question。Worker 完成任务不代表人工确认或归档，不得在正常 finish 流程中写 `CONFIRMED` 或 `archived_at`。不要创建 reports 文件。
 8. 将 JSON 通过 stdin 运行：`py -3 E:\code\local-agent-loop\scripts\loopctl.py finish <execution-id> <task-id> -`。只有 finish 成功才能声称状态已更新。结束后不领取第二项。
 
-Codex 客户端没有独立 Runner 进程、可控进程树或后台 heartbeat 线程。heartbeat stalled 仅表示客户端会话的执行存活性未知，不得归类为实现失败、模型失败或能力等级不足。旧会话仍可能编辑时，任何人不得盲目重排、释放同一 scope 或启动重复执行；须由人工确认旧客户端执行已经结束，再使用受控恢复/重新排队流程。Worker 不得读取、暂停、启用、删除或创建 Codex 自动化。`NO_TASK` 只结束当前轮次，不改变自动化状态。
+Codex 客户端没有独立 Runner 进程、可控进程树或后台 heartbeat 线程。heartbeat stalled、renewable lease expiry 和 attempt timeout 是三个独立条件；检测到停滞或超时时，旧 execution 转为非活动 `STALLED/TIMED_OUT`，任务转为 `WAITING_HUMAN`，活动容量立即释放，但 scope 保持 `QUARANTINED`。这些都是基础设施/存活性结果，不得归类为实现失败、模型失败或能力等级不足。旧会话仍可能编辑时，任何人不得盲目释放隔离或启动同 scope 重复执行；须由人工确认旧客户端执行已经结束，再使用受控 `recover` 选择重新排队、标记失败或继续等待。超时后的旧 execution 不能再 heartbeat 或 finish。Worker 不得读取、暂停、启用、删除或创建 Codex 自动化。`NO_TASK` 和 `RECOVERY_REQUIRED` 都只结束当前轮次，不改变自动化状态。
 
 诚实区分已确认事实、合理推断和证据不足；未运行的测试不能写成通过。

@@ -53,6 +53,7 @@ from loopdb import (
     task_exists,
     transaction,
     uses_capability_schema,
+    uses_recovery_schema,
     validate_database,
 )
 
@@ -243,15 +244,21 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
         - timedelta(seconds=int(execution_setting("stalled_after_seconds", 300)))
     ).isoformat(timespec="milliseconds")
     capability_schema = uses_capability_schema(database)
+    recovery_schema = uses_recovery_schema(database)
     if capability_schema:
+        statuses = "('RUNNING','STALLED','TIMED_OUT')" if recovery_schema else "('RUNNING')"
         rows = database.execute(
-            "SELECT execution_id, task_id, started_at, heartbeat_at, lease_expires_at, "
-            "runtime_environment, attempt_timeout_seconds FROM executions WHERE status='RUNNING'"
+            "SELECT execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, "
+            "runtime_environment, provider_id, capability_level, execution_policy, "
+            "attempt_timeout_seconds, "
+            + ("termination_reason, recovery_required " if recovery_schema else "NULL AS termination_reason, 0 AS recovery_required ")
+            + f"FROM executions WHERE status IN {statuses}"
         ).fetchall()
     else:
         rows = database.execute(
-            "SELECT e.execution_id, e.task_id, e.started_at, e.heartbeat_at, e.lease_expires_at, "
-            "t.runtime_environment, NULL AS attempt_timeout_seconds FROM executions e "
+            "SELECT e.execution_id, e.task_id, e.status, e.started_at, e.heartbeat_at, e.lease_expires_at, "
+            "t.runtime_environment, NULL AS provider_id, NULL AS capability_level, NULL AS execution_policy, "
+            "NULL AS attempt_timeout_seconds, NULL AS termination_reason, 0 AS recovery_required FROM executions e "
             "JOIN tasks t ON t.id=e.task_id WHERE e.status='RUNNING'"
         ).fetchall()
     stalled: list[dict[str, Any]] = []
@@ -265,7 +272,7 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
                 + timedelta(seconds=int(execution["attempt_timeout_seconds"]))
                 <= current
             )
-        if not (heartbeat_stalled or lease_expired or attempt_timed_out):
+        if not (heartbeat_stalled or lease_expired or attempt_timed_out or execution["recovery_required"]):
             continue
         runtime_environment = execution["runtime_environment"]
         if runtime_environment == "deepseek":
@@ -274,10 +281,15 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
             {
                 "execution_id": execution["execution_id"],
                 "task_id": execution["task_id"],
+                "execution_status": execution["status"],
                 "runtime_environment": runtime_environment,
+                "provider_id": execution["provider_id"],
+                "capability_level": execution["capability_level"],
+                "execution_policy": execution["execution_policy"],
                 "heartbeat_stalled": heartbeat_stalled,
                 "lease_expired": lease_expired,
                 "attempt_timed_out": attempt_timed_out,
+                "termination_reason": execution["termination_reason"],
                 "recovery_confirmation": (
                     "human_confirmed_safe"
                     if runtime_environment == "codex_automation"
@@ -288,46 +300,158 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
     return stalled
 
 
-def mark_codex_recovery_required(
+def _recovery_reason(recovery: dict[str, Any]) -> tuple[str, str]:
+    codes = []
+    labels = []
+    if recovery["heartbeat_stalled"]:
+        codes.append("HEARTBEAT_STALLED")
+        labels.append("心跳停滞")
+    if recovery["lease_expired"]:
+        codes.append("LEASE_EXPIRED")
+        labels.append("租约过期")
+    if recovery["attempt_timed_out"]:
+        codes.append("ATTEMPT_TIMED_OUT")
+        labels.append("单次 attempt 超时")
+    return "+".join(codes), "、".join(labels)
+
+
+def transition_recovery_states(
     database: sqlite3.Connection, recoveries: list[dict[str, Any]]
 ) -> None:
+    if not uses_recovery_schema(database):
+        return
     stamp = now_shanghai()
     for recovery in recoveries:
-        if recovery["runtime_environment"] != "codex_automation":
+        old_status = recovery["execution_status"]
+        if old_status == "TIMED_OUT" or (old_status == "STALLED" and not recovery["attempt_timed_out"]):
             continue
-        question = (
-            f"Codex 客户端 execution {recovery['execution_id']} 已停滞；"
-            "请确认旧会话不再修改 scope 后执行人工安全恢复。"
-        )
+        new_status = "TIMED_OUT" if recovery["attempt_timed_out"] else "STALLED"
+        reason_code, reason_label = _recovery_reason(recovery)
+        outcome = "INFRASTRUCTURE_TIMEOUT" if new_status == "TIMED_OUT" else "RECOVERY_REQUIRED"
         updated = database.execute(
-            "UPDATE tasks SET human_required=1, human_question=?, human_options_json=?, "
-            "human_requested_at=?, updated_at=?, progress_summary='Codex 客户端执行停滞，scope 锁保持。', "
-            "progress_next_step='等待人工确认旧会话已停止修改后安全恢复。', row_version=row_version+1 "
-            "WHERE id=? AND status='RUNNING' AND human_required=0",
-            (
-                question,
-                json.dumps(["确认旧会话已停止并安全恢复", "继续等待"], ensure_ascii=False),
-                stamp,
-                stamp,
-                recovery["task_id"],
-            ),
+            "UPDATE executions SET status=?, finished_at=?, outcome=?, termination_reason=?, "
+            "recovery_required=1 WHERE execution_id=? AND status=?",
+            (new_status, stamp, outcome, reason_code, recovery["execution_id"], old_status),
         )
-        if updated.rowcount:
+        if not updated.rowcount:
+            continue
+        database.execute(
+            "UPDATE scope_locks SET status='QUARANTINED', quarantined_at=COALESCE(quarantined_at, ?), "
+            "quarantine_reason=? WHERE execution_id=?",
+            (stamp, reason_label, recovery["execution_id"]),
+        )
+        if old_status == "STALLED":
+            database.execute(
+                "UPDATE tasks SET updated_at=?, progress_summary=?, row_version=row_version+1 "
+                "WHERE id=? AND status='WAITING_HUMAN'",
+                (stamp, f"execution 已到达 attempt timeout；scope 继续隔离。原因：{reason_label}。", recovery["task_id"]),
+            )
             database.execute(
                 "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
-                "VALUES(?, ?, 'RUNNING', 'RUNNING', 'stalled-detector', ?)",
-                (recovery["task_id"], stamp, question),
+                "VALUES(?, ?, 'WAITING_HUMAN', 'WAITING_HUMAN', 'execution-timeout-detector', ?)",
+                (recovery["task_id"], stamp, f"execution 转为 TIMED_OUT；scope 继续隔离。原因：{reason_label}。"),
             )
+            continue
+        is_codex = recovery["runtime_environment"] == "codex_automation"
+        question = (
+            f"execution {recovery['execution_id']} 已离开活动容量，但 scope 仍处于隔离状态；"
+            + (
+                "请确认旧 Codex 客户端会话已结束，再选择重新排队、标记失败或继续等待。"
+                if is_codex
+                else "受控 Runner 确认旧进程树已终止后，可重新排队、标记失败或继续等待。"
+            )
+        )
+        task_updated = database.execute(
+            "UPDATE tasks SET status='WAITING_HUMAN', human_required=1, human_question=?, "
+            "human_options_json=?, human_requested_at=?, updated_at=?, completed_at=NULL, "
+            "progress_summary=?, progress_next_step='等待安全确认与恢复处置。', row_version=row_version+1 "
+            "WHERE id=? AND status='RUNNING' AND assigned_agent=?",
+            (
+                question,
+                json.dumps(["确认结束并重新排队", "确认结束并标记失败", "继续等待"], ensure_ascii=False),
+                stamp,
+                stamp,
+                f"execution 已转为 {new_status} 并释放活动容量；scope 保持隔离。原因：{reason_label}。",
+                recovery["task_id"],
+                recovery["execution_id"],
+            ),
+        )
+        if task_updated.rowcount:
+            database.execute(
+                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+                "VALUES(?, ?, 'RUNNING', 'WAITING_HUMAN', 'execution-liveness-detector', ?)",
+                (
+                    recovery["task_id"], stamp,
+                    f"execution 转为 {new_status} 并释放活动容量；scope 转为 QUARANTINED。原因：{reason_label}。",
+                ),
+            )
+
+
+def recovery_required_records(database: sqlite3.Connection) -> list[dict[str, Any]]:
+    if not uses_recovery_schema(database):
+        return stalled_executions(database)
+    rows = database.execute(
+        "SELECT e.execution_id, e.task_id, e.status, e.runtime_environment, e.provider_id, "
+        "e.capability_level, e.execution_policy, e.termination_reason, e.recovery_action, "
+        "l.scope_key, l.status AS scope_status, l.quarantined_at, l.quarantine_reason "
+        "FROM executions e JOIN scope_locks l ON l.execution_id=e.execution_id "
+        "WHERE e.recovery_required=1 AND l.status='QUARANTINED' "
+        "ORDER BY e.started_at, l.scope_key"
+    ).fetchall()
+    records: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = records.setdefault(
+            row["execution_id"],
+            {
+                "execution_id": row["execution_id"],
+                "task_id": row["task_id"],
+                "execution_status": row["status"],
+                "runtime_environment": row["runtime_environment"],
+                "provider_id": row["provider_id"],
+                "capability_level": row["capability_level"],
+                "execution_policy": row["execution_policy"],
+                "termination_reason": row["termination_reason"],
+                "heartbeat_stalled": "HEARTBEAT_STALLED" in (row["termination_reason"] or ""),
+                "lease_expired": "LEASE_EXPIRED" in (row["termination_reason"] or ""),
+                "attempt_timed_out": "ATTEMPT_TIMED_OUT" in (row["termination_reason"] or ""),
+                "scope_status": row["scope_status"],
+                "quarantined_at": row["quarantined_at"],
+                "quarantine_reason": row["quarantine_reason"],
+                "scope_keys": [],
+                "recovery_confirmation": (
+                    "human_confirmed_safe"
+                    if row["runtime_environment"] == "codex_automation"
+                    else "runner_confirmed_terminated"
+                ),
+            },
+        )
+        item["scope_keys"].append(row["scope_key"])
+    return list(records.values())
 
 
 def command_recover(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        candidates = {item["execution_id"]: item for item in stalled_executions(database)}
+        transition_recovery_states(database, stalled_executions(database))
+        execution = database.execute(
+            "SELECT * FROM executions WHERE execution_id=?", (args.execution_id,)
+        ).fetchone()
+        if not execution:
+            raise LoopError("execution 不存在")
+        if not execution["recovery_required"]:
+            if execution["recovery_action"] and (args.action is None or execution["recovery_action"] == args.action):
+                commit(database)
+                output({
+                    "outcome": "ALREADY_RECOVERED", "execution_id": args.execution_id,
+                    "task_id": execution["task_id"], "recovery_action": execution["recovery_action"],
+                })
+                return
+            raise LoopError("execution 不处于待恢复状态")
+        candidates = {item["execution_id"]: item for item in recovery_required_records(database)}
         recovery = candidates.get(args.execution_id)
         if not recovery:
-            raise LoopError("execution 仍在正常租约内或已不是活动状态")
+            raise LoopError("execution 缺少 QUARANTINED scope，数据库状态不一致")
         platform = recovery["runtime_environment"]
         if platform == "codex_automation":
             if not args.human_confirmed_safe or args.runner_confirmed_terminated:
@@ -337,55 +461,78 @@ def command_recover(args: argparse.Namespace) -> None:
             if not args.runner_confirmed_terminated or args.human_confirmed_safe:
                 raise LoopError("受控 Runner 平台必须确认旧进程已终止后恢复")
             actor = "runner-safe-recovery"
-        execution = database.execute(
-            "SELECT task_id FROM executions WHERE execution_id=? AND status='RUNNING'",
-            (args.execution_id,),
-        ).fetchone()
         task = database.execute(
-            "SELECT status, attempt FROM tasks WHERE id=?", (execution["task_id"],)
+            "SELECT status, attempt, assigned_agent, human_response, row_version FROM tasks WHERE id=?",
+            (execution["task_id"],),
         ).fetchone()
+        if not task or task["status"] != "WAITING_HUMAN" or task["assigned_agent"] != args.execution_id:
+            raise LoopError("待恢复任务状态或 execution fencing 不匹配")
+        require_expected_row_version(args, task["row_version"])
         stamp = now_shanghai()
-        reasons = []
-        if recovery["heartbeat_stalled"]:
-            reasons.append("心跳停滞")
-        if recovery["lease_expired"]:
-            reasons.append("租约过期")
-        if recovery["attempt_timed_out"]:
-            reasons.append("单次 attempt 超时")
-        reason = "、".join(reasons)
-        database.execute(
-            "UPDATE executions SET status='EXPIRED', finished_at=?, outcome='SAFE_RECOVERY' "
-            "WHERE execution_id=?",
-            (stamp, args.execution_id),
-        )
-        database.execute("DELETE FROM scope_locks WHERE execution_id=?", (args.execution_id,))
-        new_status = None
-        if task and task["status"] == "RUNNING":
-            max_attempts = int(execution_setting("max_attempts", 2))
-            new_status = "PENDING" if task["attempt"] < max_attempts else "FAILED"
-            summary = (
-                f"{reason}，旧执行已安全终止并恢复排队。"
-                if new_status == "PENDING"
-                else f"{reason}，旧执行已安全终止且达到最大尝试次数。"
+        action = args.action
+        if action is None:
+            action = "requeue" if task["attempt"] < int(execution_setting("max_attempts", 2)) else "failed"
+        if action == "wait":
+            if execution["recovery_action"] == "wait" and task["human_response"] == "continue_waiting":
+                commit(database)
+                output({
+                    "outcome": "ALREADY_WAITING", "execution_id": args.execution_id,
+                    "task_id": execution["task_id"], "task_status": "WAITING_HUMAN",
+                    "scope_status": "QUARANTINED",
+                })
+                return
+            database.execute(
+                "UPDATE executions SET recovery_action='wait' WHERE execution_id=?",
+                (args.execution_id,),
             )
             database.execute(
-                "UPDATE tasks SET status=?, assigned_agent=NULL, heartbeat_at=NULL, updated_at=?, "
-                "completed_at=CASE WHEN ?='FAILED' THEN ? ELSE NULL END, "
-                "progress_percent=CASE WHEN ?='FAILED' THEN 100 ELSE 0 END, "
-                "progress_summary=?, progress_next_step=?, result_error=?, human_required=0, "
-                "human_question=NULL, human_options_json='[]', human_requested_at=NULL, "
-                "human_responded_at=NULL, human_response=NULL, row_version=row_version+1 WHERE id=?",
-                (
-                    new_status, stamp, new_status, stamp, new_status, summary,
-                    "等待下一次兼容执行器领取。" if new_status == "PENDING" else None,
-                    None if new_status == "PENDING" else summary, execution["task_id"],
-                ),
+                "UPDATE tasks SET human_responded_at=?, human_response='continue_waiting', updated_at=?, "
+                "progress_next_step='继续等待旧会话结束确认；scope 保持隔离。', "
+                "row_version=row_version+1 WHERE id=?",
+                (stamp, stamp, execution["task_id"]),
             )
             database.execute(
                 "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
-                "VALUES(?, ?, 'RUNNING', ?, ?, ?)",
-                (execution["task_id"], stamp, new_status, actor, summary),
+                "VALUES(?, ?, 'WAITING_HUMAN', 'WAITING_HUMAN', ?, '选择继续等待；活动容量保持释放，scope 保持隔离。')",
+                (execution["task_id"], stamp, actor),
             )
+            revision = bump_revision(database, actor)
+            commit(database)
+            output({
+                "outcome": "WAITING", "execution_id": args.execution_id,
+                "task_id": execution["task_id"], "task_status": "WAITING_HUMAN",
+                "scope_status": "QUARANTINED", "revision": revision,
+            })
+            return
+        new_status = "PENDING" if action == "requeue" else "FAILED"
+        reason = recovery["quarantine_reason"] or recovery["termination_reason"]
+        summary = (
+            f"{reason}；旧执行已确认结束，隔离已释放并重新排队。"
+            if new_status == "PENDING"
+            else f"{reason}；旧执行已确认结束，人工选择标记 FAILED。"
+        )
+        database.execute("DELETE FROM scope_locks WHERE execution_id=?", (args.execution_id,))
+        database.execute(
+            "UPDATE executions SET recovery_required=0, recovered_at=?, recovery_action=? WHERE execution_id=?",
+            (stamp, action, args.execution_id),
+        )
+        database.execute(
+            "UPDATE tasks SET status=?, assigned_agent=NULL, heartbeat_at=NULL, updated_at=?, "
+            "completed_at=?, progress_percent=?, progress_summary=?, progress_next_step=?, result_error=?, "
+            "human_required=0, human_question=NULL, human_options_json='[]', human_requested_at=NULL, "
+            "human_responded_at=?, human_response=?, row_version=row_version+1 WHERE id=?",
+            (
+                new_status, stamp, stamp if new_status == "FAILED" else None,
+                100 if new_status == "FAILED" else 0, summary,
+                "等待下一次兼容执行器领取。" if new_status == "PENDING" else None,
+                summary if new_status == "FAILED" else None, stamp, action, execution["task_id"],
+            ),
+        )
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES(?, ?, 'WAITING_HUMAN', ?, ?, ?)",
+            (execution["task_id"], stamp, new_status, actor, summary),
+        )
         requeued = requeue_resolved_conflicts(database)
         revision = bump_revision(database, actor)
         commit(database)
@@ -396,6 +543,7 @@ def command_recover(args: argparse.Namespace) -> None:
                 "task_id": execution["task_id"],
                 "task_status": new_status,
                 "runtime_environment": platform,
+                "recovery_action": action,
                 "requeued_conflicts": requeued,
                 "revision": revision,
             }
@@ -413,8 +561,9 @@ def requeue_resolved_conflicts(database: sqlite3.Connection) -> list[str]:
     requeued: list[str] = []
     for row in rows:
         active = database.execute(
-            "SELECT 1 FROM task_conflicts c JOIN executions e ON e.execution_id=c.blocker_execution_id "
-            "WHERE c.task_id=? AND e.status='RUNNING' LIMIT 1",
+            "SELECT 1 FROM task_conflicts c JOIN scope_locks l "
+            "ON l.execution_id=c.blocker_execution_id AND l.scope_key=c.scope_key "
+            "WHERE c.task_id=? LIMIT 1",
             (row["id"],),
         ).fetchone()
         if active:
@@ -521,8 +670,15 @@ def command_claim(args: argparse.Namespace) -> None:
         capability_schema = uses_capability_schema(database)
         if database.execute("SELECT 1 FROM executions WHERE execution_id=?", (args.execution_id,)).fetchone():
             raise LoopError("execution-id 已存在")
-        recovery_required = stalled_executions(database)
-        mark_codex_recovery_required(database, recovery_required)
+        transition_recovery_states(database, stalled_executions(database))
+        recovery_required = recovery_required_records(database)
+        compatible_recoveries = [
+            item for item in recovery_required
+            if item["runtime_environment"] == target["runtime_environment"]
+            and item["provider_id"] == target["provider_id"]
+            and item["capability_level"] == target["capability_level"]
+            and item["execution_policy"] == target["execution_policy"]
+        ]
         requeued = requeue_resolved_conflicts(database)
         active = database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0]
         maximum = global_parallel_limit()
@@ -532,7 +688,7 @@ def command_claim(args: argparse.Namespace) -> None:
                 "outcome": "SLOT_FULL", "limit_scope": "global",
                 "profile": target["execution_profile"], "capability_level": target["capability_level"],
                 "runtime_environment": target["runtime_environment"], "provider_id": target["provider_id"],
-                "active": active, "maximum": maximum, "recovery_required": recovery_required,
+                "active": active, "maximum": maximum, "recovery_required": compatible_recoveries,
             })
             return
         if capability_schema:
@@ -558,7 +714,7 @@ def command_claim(args: argparse.Namespace) -> None:
                 "profile": target["execution_profile"], "capability_level": target["capability_level"],
                 "runtime_environment": target["runtime_environment"], "provider_id": target["provider_id"],
                 "active": active, "maximum": maximum, "platform_active": platform_active,
-                "platform_maximum": platform_maximum, "recovery_required": recovery_required,
+                "platform_maximum": platform_maximum, "recovery_required": compatible_recoveries,
             })
             return
         if capability_schema:
@@ -617,19 +773,20 @@ def command_claim(args: argparse.Namespace) -> None:
                         "task_id": deferred_conflicts[0]["task_id"],
                         "conflicts": deferred_conflicts[0]["conflicts"],
                         "deferred_conflicts": deferred_conflicts,
-                        "recovery_required": recovery_required,
+                        "recovery_required": compatible_recoveries,
                         "requeued": requeued,
                         "revision": revision,
                     }
                 )
                 return
+            outcome = "RECOVERY_REQUIRED" if compatible_recoveries else "NO_TASK"
             commit(database)
             output({
-                "outcome": "NO_TASK", "profile": target["execution_profile"],
+                "outcome": outcome, "profile": target["execution_profile"],
                 "capability_level": target["capability_level"],
                 "runtime_environment": target["runtime_environment"], "provider_id": target["provider_id"],
                 "active": active,
-                "recovery_required": recovery_required, "requeued": requeued,
+                "recovery_required": compatible_recoveries, "requeued": requeued,
             })
             return
         lease_seconds = int(execution_setting("task_lease_seconds", 3600))
@@ -705,7 +862,7 @@ def command_claim(args: argparse.Namespace) -> None:
                 "platform_maximum": platform_maximum,
                 "revision": revision,
                 "deferred_conflicts": deferred_conflicts,
-                "recovery_required": recovery_required,
+                "recovery_required": compatible_recoveries,
                 "requeued": requeued,
                 "task": payload,
             }
@@ -732,9 +889,12 @@ def command_heartbeat(args: argparse.Namespace) -> None:
             "UPDATE executions SET heartbeat_at=?, lease_expires_at=? WHERE execution_id=?",
             (stamp, expiry, args.execution_id),
         )
-        database.execute(
-            "UPDATE scope_locks SET lease_expires_at=? WHERE execution_id=?", (expiry, args.execution_id)
+        lock_update = (
+            "UPDATE scope_locks SET lease_expires_at=? WHERE execution_id=? AND status='ACTIVE'"
+            if uses_recovery_schema(database)
+            else "UPDATE scope_locks SET lease_expires_at=? WHERE execution_id=?"
         )
+        database.execute(lock_update, (expiry, args.execution_id))
         database.execute(
             "UPDATE tasks SET heartbeat_at=?, updated_at=?, row_version=row_version+1 WHERE id=? AND status='RUNNING'",
             (stamp, stamp, args.task_id),
@@ -1248,6 +1408,8 @@ def parser() -> argparse.ArgumentParser:
     heartbeat.set_defaults(handler=command_heartbeat)
     recover = commands.add_parser("recover")
     recover.add_argument("execution_id")
+    recover.add_argument("--action", choices=("requeue", "failed", "wait"))
+    recover.add_argument("--expected-row-version", type=int)
     recovery_confirmation = recover.add_mutually_exclusive_group(required=True)
     recovery_confirmation.add_argument("--runner-confirmed-terminated", action="store_true")
     recovery_confirmation.add_argument("--human-confirmed-safe", action="store_true")

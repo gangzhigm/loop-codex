@@ -4,7 +4,7 @@
 
 ## 固定配置
 
-- 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.3.0）
+- 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.5.0）
 - 初始化配置：`config/initialization.json`
 - 项目清单：`E:\code\根目录清单.md`
 - Worker：L1 至 L5 五条 automatic 定时自动化各自每 20 分钟唤起一次；`L5/manual` 仅人工批准后一次性执行
@@ -15,7 +15,7 @@
 - 并发：全局最多 8 个活动 execution，并同时受每个平台最多 5 个活动 execution 约束
 - Windows 健康任务：默认每 30 分钟运行一次，连续 3 次恢复失败告警
 - scope 冲突：默认按项目加锁
-- Dashboard：`http://127.0.0.1:4178`
+- Dashboard：`http://127.0.0.1:4178`；Provider 密钥管理仅限该本机同源入口
 - 时区：`Asia/Shanghai`
 - 文本编码：UTF-8
 
@@ -28,7 +28,7 @@ SQLite 只保存任务及其执行一致性数据：任务内容和历史、每�
 - Codex CLI Runner：显式接收能力等级并生成唯一 execution ID，只 claim 一次；领取后由单个 ephemeral `codex exec` 处理一个登记项目，Runner 管理 heartbeat、attempt timeout、进程树、结构化结果和 finish。
 - 自建 Agent Runtime：以显式运行环境、Provider、能力等级和执行策略启动，只领取一次并处理一个任务；Provider 负责把模型 API 标准化为中立响应，Runtime 负责队列协议、上下文、受限工具、心跳和结果校验。
 - Windows 健康任务：由任务计划程序直接运行 `health_run.py`，检查并按需恢复 Dashboard Server，不调用模型。
-- Dashboard Server：读取任务库、初始化配置和运行时健康 JSON，提供监控接口和页面。
+- Dashboard Server：读取任务库、初始化配置和运行时健康 JSON，提供监控接口、受控任务归档和本机 SecretStore 管理层。
 
 ## 常用命令
 
@@ -43,13 +43,18 @@ py -3 .\scripts\loopctl.py cancel TASK-ID --reason "不再需要"
 py -3 .\scripts\loopctl.py confirm TASK-ID --reason "人工复核通过"
 py -3 .\scripts\loopctl.py archive TASK-ID --reason "终态任务不再参与当前视图"
 py -3 .\scripts\loopctl.py unarchive TASK-ID --reason "重新放回当前视图"
+py -3 .\scripts\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action requeue
 ```
 
 `cancel` 保留历史，不物理删除任务。`requeue` 可重新排队草稿、等待、失败或成功任务；`confirm` 只接受 `SUCCEEDED`，形成 `SUCCEEDED -> CONFIRMED` 的人工复核链路。归档是独立的 nullable `archived_at` 属性，`archive/unarchive` 不改变状态、结果或尝试次数，且重复执行不会重复写历史。已归档任务需要先取消归档，才能修改、取消或重新排队。
 
-Dashboard 的“已结束”分段为未归档终态任务提供归档按钮。本地 `POST /api/task-action` 只接受 `task_id`、固定的 `archive` 动作和当前 `row_version`；服务端以固定参数调用 `loopctl.py`。`SUCCEEDED` 会先人工确认再归档，其他可归档终态直接归档；旧版本、非法状态和重复请求会返回冲突并要求页面刷新。
+Dashboard 的“已结束”分段为未归档终态任务提供归档按钮；`WAITING_HUMAN` 隔离任务的详情提供重新排队、标记失败和继续等待入口。本地 `POST /api/task-action` 只接受固定的 `archive/recover` 结构并以固定参数调用 `loopctl.py`。归档与恢复都使用乐观 `row_version`；恢复还校验 execution ID、`STALLED/TIMED_OUT` 与 `QUARANTINED`，并要求明确确认旧 Codex 会话结束。
 
-Schema 3.0.0 至 3.3.0 数据库升级到 3.4.0 时运行 `loopctl.py migrate`。迁移要求没有活动 execution，保留任务、子表和 execution 历史，并将旧档位映射为 L1-L5、将旧 `deepseek` 路由映射为 `self_hosted_agent/deepseek`；人工 exceptional 映射为 `L5/manual`。迁移结束会执行外键与完整性检查，已是 3.4.0 的数据库返回当前版本。
+设置抽屉通过本机同源 `/api/secrets` 管理 Provider 密钥。状态响应只包含 Provider、是否已配置、后端、公开状态和最近验证时间等非敏感元数据；不返回密钥、掩码、后四位、可逆密文或 `secret_ref`。写操作要求精确的 `Host`/`Origin`、CSRF token、`application/json`、限长请求体和一次性 UUID，并拒绝 CORS、DNS rebinding、跨站表单与重复请求。密码控件不预填，提交即清空，不使用 URL、Web Storage、IndexedDB、缓存或任务附件。
+
+Dashboard Server 固定绑定 `127.0.0.1`，命令行改为 `0.0.0.0` 或其他地址会拒绝启动。远程 Secret 管理必须等待服务器 Secret 后端同时提供 HTTPS、认证、授权和审计，不能通过修改 Dashboard 监听地址直接开放。
+
+Schema 3.0.0 至 3.4.0 数据库升级到 3.5.0 时运行 `loopctl.py migrate`。3.0.0 至 3.3.0 仍要求没有活动 execution，并完成 L1-L5、规范运行环境和执行配置快照迁移。3.4.0 到 3.5.0 会原样保留活动 execution 与 ACTIVE scope 锁，只增加 execution 终止/恢复字段和 scope 隔离状态；迁移不会根据时间自动猜测真实旧会话已结束，也不会创建隔离。迁移后由后续 `claim` 按独立计时条件推进状态。
 
 Worker 协议：
 
@@ -59,7 +64,11 @@ py -3 .\scripts\loopctl.py heartbeat <execution-id> <task-id>
 $resultJson | py -3 .\scripts\loopctl.py finish <execution-id> <task-id> -
 ```
 
-`finish` 默认从 stdin 读取 UTF-8 JSON，也兼容显式 JSON 文件路径。正常流程不持久化中间 report。`claim` 强制显式提供 `runtime_environment`、`capability_level` 和 `execution_policy`，只扫描三个字段同时匹配的任务；它会把冲突候选转为 `WAITING_CONFLICT` 后继续寻找同环境、能力等级和策略的其他 scope，并回收租约过期的 execution。全局 8、平台 5、依赖与 scope 锁跨运行环境共同生效。它可能返回 `CLAIMED`、`NO_TASK`、`SLOT_FULL` 或 `CONFLICT`；除 `CLAIMED` 外均立即结束。
+`finish` 默认从 stdin 读取 UTF-8 JSON，也兼容显式 JSON 文件路径。正常流程不持久化中间 report。`claim` 强制显式提供 `runtime_environment`、`capability_level` 和 `execution_policy`，只扫描三个字段同时匹配的任务；它会把冲突候选转为 `WAITING_CONFLICT` 后继续寻找其他可运行 scope。全局 8、平台 5、依赖与 scope 锁跨运行环境共同生效。它可能返回 `CLAIMED`、`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED`；除 `CLAIMED` 外均立即结束。
+
+Codex 客户端的 heartbeat stalled、renewable lease expiry 与 attempt timeout 独立计算。任一存活性条件触发后，任务进入 `WAITING_HUMAN`，execution 转为非活动 `STALLED`；attempt timeout 到达后进一步转为 `TIMED_OUT`。这会释放全局和平台活动容量，但 scope lock 转为 `QUARANTINED`，继续阻止同项目写入。只有人工确认旧客户端会话已结束后，才能用 `recover --human-confirmed-safe --action requeue|failed|wait` 处置；迟到 heartbeat/finish 会被 execution fencing 拒绝。受控 Runner 平台改用 `--runner-confirmed-terminated`。
+
+复现缺陷的时间线为：`2026-08-05T12:12:46.282+08:00` 首次观测旧 execution 心跳停滞但租约和 attempt 尚未超时；`2026-08-05T13:39:32.463+08:00` 三项条件均到达后，它仍错误保持 `RUNNING` 并占用容量与 scope。修复后的预期是首次停滞即变为 `STALLED + WAITING_HUMAN + QUARANTINED` 并释放容量，attempt 到期再记录 `TIMED_OUT`，隔离继续保留直至人工安全恢复。旧客户端实际是否已经结束仍无法从这些时间信号确认。
 
 Codex CLI 单次入口：
 
@@ -113,6 +122,8 @@ py -3 .\scripts\secretctl.py delete deepseek
 
 `set`、`rotate` 从隐藏终端输入读取且要求重复输入；`rotate` 与 `delete` 还要求人工确认。添加 `--connect` 会再次提示可能产生一次 Provider 调用，只有输入 `CONNECT` 才联网。临时冒烟需要在配置中显式选择 `secret_management.backend=environment`，并由启动进程注入与 `deepseek.secret_ref` 同名的环境变量；该后端不持久化，`secretctl` 不会假装把子进程环境写回父进程。
 
+也可从 Dashboard 设置抽屉执行配置、替换、本地验证、显式确认的连接验证和删除。浏览器只把一次性输入交给同源 Dashboard Server；Server 复用同一个 SecretStore，不创建任务、不写 SQLite，也不把密钥交给 Operator 或 Worker。最近验证状态以非敏感事件写入 `runtime/health-state.json`；运行账户与 `secret_management.access_account` 不一致时界面只报告存储不可用及修复建议，不会静默复制第二份密钥。
+
 ```powershell
 py -3 .\scripts\agent_runtime.py `
   --runtime-environment self_hosted_agent `
@@ -123,12 +134,12 @@ py -3 .\scripts\agent_runtime.py `
   --provider deepseek_provider:create_provider
 ```
 
-停止方式是让单次运行自然结束；需要人工停止时终止该进程，未能提交 `finish` 的 execution 将由现有心跳/租约机制回收。备份不包含密钥；密钥库丢失或迁移账户后必须重新运行 `secretctl.py set deepseek`。不要修改任务数据库或把密钥写入配置。未获得任务内 `credential_access` 批准前，Provider 不读取密钥；本轮也没有写入真实系统凭据或调用真实模型。
+停止方式是让单次运行自然结束；需要人工停止时终止该进程。受控 Runner 确认进程树退出后可执行安全恢复；Codex 客户端则必须人工确认旧会话结束。备份不包含密钥；密钥库丢失或迁移账户后必须重新运行 `secretctl.py set deepseek`。不要修改任务数据库或把密钥写入配置。未获得任务内 `credential_access` 批准前，Provider 不读取密钥；本轮也没有写入真实系统凭据或调用真实模型。
 
 ## 文件
 
 - `data/loop-agent.sqlite3`：唯一任务事实源。
-- `schemas/loop-agent.sql`：Schema 3.3.0。
+- `schemas/loop-agent.sql`：Schema 3.5.0。
 - `config/initialization.json`：执行、自动化与服务配置。
 - `prompts/operator.md`：任务管理主对话提示词和查重、状态、独立归档流程。
 - `prompts/worker.md`：Codex Worker 自动化的权威提示词。
@@ -140,7 +151,7 @@ py -3 .\scripts\agent_runtime.py `
 - `scripts/deepseek_provider.py`：DeepSeek Chat Completions 到中立 Provider 协议的适配器。
 - `scripts/secret_store.py`：统一 SecretStore 契约、系统密钥库与显式环境后端。
 - `scripts/secretctl.py`：隐藏输入、状态、校验、轮换和删除命令。
-- `scripts/dashboard_server.py`：本地 HTTP 状态服务与受限归档接口。
+- `scripts/dashboard_server.py`：本地 HTTP 状态服务、受限归档接口与同源 Secret API。
 - `scripts/health_run.py`：Dashboard 健康检查和恢复。
 - `scripts/install_health_task.ps1`：按初始化配置注册或更新 Windows 健康任务。
 - `scripts/test_loop.py`：并发、冲突、租约和确认回归测试。

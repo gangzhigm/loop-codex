@@ -200,7 +200,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         result = validate_database(database)
         database.close()
         self.assertTrue(result["ok"], result["errors"])
-        self.assertEqual(result["schema_version"], "3.4.0")
+        self.assertEqual(result["schema_version"], "3.5.0")
 
     def test_fresh_schema_has_capability_routing_and_execution_snapshot(self) -> None:
         database = connect(self.db_path)
@@ -472,7 +472,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         database.execute("UPDATE scope_locks SET lease_expires_at='2000-01-01T00:00:00+08:00' WHERE execution_id='exec-old'")
         database.close()
         pending = self.claim("exec-blocked", runtime_environment="codex_cli")
-        self.assertEqual(pending["outcome"], "NO_TASK")
+        self.assertEqual(pending["outcome"], "RECOVERY_REQUIRED")
         self.assertEqual(pending["recovery_required"][0]["recovery_confirmation"], "runner_confirmed_terminated")
         recovered = self.run_ctl("recover", "exec-old", "--runner-confirmed-terminated")
         self.assertEqual(recovered["outcome"], "RECOVERED")
@@ -521,6 +521,90 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertTrue(timeout["attempt_timed_out"])
         self.assertFalse(timeout["heartbeat_stalled"])
         self.assertFalse(timeout["lease_expired"])
+        database = connect(self.db_path)
+        execution = database.execute(
+            "SELECT status, outcome, recovery_required FROM executions WHERE execution_id='timed-out-execution'"
+        ).fetchone()
+        task = database.execute("SELECT status FROM tasks WHERE id='TIMED-OUT'").fetchone()
+        lock = database.execute(
+            "SELECT status FROM scope_locks WHERE execution_id='timed-out-execution'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(execution), ("TIMED_OUT", "INFRASTRUCTURE_TIMEOUT", 1))
+        self.assertEqual(task["status"], "WAITING_HUMAN")
+        self.assertEqual(lock["status"], "QUARANTINED")
+
+    def test_stalled_then_attempt_timeout_advances_without_reoccupying_capacity(self) -> None:
+        self.add_task("STALE-THEN-TIMEOUT", "project-1")
+        self.claim("exec-stale-timeout")
+        self.add_task("OTHER-SCOPE", "project-2", priority="low")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE executions SET heartbeat_at='2000-01-01T00:00:00+08:00', "
+            "lease_expires_at='2999-01-01T00:00:00+08:00' WHERE execution_id='exec-stale-timeout'"
+        )
+        database.close()
+
+        other = self.claim("exec-other-scope")
+        self.assertEqual(other["outcome"], "CLAIMED")
+        database = connect(self.db_path)
+        self.assertEqual(
+            database.execute(
+                "SELECT status FROM executions WHERE execution_id='exec-stale-timeout'"
+            ).fetchone()[0],
+            "STALLED",
+        )
+        self.assertEqual(
+            database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0],
+            1,
+        )
+        database.execute(
+            "UPDATE executions SET started_at='2000-01-01T00:00:00+08:00' "
+            "WHERE execution_id='exec-stale-timeout'"
+        )
+        database.close()
+
+        result = self.claim("exec-detect-timeout")
+        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED")
+        recovery = result["recovery_required"][0]
+        self.assertEqual(recovery["execution_status"], "TIMED_OUT")
+        database = connect(self.db_path)
+        self.assertEqual(
+            database.execute(
+                "SELECT status FROM executions WHERE execution_id='exec-stale-timeout'"
+            ).fetchone()[0],
+            "TIMED_OUT",
+        )
+        self.assertEqual(
+            database.execute(
+                "SELECT status FROM scope_locks WHERE execution_id='exec-stale-timeout'"
+            ).fetchone()[0],
+            "QUARANTINED",
+        )
+        self.assertEqual(
+            database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0],
+            1,
+        )
+        database.close()
+
+    def test_lease_expiry_is_independent_from_healthy_heartbeat(self) -> None:
+        self.add_task("LEASE-FIRST", "project-1")
+        self.claim("exec-lease-first")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE executions SET heartbeat_at=?, lease_expires_at='2000-01-01T00:00:00+08:00' "
+            "WHERE execution_id='exec-lease-first'",
+            (now_shanghai(),),
+        )
+        database.close()
+
+        result = self.claim("exec-lease-detector")
+
+        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED")
+        recovery = result["recovery_required"][0]
+        self.assertTrue(recovery["lease_expired"])
+        self.assertFalse(recovery["heartbeat_stalled"])
+        self.assertFalse(recovery["attempt_timed_out"])
 
     def test_codex_stall_requires_human_safe_recovery_and_never_duplicates_scope(self) -> None:
         self.add_task("STALLED", "project-1")
@@ -542,17 +626,18 @@ class LoopConcurrencyTests(unittest.TestCase):
         database = connect(self.db_path)
         self.assertEqual(
             database.execute("SELECT status FROM executions WHERE execution_id='exec-stalled'").fetchone()[0],
-            "RUNNING",
+            "STALLED",
         )
         self.assertEqual(
             database.execute("SELECT count(*) FROM scope_locks WHERE execution_id='exec-stalled'").fetchone()[0],
             1,
         )
         human_state = database.execute(
-            "SELECT human_required, human_question FROM tasks WHERE id='STALLED'"
+            "SELECT status, human_required, human_question FROM tasks WHERE id='STALLED'"
         ).fetchone()
+        self.assertEqual(human_state["status"], "WAITING_HUMAN")
         self.assertEqual(human_state["human_required"], 1)
-        self.assertIn("确认旧会话", human_state["human_question"])
+        self.assertIn("确认旧 Codex 客户端会话", human_state["human_question"])
         database.close()
         error = self.run_ctl_error("recover", "exec-stalled", "--runner-confirmed-terminated")
         self.assertIn("人工确认", error["message"])
@@ -600,6 +685,78 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(statuses["CONFLICT-2"], "WAITING_CONFLICT")
         recovered = self.run_ctl("recover", "exec-blocker", "--human-confirmed-safe")
         self.assertEqual(set(recovered["requeued_conflicts"]), {"CONFLICT-1", "CONFLICT-2"})
+
+    def test_recovery_failed_and_wait_actions_are_idempotent(self) -> None:
+        self.add_task("RECOVERY-ACTIONS", "project-1")
+        self.claim("exec-recovery-actions")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE executions SET heartbeat_at='2000-01-01T00:00:00+08:00' "
+            "WHERE execution_id='exec-recovery-actions'"
+        )
+        database.close()
+        self.claim("exec-recovery-detector")
+
+        waiting = self.run_ctl(
+            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "wait"
+        )
+        self.assertEqual(waiting["outcome"], "WAITING")
+        repeated_wait = self.run_ctl(
+            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "wait"
+        )
+        self.assertEqual(repeated_wait["outcome"], "ALREADY_WAITING")
+        failed = self.run_ctl(
+            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "failed"
+        )
+        self.assertEqual(failed["task_status"], "FAILED")
+        repeated_failed = self.run_ctl(
+            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "failed"
+        )
+        self.assertEqual(repeated_failed["outcome"], "ALREADY_RECOVERED")
+        database = connect(self.db_path)
+        history_count = database.execute(
+            "SELECT count(*) FROM task_history WHERE task_id='RECOVERY-ACTIONS' "
+            "AND actor='human-safe-recovery'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(history_count, 2)
+
+    def test_late_heartbeat_and_finish_are_fenced_after_quarantine_and_requeue(self) -> None:
+        self.add_task("FENCED", "project-1")
+        self.claim("exec-fenced-old")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE executions SET heartbeat_at='2000-01-01T00:00:00+08:00' "
+            "WHERE execution_id='exec-fenced-old'"
+        )
+        database.close()
+        self.claim("exec-fence-detector")
+
+        heartbeat_error = self.run_ctl_error("heartbeat", "exec-fenced-old", "FENCED")
+        report_path = Path(self.temporary.name) / "late-finish.json"
+        report_path.write_text(
+            json.dumps({"status": "SUCCEEDED", "summary": "late", "verification": ["late"]}),
+            encoding="utf-8",
+        )
+        finish_error = self.run_ctl_error(
+            "finish", "exec-fenced-old", "FENCED", str(report_path)
+        )
+        self.assertIn("活动 execution", heartbeat_error["message"])
+        self.assertIn("活动 execution", finish_error["message"])
+
+        self.run_ctl(
+            "recover", "exec-fenced-old", "--human-confirmed-safe", "--action", "requeue"
+        )
+        claimed = self.claim("exec-fenced-new")
+        self.assertEqual(claimed["task"]["id"], "FENCED")
+        late_heartbeat = self.run_ctl_error("heartbeat", "exec-fenced-old", "FENCED")
+        self.assertIn("活动 execution", late_heartbeat["message"])
+        database = connect(self.db_path)
+        lock = database.execute(
+            "SELECT execution_id, status FROM scope_locks WHERE task_id='FENCED'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(lock), ("exec-fenced-new", "ACTIVE"))
 
     def test_succeeded_requires_manual_confirmation(self) -> None:
         self.add_task("CONFIRM", "project-1")
@@ -700,6 +857,60 @@ class LoopConcurrencyTests(unittest.TestCase):
                 self.assertEqual(result["outcome"], "ERROR")
                 self.assertIn("只有终态任务可以归档", result["message"])
 
+    def test_migrate_schema_34_preserves_active_execution_without_guessing_quarantine(self) -> None:
+        legacy_path = Path(self.temporary.name) / "schema-34-active.sqlite3"
+        database = connect(legacy_path)
+        database.executescript(self.schema_34())
+        stamp = now_shanghai()
+        database.execute(
+            """INSERT INTO tasks(
+              id, title, status, priority, capability_level, runtime_environment, provider_id,
+              execution_policy, assigned_agent, created_at, started_at, updated_at, heartbeat_at, attempt
+            ) VALUES('ACTIVE-34', 'active', 'RUNNING', 'blocker', 'L5', 'codex_automation', NULL,
+              'automatic', 'active-34-execution', ?, ?, ?, ?, 1)""",
+            (stamp, stamp, stamp, stamp),
+        )
+        database.execute(
+            "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) "
+            "VALUES('ACTIVE-34', 0, 'local-agent-loop/scripts/loopctl.py', 'project:local-agent-loop')"
+        )
+        database.execute(
+            """INSERT INTO executions(
+              execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at,
+              runtime_environment, provider_id, capability_level, execution_policy, model, reasoning,
+              attempt_timeout_seconds, max_retries
+            ) VALUES('active-34-execution', 'ACTIVE-34', 'RUNNING', ?, ?, '2999-01-01T00:00:00+08:00',
+              'codex_automation', NULL, 'L5', 'automatic', 'gpt-5.6-sol', 'xhigh', 14400, 0)""",
+            (stamp, stamp),
+        )
+        database.execute(
+            """INSERT INTO scope_locks(
+              scope_key, task_id, execution_id, acquired_at, lease_expires_at
+            ) VALUES('project:local-agent-loop', 'ACTIVE-34', 'active-34-execution', ?,
+              '2999-01-01T00:00:00+08:00')""",
+            (stamp,),
+        )
+        database.close()
+
+        migrated = self.run_ctl("migrate", db_path=legacy_path)
+
+        self.assertEqual(migrated["from"], "3.4.0")
+        self.assertEqual(migrated["to"], "3.5.0")
+        self.assertEqual(migrated["active_executions_preserved"], 1)
+        self.assertEqual(migrated["quarantines_created"], 0)
+        database = connect(legacy_path)
+        execution = database.execute(
+            "SELECT status, recovery_required FROM executions WHERE execution_id='active-34-execution'"
+        ).fetchone()
+        lock = database.execute(
+            "SELECT status, quarantined_at FROM scope_locks WHERE execution_id='active-34-execution'"
+        ).fetchone()
+        validation = validate_database(database)
+        database.close()
+        self.assertEqual(tuple(execution), ("RUNNING", 0))
+        self.assertEqual(tuple(lock), ("ACTIVE", None))
+        self.assertTrue(validation["ok"], validation["errors"])
+
     def test_migrate_schema_33_maps_routing_and_snapshots_execution(self) -> None:
         legacy_path = Path(self.temporary.name) / "schema-33.sqlite3"
         database = connect(legacy_path)
@@ -723,7 +934,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         migrated = self.run_ctl("migrate", db_path=legacy_path)
         self.assertEqual(migrated["outcome"], "MIGRATED")
         self.assertEqual(migrated["from"], "3.3.0")
-        self.assertEqual(migrated["to"], "3.4.0")
+        self.assertEqual(migrated["to"], "3.5.0")
         self.assertEqual(migrated["tasks_mapped"], 2)
         self.assertEqual(migrated["executions_snapshotted"], 1)
         database = connect(legacy_path)
@@ -910,7 +1121,7 @@ class LoopConcurrencyTests(unittest.TestCase):
 
         migrated = self.run_ctl("migrate", db_path=schema_32_path)
         self.assertEqual(migrated["from"], "3.2.0")
-        self.assertEqual(migrated["to"], "3.4.0")
+        self.assertEqual(migrated["to"], "3.5.0")
         self.assertEqual(migrated["tasks_mapped"], 2)
         self.assertEqual(migrated["executions_snapshotted"], 1)
 
@@ -1013,8 +1224,40 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(status, "PENDING")
 
     @staticmethod
-    def schema_33() -> str:
+    def schema_34() -> str:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        schema = schema.replace("PRAGMA user_version = 30500;", "PRAGMA user_version = 30400;")
+        schema = schema.replace(
+            "  status TEXT NOT NULL CHECK (status IN (\n"
+            "    'RUNNING', 'FINISHED', 'EXPIRED', 'STALLED', 'TIMED_OUT'\n"
+            "  )),\n",
+            "  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'FINISHED', 'EXPIRED')),\n",
+        )
+        schema = schema.replace(
+            "  termination_reason TEXT,\n"
+            "  recovery_required INTEGER NOT NULL DEFAULT 0 CHECK (recovery_required IN (0, 1)),\n"
+            "  recovered_at TEXT,\n"
+            "  recovery_action TEXT CHECK (recovery_action IS NULL OR recovery_action IN (\n"
+            "    'requeue', 'failed', 'wait'\n"
+            "  )),\n",
+            "",
+        )
+        schema = schema.replace(
+            "  lease_expires_at TEXT NOT NULL,\n"
+            "  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'QUARANTINED')),\n"
+            "  quarantined_at TEXT,\n"
+            "  quarantine_reason TEXT,\n"
+            "  CHECK (\n"
+            "    (status = 'ACTIVE' AND quarantined_at IS NULL AND quarantine_reason IS NULL)\n"
+            "    OR (status = 'QUARANTINED' AND quarantined_at IS NOT NULL AND length(trim(quarantine_reason)) > 0)\n"
+            "  )\n",
+            "  lease_expires_at TEXT NOT NULL\n",
+        )
+        return schema
+
+    @staticmethod
+    def schema_33() -> str:
+        schema = LoopConcurrencyTests.schema_34()
         schema = schema.replace("PRAGMA user_version = 30400;", "PRAGMA user_version = 30300;")
         schema = schema.replace(
             "  capability_level TEXT NOT NULL DEFAULT 'L2' CHECK (capability_level IN (\n"
@@ -1059,6 +1302,17 @@ class LoopConcurrencyTests(unittest.TestCase):
             "    OR (runtime_environment <> 'self_hosted_agent' AND provider_id IS NULL)\n"
             "  )\n",
             "  outcome TEXT\n",
+        )
+        schema = schema.replace(
+            "  lease_expires_at TEXT NOT NULL,\n"
+            "  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'QUARANTINED')),\n"
+            "  quarantined_at TEXT,\n"
+            "  quarantine_reason TEXT,\n"
+            "  CHECK (\n"
+            "    (status = 'ACTIVE' AND quarantined_at IS NULL AND quarantine_reason IS NULL)\n"
+            "    OR (status = 'QUARANTINED' AND quarantined_at IS NOT NULL AND length(trim(quarantine_reason)) > 0)\n"
+            "  )\n",
+            "  lease_expires_at TEXT NOT NULL\n",
         )
         schema = schema.replace(
             "  ON tasks(status, runtime_environment, provider_id, capability_level, execution_policy, priority, created_at, id);",

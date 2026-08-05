@@ -15,3 +15,4 @@
 13. 保留用户已有改动，遵守目标项目的 `AGENTS.md`，只修改任务 scope。
 14. 自动执行不能生成 `CONFIRMED`；它只能由人工复核后的 `confirm` 命令产生。
 15. 所有运行环境共享最多 8 个活动 execution，并同时受各平台 5 个活动 execution 上限约束；运行环境、优先级、能力等级、Provider、执行策略、依赖和 scope 锁彼此独立。
+16. Codex 客户端 execution 的 heartbeat stalled、租约过期和 attempt timeout 独立判定；停滞或超时后 execution 必须离开活动容量，任务进入 `WAITING_HUMAN`，scope 进入 `QUARANTINED`。只有人工确认旧会话已结束后才能用 `recover` 释放隔离；迟到 heartbeat/finish 必须拒绝。

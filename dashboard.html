@@ -616,12 +616,14 @@
     .copy-icon { font-size: 17px; line-height: 1; }
 
     .task-action-heading,
-    .task-action-cell { text-align: center; }
+    .task-action-cell {
+      padding-inline: 8px 24px;
+      text-align: center;
+    }
 
-    .archive-button {
+    .archive-button,
+    .recovery-button {
       display: inline-flex;
-      width: 62px;
-      height: 32px;
       align-items: center;
       justify-content: center;
       gap: 4px;
@@ -636,10 +638,19 @@
       font-weight: 700;
     }
 
-    .archive-button:hover { border-color: var(--accent); background: var(--accent-soft); }
-    .archive-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .archive-button:disabled { cursor: wait; opacity: 0.58; }
+    .archive-button { width: 62px; height: 32px; }
+    .recovery-button { width: 78px; height: 32px; }
+
+    .archive-button:hover,
+    .recovery-button:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .archive-button:focus-visible,
+    .recovery-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .archive-button:disabled,
+    .recovery-button:disabled { cursor: wait; opacity: 0.58; }
     .archive-button.is-submitting .archive-icon { animation: archive-submit 0.8s linear infinite; }
+    .recovery-button { color: #8a4b08; }
+    .recovery-state { color: #8a4b08; font-size: 11px; font-weight: 700; }
+    .recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .archive-icon { font-size: 15px; line-height: 1; }
     @keyframes archive-submit { to { transform: rotate(360deg); } }
     .copy-feedback {
@@ -1051,7 +1062,7 @@
       right: 0;
       display: flex;
       flex-direction: column;
-      width: min(440px, 100vw);
+      width: min(440px, 100%);
       height: 100dvh;
       border-left: 1px solid var(--line-strong);
       background: var(--surface);
@@ -1465,7 +1476,11 @@
       .task-time-row { grid-template-columns: 30px minmax(0, 1fr); }
       .conflict-popover { right: auto; left: 0; }
       .project-cell { width: 100%; align-items: flex-start; }
-      td.task-action-cell { align-content: center; justify-items: start; }
+      td.task-action-cell {
+        align-content: center;
+        justify-items: start;
+        padding: 0 12px 0 0;
+      }
       td.task-action-cell:empty { min-height: 0; }
       td.task-action-cell:empty::before { display: none; }
       .side-section { grid-template-columns: minmax(0, 1fr); }
@@ -1553,7 +1568,7 @@
                 <th style="width: 15%"><span class="table-header-label">运行环境 <button id="environmentFilter" class="header-filter-button" type="button" aria-label="筛选运行环境" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选运行环境"></button></span></th>
                 <th style="width: 15%"><span class="table-header-label">项目 <button id="projectFilter" class="header-filter-button" type="button" aria-label="筛选项目" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选项目"></button></span></th>
                 <th style="width: 15%">时间</th>
-                <th class="task-action-heading" style="width: 7%">操作</th>
+                <th class="task-action-heading" style="width: 10%">操作</th>
               </tr>
             </thead>
             <tbody id="taskRows"></tbody>
@@ -1583,12 +1598,21 @@
   </dialog>
 
   <button id="settingsScrim" class="settings-scrim" type="button" aria-label="关闭设置" aria-hidden="true" tabindex="-1"></button>
-  <aside id="settingsDrawer" class="settings-drawer" aria-hidden="true" aria-labelledby="settingsDrawerTitle">
+  <aside id="settingsDrawer" class="settings-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="settingsDrawerTitle">
     <div class="settings-drawer-header">
-      <h2 id="settingsDrawerTitle">设置</h2>
+      <h2 id="settingsDrawerTitle">Provider 密钥</h2>
       <button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置" title="关闭">×</button>
     </div>
-    <div class="settings-drawer-body"></div>
+    <div class="settings-drawer-body">
+      <div class="secret-drawer-summary">
+        <strong>SecretStore</strong>
+        <span class="local-only-label">仅限本机同源</span>
+      </div>
+      <div id="secretApiNotice" class="secret-api-notice" role="status" aria-live="polite">打开面板后读取状态</div>
+      <div id="secretProviderList" class="secret-provider-list" aria-live="polite">
+        <div class="secret-empty">尚未读取 Provider 状态</div>
+      </div>
+    </div>
   </aside>
 
   <script>
@@ -1618,9 +1642,17 @@
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
     const HEADER_FILTER_STATUSES = ["DRAFT", "PENDING", "RUNNING", "WAITING_CONFLICT", "WAITING_HUMAN", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"];
     const HEADER_FILTER_PRIORITIES = ["blocker", "critical", "high", "medium", "low"];
-    const TASK_SCHEMA_VERSION = "3.4.0";
+    const TASK_SCHEMA_VERSION = "3.5.0";
     const STATE_ENDPOINT = "/api/state";
     const TASK_ACTION_ENDPOINT = "/api/task-action";
+    const SECRET_API_ENDPOINT = "/api/secrets";
+    const SECRET_STATUS_LABELS = {
+      not_configured: "未配置",
+      configured_unverified: "已配置 · 未验证",
+      valid: "有效",
+      invalid: "无效",
+      storage_unavailable: "存储不可用"
+    };
     const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
 
     const elements = {
@@ -1630,6 +1662,8 @@
       closeSettings: document.querySelector("#closeSettings"),
       settingsDrawer: document.querySelector("#settingsDrawer"),
       settingsScrim: document.querySelector("#settingsScrim"),
+      secretApiNotice: document.querySelector("#secretApiNotice"),
+      secretProviderList: document.querySelector("#secretProviderList"),
       notice: document.querySelector("#notice"),
       noticeText: document.querySelector("#noticeText"),
       dismissNotice: document.querySelector("#dismissNotice"),
@@ -1673,6 +1707,11 @@
     let activeHeaderFilter = null;
     let availableProjects = [];
     let archivingTaskId = null;
+    let recoveringExecutionId = null;
+    let secretProviders = [];
+    let secretCsrfToken = null;
+    let secretRequestInFlight = false;
+    let activeSecretForm = null;
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -1759,8 +1798,225 @@
       elements.settingsScrim.classList.toggle("is-visible", open);
       elements.settingsScrim.setAttribute("aria-hidden", String(!open));
       elements.openSettings.setAttribute("aria-expanded", String(open));
-      if (open) elements.closeSettings.focus();
-      else elements.openSettings.focus();
+      if (open) {
+        elements.closeSettings.focus();
+        loadSecretProviders();
+      } else {
+        clearSecretCandidateInputs();
+        activeSecretForm = null;
+        elements.openSettings.focus();
+      }
+    }
+
+    function setSecretNotice(message, mode = "") {
+      elements.secretApiNotice.textContent = message;
+      elements.secretApiNotice.classList.toggle("is-error", mode === "error");
+      elements.secretApiNotice.classList.toggle("is-success", mode === "success");
+    }
+
+    function clearSecretCandidateInputs() {
+      elements.settingsDrawer.querySelectorAll('input[type="password"], input[type="text"][data-secret-candidate]').forEach((input) => {
+        input.value = "";
+      });
+      elements.settingsDrawer.querySelectorAll("form[data-secret-form]").forEach((form) => form.reset());
+    }
+
+    function providerDisplayName(providerId) {
+      return providerId === "deepseek" ? "DeepSeek" : providerId;
+    }
+
+    function secretValidationLabel(provider) {
+      if (!provider.last_validated_at) return "未验证";
+      const scope = provider.validation_scope === "connection" ? "连接" : "本地";
+      return `${scope} · ${formatDate(provider.last_validated_at)}`;
+    }
+
+    function secretFormMarkup(provider) {
+      if (!activeSecretForm || activeSecretForm.providerId !== provider.provider_id) return "";
+      const action = activeSecretForm.action;
+      const isReplacement = action === "rotate";
+      const inputId = `${provider.provider_id}-secret-candidate`;
+      return `
+        <form class="secret-form" data-secret-form data-provider-id="${escapeHtml(provider.provider_id)}" data-secret-form-action="${escapeHtml(action)}">
+          <label class="secret-field-label" for="${escapeHtml(inputId)}">${isReplacement ? "新密钥" : "密钥"}</label>
+          <div class="secret-input-row">
+            <input id="${escapeHtml(inputId)}" class="secret-input" data-secret-candidate type="password" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="8" maxlength="8192" required aria-describedby="${escapeHtml(inputId)}-note">
+            <button class="secret-toggle" type="button" data-toggle-secret aria-controls="${escapeHtml(inputId)}" aria-pressed="false">显示</button>
+          </div>
+          <span id="${escapeHtml(inputId)}-note" class="muted">输入不会写入浏览器存储</span>
+          <label class="secret-connect-option"><input type="checkbox" data-connect-after-save> <span>保存后执行连接验证，可能产生一次 Provider 调用</span></label>
+          <div class="secret-form-actions">
+            <button class="secret-action-button" type="button" data-cancel-secret-form>取消</button>
+            <button class="secret-action-button primary" type="submit"${secretRequestInFlight ? " disabled aria-busy=\"true\"" : ""}>${isReplacement ? "确认替换" : "保存"}</button>
+          </div>
+        </form>`;
+    }
+
+    function secretActionsMarkup(provider) {
+      if (provider.status === "storage_unavailable") return "";
+      const disabled = secretRequestInFlight ? " disabled" : "";
+      if (!provider.configured) {
+        return `<button class="secret-action-button primary" type="button" data-secret-action="set" data-provider-id="${escapeHtml(provider.provider_id)}"${disabled}>配置</button>`;
+      }
+      return `
+        <button class="secret-action-button" type="button" data-secret-action="rotate" data-provider-id="${escapeHtml(provider.provider_id)}"${disabled}>替换</button>
+        <button class="secret-action-button" type="button" data-secret-action="verify-local" data-provider-id="${escapeHtml(provider.provider_id)}"${disabled}>本地验证</button>
+        <button class="secret-action-button" type="button" data-secret-action="verify-connect" data-provider-id="${escapeHtml(provider.provider_id)}"${disabled}>连接验证</button>
+        <button class="secret-action-button danger" type="button" data-secret-action="delete" data-provider-id="${escapeHtml(provider.provider_id)}"${disabled}>删除</button>`;
+    }
+
+    function renderSecretProviders() {
+      if (!secretProviders.length) {
+        elements.secretProviderList.innerHTML = '<div class="secret-empty">没有可管理的 Provider</div>';
+        return;
+      }
+      elements.secretProviderList.innerHTML = secretProviders.map((provider) => `
+        <section class="secret-provider" data-secret-provider="${escapeHtml(provider.provider_id)}">
+          <div class="secret-provider-header">
+            <div><h3 class="secret-provider-name">${escapeHtml(providerDisplayName(provider.provider_id))}</h3><div class="secret-provider-id">${escapeHtml(provider.provider_id)}</div></div>
+            <span class="secret-status" data-state="${escapeHtml(provider.status)}">${escapeHtml(SECRET_STATUS_LABELS[provider.status] ?? "状态未知")}</span>
+          </div>
+          <dl class="secret-meta">
+            <dt>存储后端</dt><dd>${escapeHtml(provider.backend || "--")}</dd>
+            <dt>最近验证</dt><dd>${escapeHtml(secretValidationLabel(provider))}</dd>
+            <dt>持久化</dt><dd>${provider.persistent ? "是" : "否"}</dd>
+          </dl>
+          ${provider.repair ? `<p class="secret-repair">${escapeHtml(provider.repair)}</p>` : ""}
+          <div class="secret-actions">${secretActionsMarkup(provider)}</div>
+          ${secretFormMarkup(provider)}
+        </section>
+      `).join("");
+    }
+
+    async function loadSecretProviders({ preserveNotice = false } = {}) {
+      if (!preserveNotice) setSecretNotice("正在读取 SecretStore 状态");
+      try {
+        const response = await fetch(SECRET_API_ENDPOINT, {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Accept": "application/json" }
+        });
+        const payload = await response.json();
+        const csrfToken = response.headers.get("X-CSRF-Token");
+        if (!response.ok || payload?.ok !== true || !Array.isArray(payload.providers) || !csrfToken) {
+          throw new Error(payload?.error || `HTTP ${response.status}`);
+        }
+        secretProviders = payload.providers;
+        secretCsrfToken = csrfToken;
+        renderSecretProviders();
+        if (!preserveNotice) setSecretNotice("SecretStore 状态已更新", "success");
+        return true;
+      } catch (error) {
+        secretProviders = [];
+        secretCsrfToken = null;
+        renderSecretProviders();
+        if (!preserveNotice) {
+          setSecretNotice(`SecretStore 状态读取失败：${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+        return false;
+      }
+    }
+
+    async function mutateSecret(providerId, action, values = {}) {
+      if (secretRequestInFlight || !secretCsrfToken || !crypto.randomUUID) return false;
+      secretRequestInFlight = true;
+      renderSecretProviders();
+      const body = {
+        provider_id: providerId,
+        action,
+        request_id: crypto.randomUUID(),
+        ...values
+      };
+      let requestBody = JSON.stringify(body);
+      if (Object.hasOwn(body, "secret")) body.secret = "";
+      try {
+        const pendingRequest = fetch(SECRET_API_ENDPOINT, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": secretCsrfToken
+          },
+          body: requestBody
+        });
+        requestBody = "";
+        const response = await pendingRequest;
+        let payload = null;
+        try { payload = await response.json(); } catch { /* HTTP 状态提供降级错误。 */ }
+        if (!response.ok || payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+        activeSecretForm = null;
+        await loadSecretProviders({ preserveNotice: true });
+        setSecretNotice("SecretStore 操作已完成", "success");
+        return true;
+      } catch (error) {
+        await loadSecretProviders({ preserveNotice: true });
+        setSecretNotice(`SecretStore 操作失败：${error instanceof Error ? error.message : String(error)}`, "error");
+        return false;
+      } finally {
+        requestBody = "";
+        secretRequestInFlight = false;
+        clearSecretCandidateInputs();
+        renderSecretProviders();
+      }
+    }
+
+    async function submitSecretForm(form) {
+      const providerId = form.dataset.providerId;
+      const action = form.dataset.secretFormAction;
+      const candidateInput = form.querySelector("[data-secret-candidate]");
+      const connect = form.querySelector("[data-connect-after-save]").checked;
+      let candidate = candidateInput.value;
+      if (candidate.length < 8) {
+        setSecretNotice("密钥格式无效", "error");
+        candidateInput.focus();
+        return;
+      }
+      if (action === "rotate" && !window.confirm(`确认替换 ${providerDisplayName(providerId)} 的现有密钥？`)) return;
+      if (connect && !window.confirm("连接验证可能产生一次 Provider 调用。确认继续？")) return;
+      const confirmation = action === "rotate"
+        ? (connect ? "ROTATE_CONNECT" : "ROTATE")
+        : (connect ? "CONNECT" : "SET");
+      candidateInput.value = "";
+      form.reset();
+      const pending = mutateSecret(providerId, action, { secret: candidate, connect, confirmation });
+      candidate = "";
+      await pending;
+    }
+
+    async function runSecretAction(providerId, action) {
+      if (action === "set" || action === "rotate") {
+        activeSecretForm = { providerId, action };
+        renderSecretProviders();
+        elements.settingsDrawer.querySelector("[data-secret-candidate]")?.focus();
+        return;
+      }
+      if (action === "delete") {
+        if (!window.confirm(`确认删除 ${providerDisplayName(providerId)} 的密钥？此操作不能撤销。`)) return;
+        await mutateSecret(providerId, "delete", { confirmation: "DELETE" });
+        return;
+      }
+      const connect = action === "verify-connect";
+      if (connect && !window.confirm("连接验证可能产生一次 Provider 调用。确认继续？")) return;
+      await mutateSecret(providerId, "verify", {
+        connect,
+        confirmation: connect ? "CONNECT" : "VERIFY"
+      });
+    }
+
+    function trapSettingsFocus(event) {
+      if (event.key !== "Tab" || !elements.settingsDrawer.classList.contains("is-open")) return;
+      const focusable = [...elements.settingsDrawer.querySelectorAll('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+        .filter((item) => item.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
 
     function formatDuration(start, end) {
@@ -2088,6 +2344,7 @@
       if (!candidate?.workspace || !Number.isInteger(candidate.workspace.revision)) errors.push("workspace.revision 无效");
       if (!Array.isArray(candidate?.tasks)) errors.push("tasks 必须是数组");
       if (!Array.isArray(candidate?.agents)) errors.push("agents 必须是数组");
+      if (!Array.isArray(candidate?.recoveries)) errors.push("recoveries 必须是数组");
       const environmentConfig = candidate?.runtime_config?.runtime_environments;
       if (!environmentConfig || typeof environmentConfig !== "object" || Array.isArray(environmentConfig) || !Object.keys(environmentConfig).length) {
         errors.push("runtime_config.runtime_environments 无效");
@@ -2127,6 +2384,13 @@
         if (!CAPABILITY_LEVELS.includes(agent?.capability_level)) errors.push(`活动 execution ${agent?.id ?? index} 能力等级无效`);
         if (agent?.runtime_environment === "self_hosted_agent" && (!agent?.provider_id || !executionConfig(agent.runtime_environment, agent.provider_id, agent.capability_level, candidate))) {
           errors.push(`活动 execution ${agent?.id ?? index} Provider 缺失或未知`);
+        }
+      }
+      for (const [index, recovery] of (candidate?.recoveries ?? []).entries()) {
+        if (!recovery?.execution_id || !ids.has(recovery?.task_id)) errors.push(`恢复记录 ${index} 标识无效`);
+        if (!["STALLED", "TIMED_OUT"].includes(recovery?.execution_status)) errors.push(`恢复记录 ${index} execution 状态无效`);
+        if (recovery?.scope_status !== "QUARANTINED" || !Array.isArray(recovery?.scope_keys) || !recovery.scope_keys.length) {
+          errors.push(`恢复记录 ${index} scope 隔离状态无效`);
         }
       }
       if (errors.length) throw new Error(errors.join("；"));
@@ -2200,10 +2464,56 @@
       return currentFilter === "closed" && !isArchived(task) && CLOSED_STATUSES.has(task.status);
     }
 
+    function recoveryForTask(task) {
+      return (state?.recoveries ?? []).find((recovery) => recovery.task_id === task.id) ?? null;
+    }
+
     function renderTaskAction(task) {
+      const recovery = recoveryForTask(task);
+      if (recovery) {
+        const submitting = recoveringExecutionId === recovery.execution_id;
+        return `<button class="recovery-button" type="button" data-open-recovery-task="${escapeHtml(task.id)}" aria-label="处置隔离任务 ${escapeHtml(task.id)}" title="处置隔离"${submitting ? " disabled aria-busy=\"true\"" : ""}><span aria-hidden="true">!</span><span>处置</span></button>`;
+      }
       if (!canArchiveTask(task)) return "";
       const submitting = archivingTaskId === task.id;
       return `<button class="archive-button${submitting ? " is-submitting" : ""}" type="button" data-archive-task-id="${escapeHtml(task.id)}" aria-label="归档任务 ${escapeHtml(task.id)}" title="归档任务"${submitting ? " disabled aria-busy=\"true\"" : ""}><span class="archive-icon" aria-hidden="true">${submitting ? "↻" : "⇩"}</span><span>归档</span></button>`;
+    }
+
+    async function recoverTask(taskId, executionId, recoveryAction) {
+      const task = state?.tasks?.find((candidate) => candidate.id === taskId);
+      const recovery = recoveryForTask(task ?? {});
+      if (!task || !recovery || recovery.execution_id !== executionId || recoveringExecutionId !== null) return;
+      const labels = { requeue: "释放隔离并重新排队", failed: "释放隔离并标记失败", wait: "继续等待并保持隔离" };
+      if (!window.confirm(`确认旧 Codex 客户端会话 ${executionId} 已结束，并执行“${labels[recoveryAction]}”？`)) return;
+      recoveringExecutionId = executionId;
+      if (state) renderTasks(state.tasks);
+      try {
+        const response = await fetch(TASK_ACTION_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            task_id: task.id,
+            action: "recover",
+            execution_id: executionId,
+            recovery_action: recoveryAction,
+            row_version: task.row_version,
+            confirmed_safe: true
+          })
+        });
+        let payload = null;
+        try { payload = await response.json(); } catch { /* HTTP 状态提供降级错误。 */ }
+        if (!response.ok || payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+        elements.taskDialog.close();
+        const refreshed = await refreshState();
+        if (!refreshed) showNotice("恢复处置已提交，但状态刷新失败，请稍后重新加载。");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await refreshState();
+        showNotice(`恢复处置失败：${message}`);
+      } finally {
+        recoveringExecutionId = null;
+        if (state) renderTasks(state.tasks);
+      }
     }
 
     async function archiveTask(taskId) {
@@ -2312,6 +2622,7 @@
           </td>
           <td class="status-cell" data-label="状态"><div class="status-stack">
             <div class="status-badge-row"><span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span>${renderDependencyIndicator(task, tasks)}</div>
+            ${recoveryForTask(task) ? `<span class="recovery-state">${escapeHtml(recoveryForTask(task).execution_status)} · scope 隔离</span>` : ""}
             ${isArchived(task) ? `<span class="archive-time">归档于 ${escapeHtml(formatDate(task.archived_at, false))}</span>` : ""}
             ${renderConflictIndicator(task, tasks)}
           </div></td>
@@ -2413,6 +2724,8 @@
       const result = task.result?.summary || task.result?.error
         ? `<section class="detail-block"><h3>结果</h3><p>${escapeHtml(task.result.summary ?? task.result.error)}</p></section>`
         : "";
+      const recovery = recoveryForTask(task);
+      const recoveryPanel = recovery ? `<section class="detail-block"><h3>安全恢复</h3><p>execution ${escapeHtml(recovery.execution_id)} · ${escapeHtml(recovery.execution_status)}<br>scope ${escapeHtml(recovery.scope_status)} · 活动容量已释放<br>${escapeHtml(recovery.quarantine_reason ?? recovery.termination_reason ?? "等待安全确认")}</p><div class="recovery-actions"><button class="recovery-button" type="button" data-recovery-action="requeue" data-recovery-execution="${escapeHtml(recovery.execution_id)}" data-recovery-task="${escapeHtml(task.id)}">重新排队</button><button class="recovery-button" type="button" data-recovery-action="failed" data-recovery-execution="${escapeHtml(recovery.execution_id)}" data-recovery-task="${escapeHtml(task.id)}">标记失败</button><button class="recovery-button" type="button" data-recovery-action="wait" data-recovery-execution="${escapeHtml(recovery.execution_id)}" data-recovery-task="${escapeHtml(task.id)}">继续等待</button></div></section>` : "";
       const timeline = (task.history ?? []).slice().reverse().map((entry) => `
         <li><strong>${escapeHtml(STATUS_LABELS[entry.to] ?? entry.to)}</strong> · ${escapeHtml(entry.reason)}<time>${escapeHtml(formatDate(entry.at))} · ${escapeHtml(entry.actor)}</time></li>
       `).join("");
@@ -2437,6 +2750,7 @@
         ${listBlock("已完成", task.progress.completed)}
         ${listBlock("验收条件", task.acceptance)}
         ${intervention}
+        ${recoveryPanel}
         ${result}
         ${renderConflictDetails(task, state.tasks)}
         ${listBlock("验证记录", task.result?.verification)}
@@ -2449,6 +2763,32 @@
     elements.openSettings.addEventListener("click", () => setSettingsDrawer(true));
     elements.closeSettings.addEventListener("click", () => setSettingsDrawer(false));
     elements.settingsScrim.addEventListener("click", () => setSettingsDrawer(false));
+    elements.settingsDrawer.addEventListener("click", (event) => {
+      const toggle = event.target.closest("[data-toggle-secret]");
+      if (toggle) {
+        const input = document.getElementById(toggle.getAttribute("aria-controls"));
+        const show = input.type === "password";
+        input.type = show ? "text" : "password";
+        toggle.textContent = show ? "隐藏" : "显示";
+        toggle.setAttribute("aria-pressed", String(show));
+        input.focus();
+        return;
+      }
+      if (event.target.closest("[data-cancel-secret-form]")) {
+        clearSecretCandidateInputs();
+        activeSecretForm = null;
+        renderSecretProviders();
+        return;
+      }
+      const actionButton = event.target.closest("[data-secret-action]");
+      if (actionButton) runSecretAction(actionButton.dataset.providerId, actionButton.dataset.secretAction);
+    });
+    elements.settingsDrawer.addEventListener("submit", (event) => {
+      const form = event.target.closest("form[data-secret-form]");
+      if (!form) return;
+      event.preventDefault();
+      submitSecretForm(form);
+    });
     elements.dismissNotice.addEventListener("click", hideNotice);
     elements.search.addEventListener("input", (event) => {
       currentQuery = event.target.value.trim().toLocaleLowerCase("zh-CN");
@@ -2477,6 +2817,7 @@
       if (activeHeaderFilter && !elements.headerFilterMenu.contains(event.target) && !event.target.closest(".header-filter-button")) closeHeaderFilterMenu();
     });
     document.addEventListener("keydown", (event) => {
+      trapSettingsFocus(event);
       if (event.key === "Escape" && elements.settingsDrawer.classList.contains("is-open")) {
         event.preventDefault();
         setSettingsDrawer(false);
@@ -2528,12 +2869,18 @@
         archiveTask(archiveButton.dataset.archiveTaskId);
         return;
       }
+      const recoveryButton = event.target.closest("[data-open-recovery-task]");
+      if (recoveryButton) {
+        event.stopPropagation();
+        openTask(recoveryButton.dataset.openRecoveryTask);
+        return;
+      }
       if (event.target.closest(".conflict-summary")) return;
       const row = event.target.closest("tr[data-task-id]");
       if (row) openTask(row.dataset.taskId);
     });
     elements.taskRows.addEventListener("keydown", (event) => {
-      if (event.target.closest(".task-copy-button, .archive-button")) return;
+      if (event.target.closest(".task-copy-button, .archive-button, .recovery-button")) return;
       if (event.target.closest(".conflict-summary")) return;
       if (!["Enter", " "].includes(event.key)) return;
       const row = event.target.closest("tr[data-task-id]");
@@ -2546,6 +2893,11 @@
       if (heading) setExpandedSidePanel(heading);
     });
     elements.closeDialog.addEventListener("click", () => elements.taskDialog.close());
+    elements.dialogBody.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-recovery-action]");
+      if (!button) return;
+      recoverTask(button.dataset.recoveryTask, button.dataset.recoveryExecution, button.dataset.recoveryAction);
+    });
     elements.taskDialog.addEventListener("click", (event) => {
       if (event.target === elements.taskDialog) elements.taskDialog.close();
     });

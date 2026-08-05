@@ -8,7 +8,7 @@
   },
   "database": {
     "path": "data/loop-agent.sqlite3",
-    "schema_version": "3.4.0"
+    "schema_version": "3.5.0"
   },
   "prompts": {
     "operator": "prompts/operator.md",

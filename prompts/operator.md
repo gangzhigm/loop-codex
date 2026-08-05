@@ -102,6 +102,13 @@
 - `CANCELLED`：已取消并保留历史。
 - `DRAFT` 与 `WAITING_HUMAN` 不合并数据库状态；Dashboard 可将两者汇总为“需要人工处理”，详情必须保留阶段差异。
 
+## Codex 停滞恢复规则
+
+- `RECOVERY_REQUIRED` 不是 `NO_TASK`，也不是业务实现失败。它表示旧 Codex execution 已转为 `STALLED` 或 `TIMED_OUT` 并释放活动容量，但同 scope 仍为 `QUARANTINED`。
+- Operator 必须先由人工确认旧 Codex 客户端会话已结束，再运行 `loopctl.py recover <execution-id> --human-confirmed-safe --action requeue|failed|wait` 或使用 Dashboard 的安全恢复入口。不得仅根据心跳、租约或 attempt timeout 自动推断旧会话已经结束。
+- `requeue` 和 `failed` 释放旧 execution 的隔离锁；`wait` 保持任务 `WAITING_HUMAN` 和 scope `QUARANTINED`。恢复命令幂等，并以 execution ID 与 task row version fencing，迟到 heartbeat/finish 不得覆盖新 attempt。
+- Codex CLI 与 self-hosted Agent 拥有进程控制权，只能在 Runner 确认旧进程树已终止后使用 `--runner-confirmed-terminated`；不得把 Codex 客户端的人工确认要求机械扩展到这些平台。
+
 ## 归档规则
 
 - 归档是独立属性：`archived_at == null` 表示未归档，非空表示已归档；归档不得改变任务 `status`。

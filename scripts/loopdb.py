@@ -12,8 +12,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB = BASE_DIR / "data" / "loop-agent.sqlite3"
 SCHEMA_PATH = BASE_DIR / "schemas" / "loop-agent.sql"
 CONFIG_PATH = BASE_DIR / "config" / "initialization.json"
-SCHEMA_VERSION = "3.4.0"
-SCHEMA_USER_VERSION = 30400
+SCHEMA_VERSION = "3.5.0"
+SCHEMA_USER_VERSION = 30500
+RECOVERY_SCHEMA_USER_VERSION = 30400
 PROFILE_ROUTING_SCHEMA_USER_VERSION = 30300
 ROUTING_SCHEMA_USER_VERSION = 30200
 ARCHIVE_SCHEMA_USER_VERSION = 30100
@@ -101,7 +102,9 @@ EXECUTIONS_TABLE_SQL = """
 CREATE TABLE executions_new (
   execution_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'FINISHED', 'EXPIRED')),
+  status TEXT NOT NULL CHECK (status IN (
+    'RUNNING', 'FINISHED', 'EXPIRED', 'STALLED', 'TIMED_OUT'
+  )),
   started_at TEXT NOT NULL,
   heartbeat_at TEXT NOT NULL,
   lease_expires_at TEXT NOT NULL,
@@ -117,9 +120,32 @@ CREATE TABLE executions_new (
   reasoning TEXT NOT NULL CHECK (reasoning IN ('low', 'medium', 'high', 'xhigh')),
   attempt_timeout_seconds INTEGER NOT NULL CHECK (attempt_timeout_seconds > 0),
   max_retries INTEGER NOT NULL CHECK (max_retries >= 0),
+  termination_reason TEXT,
+  recovery_required INTEGER NOT NULL DEFAULT 0 CHECK (recovery_required IN (0, 1)),
+  recovered_at TEXT,
+  recovery_action TEXT CHECK (recovery_action IS NULL OR recovery_action IN (
+    'requeue', 'failed', 'wait'
+  )),
   CHECK (
     (runtime_environment = 'self_hosted_agent' AND provider_id IS NOT NULL AND length(trim(provider_id)) > 0)
     OR (runtime_environment <> 'self_hosted_agent' AND provider_id IS NULL)
+  )
+)
+"""
+
+SCOPE_LOCKS_TABLE_SQL = """
+CREATE TABLE scope_locks_new (
+  scope_key TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  execution_id TEXT NOT NULL REFERENCES executions(execution_id) ON DELETE CASCADE,
+  acquired_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'QUARANTINED')),
+  quarantined_at TEXT,
+  quarantine_reason TEXT,
+  CHECK (
+    (status = 'ACTIVE' AND quarantined_at IS NULL AND quarantine_reason IS NULL)
+    OR (status = 'QUARANTINED' AND quarantined_at IS NOT NULL AND length(trim(quarantine_reason)) > 0)
   )
 )
 """
@@ -393,6 +419,80 @@ def initialize_schema(database: sqlite3.Connection) -> None:
     database.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
+def _create_current_execution_indexes(database: sqlite3.Connection) -> None:
+    database.execute("CREATE INDEX idx_executions_active ON executions(status, lease_expires_at)")
+    database.execute(
+        "CREATE UNIQUE INDEX idx_executions_one_active_task "
+        "ON executions(task_id) WHERE status='RUNNING'"
+    )
+
+
+def _migrate_recovery_schema(database: sqlite3.Connection) -> dict[str, Any]:
+    execution_rows = [
+        dict(row) for row in database.execute("SELECT * FROM executions ORDER BY execution_id").fetchall()
+    ]
+    lock_rows = [
+        dict(row) for row in database.execute("SELECT * FROM scope_locks ORDER BY scope_key").fetchall()
+    ]
+    active = sum(row["status"] == "RUNNING" for row in execution_rows)
+    database.execute("PRAGMA foreign_keys = OFF")
+    try:
+        transaction(database)
+        database.execute("DROP TABLE scope_locks")
+        database.execute(EXECUTIONS_TABLE_SQL)
+        for row in execution_rows:
+            database.execute(
+                """INSERT INTO executions_new(
+                  execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, finished_at,
+                  outcome, runtime_environment, provider_id, capability_level, execution_policy, model,
+                  reasoning, attempt_timeout_seconds, max_retries, termination_reason, recovery_required,
+                  recovered_at, recovery_action
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, NULL)""",
+                (
+                    row["execution_id"], row["task_id"], row["status"], row["started_at"],
+                    row["heartbeat_at"], row["lease_expires_at"], row.get("finished_at"),
+                    row.get("outcome"), row["runtime_environment"], row.get("provider_id"),
+                    row["capability_level"], row["execution_policy"], row["model"], row["reasoning"],
+                    row["attempt_timeout_seconds"], row["max_retries"],
+                ),
+            )
+        database.execute("DROP TABLE executions")
+        database.execute("ALTER TABLE executions_new RENAME TO executions")
+        database.execute(SCOPE_LOCKS_TABLE_SQL)
+        for row in lock_rows:
+            database.execute(
+                """INSERT INTO scope_locks_new(
+                  scope_key, task_id, execution_id, acquired_at, lease_expires_at, status
+                ) VALUES(?, ?, ?, ?, ?, 'ACTIVE')""",
+                (
+                    row["scope_key"], row["task_id"], row["execution_id"],
+                    row["acquired_at"], row["lease_expires_at"],
+                ),
+            )
+        database.execute("ALTER TABLE scope_locks_new RENAME TO scope_locks")
+        _create_current_execution_indexes(database)
+        database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
+        foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise LoopError(f"Schema 迁移产生外键错误: {len(foreign_key_errors)}")
+        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise LoopError("Schema 迁移后 quick_check 失败")
+        commit(database)
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+    return {
+        "from": "3.4.0",
+        "to": SCHEMA_VERSION,
+        "migrated": True,
+        "active_executions_preserved": active,
+        "scope_locks_preserved": len(lock_rows),
+        "quarantines_created": 0,
+    }
+
+
 def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
     current = int(database.execute("PRAGMA user_version").fetchone()[0])
     if current == SCHEMA_USER_VERSION:
@@ -400,6 +500,8 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
             "archived": 0, "tasks_mapped": 0, "executions_snapshotted": 0,
         }
+    if current == RECOVERY_SCHEMA_USER_VERSION:
+        return _migrate_recovery_schema(database)
     supported_versions = {
         LEGACY_SCHEMA_USER_VERSION,
         ARCHIVE_SCHEMA_USER_VERSION,
@@ -515,10 +617,13 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
         database.execute(
             "CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)"
         )
-        database.execute("CREATE INDEX idx_executions_active ON executions(status, lease_expires_at)")
         database.execute(
-            "CREATE UNIQUE INDEX idx_executions_one_active_task ON executions(task_id) WHERE status='RUNNING'"
+            "ALTER TABLE scope_locks ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE' "
+            "CHECK (status IN ('ACTIVE', 'QUARANTINED'))"
         )
+        database.execute("ALTER TABLE scope_locks ADD COLUMN quarantined_at TEXT")
+        database.execute("ALTER TABLE scope_locks ADD COLUMN quarantine_reason TEXT")
+        _create_current_execution_indexes(database)
         database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
         foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
         if foreign_key_errors:
@@ -578,6 +683,12 @@ def platform_parallel_limit(platform: str, config: dict[str, Any] | None = None)
 def uses_capability_schema(database: sqlite3.Connection) -> bool:
     columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)").fetchall()}
     return "capability_level" in columns
+
+
+def uses_recovery_schema(database: sqlite3.Connection) -> bool:
+    execution_columns = {row[1] for row in database.execute("PRAGMA table_info(executions)").fetchall()}
+    lock_columns = {row[1] for row in database.execute("PRAGMA table_info(scope_locks)").fetchall()}
+    return "recovery_required" in execution_columns and "status" in lock_columns
 
 
 def parse_project_registry(path: Path) -> list[dict[str, Any]]:
@@ -946,6 +1057,41 @@ def state_payload(database: sqlite3.Connection, config: dict[str, Any] | None = 
                 "provider_id": "deepseek" if row["runtime_environment"] == "deepseek" else None,
                 "summary": f"Concurrent SQLite worker · {runtime_environment} · {row['execution_profile']}",
             })
+    recoveries: list[dict[str, Any]] = []
+    if uses_recovery_schema(database):
+        rows = database.execute(
+            "SELECT e.execution_id, e.task_id, e.status, e.finished_at, e.termination_reason, "
+            "e.runtime_environment, e.provider_id, e.capability_level, e.execution_policy, "
+            "e.recovered_at, e.recovery_action, l.scope_key, l.status AS scope_status, "
+            "l.quarantined_at, l.quarantine_reason FROM executions e "
+            "LEFT JOIN scope_locks l ON l.execution_id=e.execution_id "
+            "WHERE e.recovery_required=1 ORDER BY e.started_at, l.scope_key"
+        ).fetchall()
+        by_execution: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            recovery = by_execution.setdefault(
+                row["execution_id"],
+                {
+                    "execution_id": row["execution_id"],
+                    "task_id": row["task_id"],
+                    "execution_status": row["status"],
+                    "termination_reason": row["termination_reason"],
+                    "runtime_environment": row["runtime_environment"],
+                    "provider_id": row["provider_id"],
+                    "capability_level": row["capability_level"],
+                    "execution_policy": row["execution_policy"],
+                    "finished_at": row["finished_at"],
+                    "recovered_at": row["recovered_at"],
+                    "recovery_action": row["recovery_action"],
+                    "scope_status": row["scope_status"],
+                    "quarantined_at": row["quarantined_at"],
+                    "quarantine_reason": row["quarantine_reason"],
+                    "scope_keys": [],
+                },
+            )
+            if row["scope_key"] is not None:
+                recovery["scope_keys"].append(row["scope_key"])
+        recoveries = list(by_execution.values())
     updated = database.execute("SELECT max(updated_at) FROM tasks").fetchone()[0] or now_shanghai()
     workspace = value["workspace"]
     return {
@@ -958,6 +1104,7 @@ def state_payload(database: sqlite3.Connection, config: dict[str, Any] | None = 
         },
         "settings": value["task_execution"],
         "agents": agents,
+        "recoveries": recoveries,
         "tasks": all_tasks(database),
         "services": [],
         "health_events": [],
@@ -1039,6 +1186,17 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
         ).fetchall()
         if invalid_snapshots:
             errors.append("execution 配置快照无效: " + ",".join(row[0] for row in invalid_snapshots))
+        if uses_recovery_schema(database):
+            invalid_recoveries = database.execute(
+                "SELECT execution_id FROM executions WHERE "
+                "(status IN ('STALLED','TIMED_OUT') AND (recovery_required<>1 OR finished_at IS NULL "
+                "OR termination_reason IS NULL)) OR "
+                "(status IN ('RUNNING','FINISHED','EXPIRED') AND recovery_required=1)"
+            ).fetchall()
+            if invalid_recoveries:
+                errors.append(
+                    "execution 恢复状态无效: " + ",".join(row[0] for row in invalid_recoveries)
+                )
     else:
         invalid_profiles = database.execute(
             "SELECT id FROM tasks WHERE execution_profile NOT IN "
@@ -1087,12 +1245,25 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
     ).fetchall()
     if orphan_running:
         errors.append("RUNNING 任务缺少活动 execution: " + ",".join(row[0] for row in orphan_running))
-    mismatched_locks = database.execute(
-        """SELECT l.scope_key FROM scope_locks l LEFT JOIN executions e ON e.execution_id=l.execution_id
-        WHERE e.execution_id IS NULL OR e.status<>'RUNNING' OR e.task_id<>l.task_id"""
-    ).fetchall()
+    if uses_recovery_schema(database):
+        mismatched_locks = database.execute(
+            """SELECT l.scope_key FROM scope_locks l
+            LEFT JOIN executions e ON e.execution_id=l.execution_id
+            LEFT JOIN tasks t ON t.id=l.task_id
+            WHERE e.execution_id IS NULL OR e.task_id<>l.task_id OR t.id IS NULL OR
+              (l.status='ACTIVE' AND (e.status<>'RUNNING' OR t.status<>'RUNNING')) OR
+              (l.status='QUARANTINED' AND (
+                e.status NOT IN ('STALLED','TIMED_OUT') OR e.recovery_required<>1 OR
+                t.status<>'WAITING_HUMAN' OR l.quarantined_at IS NULL OR l.quarantine_reason IS NULL
+              ))"""
+        ).fetchall()
+    else:
+        mismatched_locks = database.execute(
+            """SELECT l.scope_key FROM scope_locks l LEFT JOIN executions e ON e.execution_id=l.execution_id
+            WHERE e.execution_id IS NULL OR e.status<>'RUNNING' OR e.task_id<>l.task_id"""
+        ).fetchall()
     if mismatched_locks:
-        errors.append("scope 锁与活动 execution 不一致: " + ",".join(row[0] for row in mismatched_locks))
+        errors.append("scope 锁与 execution 生命周期不一致: " + ",".join(row[0] for row in mismatched_locks))
     return {
         "ok": not errors, "schema_version": version,
         "tasks": database.execute("SELECT count(*) FROM tasks").fetchone()[0],

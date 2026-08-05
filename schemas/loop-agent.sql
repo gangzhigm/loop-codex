@@ -1,5 +1,5 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 30400;
+PRAGMA user_version = 30500;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -110,7 +110,9 @@ CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(task_id, id);
 CREATE TABLE IF NOT EXISTS executions (
   execution_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  status TEXT NOT NULL CHECK (status IN ('RUNNING', 'FINISHED', 'EXPIRED')),
+  status TEXT NOT NULL CHECK (status IN (
+    'RUNNING', 'FINISHED', 'EXPIRED', 'STALLED', 'TIMED_OUT'
+  )),
   started_at TEXT NOT NULL,
   heartbeat_at TEXT NOT NULL,
   lease_expires_at TEXT NOT NULL,
@@ -126,6 +128,12 @@ CREATE TABLE IF NOT EXISTS executions (
   reasoning TEXT NOT NULL CHECK (reasoning IN ('low', 'medium', 'high', 'xhigh')),
   attempt_timeout_seconds INTEGER NOT NULL CHECK (attempt_timeout_seconds > 0),
   max_retries INTEGER NOT NULL CHECK (max_retries >= 0),
+  termination_reason TEXT,
+  recovery_required INTEGER NOT NULL DEFAULT 0 CHECK (recovery_required IN (0, 1)),
+  recovered_at TEXT,
+  recovery_action TEXT CHECK (recovery_action IS NULL OR recovery_action IN (
+    'requeue', 'failed', 'wait'
+  )),
   CHECK (
     (runtime_environment = 'self_hosted_agent' AND provider_id IS NOT NULL AND length(trim(provider_id)) > 0)
     OR (runtime_environment <> 'self_hosted_agent' AND provider_id IS NULL)
@@ -141,7 +149,14 @@ CREATE TABLE IF NOT EXISTS scope_locks (
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   execution_id TEXT NOT NULL REFERENCES executions(execution_id) ON DELETE CASCADE,
   acquired_at TEXT NOT NULL,
-  lease_expires_at TEXT NOT NULL
+  lease_expires_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'QUARANTINED')),
+  quarantined_at TEXT,
+  quarantine_reason TEXT,
+  CHECK (
+    (status = 'ACTIVE' AND quarantined_at IS NULL AND quarantine_reason IS NULL)
+    OR (status = 'QUARANTINED' AND quarantined_at IS NOT NULL AND length(trim(quarantine_reason)) > 0)
+  )
 );
 
 CREATE TABLE IF NOT EXISTS task_conflicts (

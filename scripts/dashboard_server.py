@@ -50,6 +50,7 @@ HEALTH_STATE = BASE_DIR / "runtime" / "health-state.json"
 TASK_ACTION_PATH = "/api/task-action"
 SECRET_API_PATH = "/api/secrets"
 TASK_ID_PATTERN = re.compile(r"[A-Z][A-Z0-9_-]*\Z")
+EXECUTION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 PROVIDER_ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 MAX_ACTION_BODY_BYTES = 4096
 SECRET_EVENT_COMPONENT = "provider-secret"
@@ -303,6 +304,59 @@ def archive_dashboard_task(
     return {"ok": True, "confirmed": confirmed, **archived}
 
 
+def recover_dashboard_task(
+    database_path: Path,
+    task_id: object,
+    execution_id: object,
+    recovery_action: object,
+    row_version: object,
+    confirmed_safe: object,
+) -> dict[str, object]:
+    if not isinstance(task_id, str) or TASK_ID_PATTERN.fullmatch(task_id) is None:
+        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "task_id 无效")
+    if not isinstance(execution_id, str) or EXECUTION_ID_PATTERN.fullmatch(execution_id) is None:
+        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "execution_id 无效")
+    if recovery_action not in {"requeue", "failed", "wait"}:
+        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "recovery_action 无效")
+    if isinstance(row_version, bool) or not isinstance(row_version, int) or row_version < 1:
+        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "row_version 无效")
+    if confirmed_safe is not True:
+        raise DashboardActionError(HTTPStatus.FORBIDDEN, "必须明确确认旧 Codex 客户端会话已结束")
+
+    database = connect(database_path)
+    try:
+        task = database.execute(
+            "SELECT status, assigned_agent, runtime_environment, row_version FROM tasks WHERE id=?",
+            (task_id,),
+        ).fetchone()
+        execution = database.execute(
+            "SELECT task_id, status, recovery_required FROM executions WHERE execution_id=?",
+            (execution_id,),
+        ).fetchone()
+    finally:
+        database.close()
+    if task is None or execution is None or execution["task_id"] != task_id:
+        raise DashboardActionError(HTTPStatus.NOT_FOUND, "待恢复 execution 不存在")
+    if task["row_version"] != row_version:
+        raise DashboardActionError(HTTPStatus.CONFLICT, "任务状态已变化，请刷新后重试")
+    if (
+        task["status"] != "WAITING_HUMAN"
+        or task["assigned_agent"] != execution_id
+        or task["runtime_environment"] != "codex_automation"
+        or execution["status"] not in {"STALLED", "TIMED_OUT"}
+        or not execution["recovery_required"]
+    ):
+        raise DashboardActionError(HTTPStatus.CONFLICT, "任务不处于 Codex 安全恢复状态")
+    recovered = run_loopctl(
+        database_path,
+        [
+            "recover", execution_id, "--human-confirmed-safe", "--action", str(recovery_action),
+            "--expected-row-version", str(row_version),
+        ],
+    )
+    return {"ok": True, **recovered}
+
+
 def runtime_health() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if not HEALTH_STATE.exists():
         return [], []
@@ -482,9 +536,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _read_secret_json(self) -> dict[str, object]:
         if self.headers.get("Transfer-Encoding") is not None:
             raise SecretApiError(HTTPStatus.BAD_REQUEST, "不支持 Transfer-Encoding")
-        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        if content_type != "application/json":
-            raise SecretApiError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type 必须为 application/json")
         try:
             content_length = int(self.headers.get("Content-Length", ""))
         except ValueError:
@@ -493,6 +544,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             raise SecretApiError(HTTPStatus.BAD_REQUEST, "请求体为空")
         if content_length > self.server.secret_api_max_body_bytes:
             raise SecretApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "请求体超过大小限制")
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self.rfile.read(content_length)
+            raise SecretApiError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type 必须为 application/json")
         try:
             body = self.rfile.read(content_length)
             if len(body) != content_length:
@@ -740,17 +795,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if content_length < 1 or content_length > MAX_ACTION_BODY_BYTES:
                 raise ValueError
             payload = json.loads(self.rfile.read(content_length).decode("utf-8", errors="strict"))
-            if not isinstance(payload, dict) or set(payload) != {"task_id", "action", "row_version"}:
+            if not isinstance(payload, dict):
                 raise DashboardActionError(
                     HTTPStatus.BAD_REQUEST,
-                    "请求必须且只能包含 task_id、action 和 row_version",
+                    "请求 JSON 必须为对象",
                 )
-            result = archive_dashboard_task(
-                self.server.database_path,
-                payload["task_id"],
-                payload["action"],
-                payload["row_version"],
-            )
+            action = payload.get("action")
+            if action == "archive":
+                if set(payload) != {"task_id", "action", "row_version"}:
+                    raise DashboardActionError(
+                        HTTPStatus.BAD_REQUEST,
+                        "归档请求字段无效",
+                    )
+                result = archive_dashboard_task(
+                    self.server.database_path,
+                    payload["task_id"],
+                    action,
+                    payload["row_version"],
+                )
+            elif action == "recover":
+                if set(payload) != {
+                    "task_id", "action", "execution_id", "recovery_action", "row_version", "confirmed_safe"
+                }:
+                    raise DashboardActionError(HTTPStatus.BAD_REQUEST, "恢复请求字段无效")
+                result = recover_dashboard_task(
+                    self.server.database_path,
+                    payload["task_id"],
+                    payload["execution_id"],
+                    payload["recovery_action"],
+                    payload["row_version"],
+                    payload["confirmed_safe"],
+                )
+            else:
+                raise DashboardActionError(HTTPStatus.BAD_REQUEST, "action 无效")
             self.send_json(HTTPStatus.OK, result)
         except DashboardActionError as error:
             self.send_json(error.status, {"ok": False, "error": str(error)})
