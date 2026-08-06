@@ -1,0 +1,7 @@
+{
+  "updated_at": "2026-08-06T11:17:52+08:00",
+  "target_id": "loop-agent-20260806",
+  "update_succeeded": false,
+  "operation": "reschedule_and_activate",
+  "evidence": "正式 automation_update(mode=update) 已提交，但调度服务持续无响应，未返回成功或失败结果；调用已终止，更新状态无法确认。"
+}

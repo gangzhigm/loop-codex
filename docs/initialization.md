@@ -5,7 +5,7 @@
 - 根目录：`E:\code`
 - Loop 目录：`E:\code\local-agent-loop`
 - 数据库：`data/loop-agent.sqlite3`
-- Schema：`3.5.0`
+- Schema：`3.6.0`
 - 项目清单：`E:\code\根目录清单.md`
 - Worker：L1 至 L5 各一条 automatic 定时自动化，默认每 20 分钟，每轮最多领取一个完全匹配的任务
 - 运行环境：`codex_automation`、`codex_cli`、`self_hosted_agent`；五条定时自动化固定使用 `codex_automation`
@@ -42,7 +42,7 @@
 py -3 .\scripts\loopctl.py migrate
 ```
 
-该命令幂等迁移到 3.5.0。3.0.0 至 3.3.0 要求先暂停领取并确认没有活动 execution，再完成 L1-L5、规范运行环境和 execution 快照转换。3.4.0 到 3.5.0 可以保留活动 execution：其 `RUNNING` 状态与 ACTIVE scope lock 原样迁移，不会根据时间戳自动创建隔离或释放 scope。迁移后由下一次 `claim` 独立判断 heartbeat stalled、lease expiry 和 attempt timeout。所有路径保留状态、结果、尝试次数、历史、依赖、scope、归档和 row version，并执行外键与 SQLite 完整性检查。
+该命令幂等迁移到 3.6.0。3.0.0 至 3.3.0 要求先暂停领取并确认没有活动 execution，再完成 L1-L5、规范运行环境和 execution 快照转换。3.4.0 和 3.5.0 可以保留活动 execution：其 `RUNNING` 状态与 ACTIVE scope lock 原样迁移，不会根据时间戳自动创建隔离或释放 scope。迁移后由下一次 `claim` 独立判断 heartbeat stalled、lease expiry 和 attempt timeout。所有路径保留状态、结果、尝试次数、历史、依赖、scope、归档和 row version，并执行外键与 SQLite 完整性检查。
 
 仅在旧 JSON 系统仍存在时运行一次：
 
@@ -144,11 +144,13 @@ py -3 .\scripts\secretctl.py delete deepseek
 
 ### DeepSeek 安全诊断
 
-排查 self-hosted DeepSeek 执行失败时，只使用 Runtime 输出的受信任诊断字段：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。`authentication`（含 401/403）和本地配置/批准问题需要人工处理；`rate_limited`、`server_error`、`connection` 和 `request_timeout` 仅在 Provider 配置允许的次数内重试，耗尽后显示 `retry_exhausted=true`。`empty_or_malformed_response`、`truncated_response`、`invalid_tool_call`、`invalid_final_json`、`local_protocol` 与 `unsupported_finish_reason` 不重试。不要依据异常原文、请求/响应正文、Authorization、工具参数或业务文件内容排查，因为这些值不进入事件、任务结果或 SQLite。
+排查 self-hosted DeepSeek 执行失败时，只使用 Runtime 输出的受信任诊断字段：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。`authentication`（含 401/403）和本地配置/批准问题需要人工处理；`rate_limited`、`server_error`、`connection` 和 `request_timeout` 仅在 Provider 配置允许的次数内重试，耗尽后显示 `retry_exhausted=true`。`empty_or_malformed_response`、`truncated_response`、`invalid_tool_call`、`invalid_final_json`、`local_protocol` 与 `unsupported_finish_reason` 不进入 Provider HTTP 或完整 Agent attempt 重试，其中 `invalid_final_json` 仅可进入下述一次专用 final 修复。不要依据异常原文、请求/响应正文、Authorization、工具参数或业务文件内容排查，因为这些值不进入事件、任务结果或 SQLite。
 
-`final_schema` 同样属于确定性的受信任诊断类别，不会触发请求或完整 Agent attempt 重试。
+`final_schema` 同样属于确定性的受信任诊断类别，不会触发 Provider HTTP 重试或完整 Agent attempt 重试。`self_hosted_agent.max_final_repairs=1` 允许 Runtime 发起一次不带工具、不会重放工具且不包含被拒绝字段值的专用 final 修复请求；第二次仍不合法时按最新安全诊断结束。
 
 `finish_reason=stop` 的 final 失败可带 `final_shape`：只含 content Unicode 字符长度、解析状态、顶层类型、`status`、`summary`、`verification`、`completed`、`error`、`question`、`options`、`result`、`message`、`output` 的存在性和标准类型，以及未知顶层字段数量/是否存在。它不保存字段值、未知字段名、内容摘要、哈希、前后缀或可逆表示。缺少 required `summary` 等终态协议错误以 `final_schema` 报告，附带 shape、`agent_attempt` 和 `model_step`；只通过本地合成 fake HTTP 响应排查，禁止为此读取 SecretStore 或调用真实 API。
+
+Schema 3.6.0 的 `finish` 只接受上述固定允许列表并规范化写入 nullable `result_diagnostic_json`；未知字段、不一致类型、越界数值及成功结果携带诊断都会被拒绝。`loopctl state` 和 Dashboard 只展示这些安全元数据，任务重新领取、人工重新排队、恢复或人工解决成功时清空旧诊断。
 
 配置中的两个同名字段不能混用：顶层 `deepseek.max_retries=2` 是单个模型步骤的 HTTP 请求重试数，含首次请求时最多调用 3 次；`execution_profiles.self_hosted_agent.providers.deepseek.capabilities.<level>.max_retries=2` 是完整 Agent attempt 的重试数，含首次 attempt 时最多执行 3 个 attempt。完整 attempt 只在瞬态 Provider 请求已耗尽，或明确请求/attempt 超时，且本地副作用计数为 0 时重启。持续瞬态故障的理论上限是 3 x 3 = 9 次 Provider 请求；400、无效工具参数、无效 final JSON、截断、`max_steps` 与未知错误均只执行当前 attempt。日志用 `provider_request_retry`、`provider_request_retries_exhausted` 与 `agent_attempt_retry` 区分两层。
 
@@ -286,7 +288,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_health
 ## 5. 初始化顺序
 
 1. 暂停旧 Worker，确认没有活动 execution，备份 `data/loop-agent.sqlite3`。
-2. 使用 `loopctl.py migrate` 迁移数据库到 Schema 3.5.0；3.4.0 的活动 execution 与 ACTIVE scope lock 原样保留，不在迁移时推断隔离，随后运行数据库与回归测试。
+2. 使用 `loopctl.py migrate` 迁移数据库到 Schema 3.6.0；3.4.0/3.5.0 的活动 execution 与 ACTIVE scope lock 原样保留，不在迁移时推断隔离，随后运行数据库与回归测试。
 3. 运行 `install_health_task.ps1 -StartNow`，检查 Windows 健康任务、`/healthz` 和 `/api/state`。
 4. 读取初始化配置，逐一检查 `routine`、`standard`、`advanced`、`deep`、`complex` 五条 Worker 自动化的 ID、模型、思考程度、20 分钟周期、错峰、`codex_automation` 路由和入口提示。
 5. 删除旧 Health Codex 自动化，确保健康检查只由 Windows 任务计划程序执行。

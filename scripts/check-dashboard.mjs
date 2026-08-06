@@ -63,7 +63,10 @@ assert(!html.includes('setConnection("live", "DB.V.1549")'), "顶部数据库版
 assert(!html.includes('DB.V.${TASK_SCHEMA_VERSION}'), "顶部数据库版本不得误用 schema_version");
 assert(html.includes('WAITING_CONFLICT: "等待冲突"'), "缺少 WAITING_CONFLICT 状态");
 assert(html.includes('CONFIRMED: "已确认"'), "缺少 CONFIRMED 状态");
-assert(html.includes('const TASK_SCHEMA_VERSION = "3.5.0"'), "Dashboard Schema 版本不是 3.5.0");
+assert(html.includes('const TASK_SCHEMA_VERSION = "3.6.0"'), "Dashboard Schema 版本不是 3.6.0");
+assert(html.includes('function renderResultDiagnostic(task)'), "任务详情缺少安全结果诊断渲染");
+assert(html.includes('${renderResultDiagnostic(task)}'), "任务详情未挂载安全结果诊断");
+assert(html.includes('task.result.diagnostic !== null'), "Dashboard 未验证 result.diagnostic 结构");
 assert(html.includes('if (!Array.isArray(candidate?.recoveries))'), "Dashboard 未校验 recovery 状态集合");
 assert(html.includes('function recoveryForTask(task)'), "Dashboard 未关联任务与隔离 execution");
 assert(html.includes('data-recovery-action="requeue"'), "Dashboard 缺少安全恢复重新排队入口");
@@ -181,6 +184,10 @@ assert(html.includes('if (ignoredHeaderFilter !== "project" && currentProject !=
 assert(html.includes('if (ignoredHeaderFilter !== "profile" && currentProfile !== "all" && task.capability_level !== currentProfile) return false;'), "统计卡筛选未与能力等级条件保持交集");
 assert(html.includes('data-label="运行环境">${environmentCell(task)}'), "任务列表未展示运行环境");
 assert(html.includes('<span class="detail-label">运行环境</span>'), "任务详情未展示运行环境");
+assert(html.includes('if (environment === "self_hosted_agent") return "DeepSeek";'), "self_hosted_agent 未统一使用 DeepSeek 展示名");
+assert(html.includes('[environment, runtimeEnvironmentName(environment, state) || config.name]'), "运行环境筛选项未使用统一展示名");
+assert(!html.includes("Self-hosted Agent"), "前端不应显示 Self-hosted Agent");
+assert(html.includes('task?.runtime_environment === "self_hosted_agent"'), "内部 self_hosted_agent 规范值未保留");
 assert(html.includes('return Object.entries(candidate?.runtime_config?.runtime_environments ?? {});'), "运行环境列表未从初始化配置读取");
 assert(html.includes('runtime_config.runtime_environments 无效'), "运行环境配置缺失时未明确报错");
 assert(html.includes('运行环境缺失或未知'), "任务或活动 execution 的运行环境缺失时未明确报错");
@@ -305,13 +312,14 @@ assert(!html.includes('运行正常'), "调度矩阵不得伪造运行状态");
 for (const level of ["L1", "L2", "L3", "L4", "L5"]) {
   assert(html.includes(`profile-level-${level}`), `${level} 缺少独立等级色`);
 }
-assert(/\.profile-row\.profile-level-L1\s*\{[^}]*border-left-color:\s*#68a873/.test(html), "L1 未使用绿色等级色");
-assert(/\.profile-row\.profile-level-L5\s*\{[^}]*border-left-color:\s*#b94b4b/.test(html), "L5 未使用红色等级色");
+assert(/\.profile-row\.profile-level-L1\s*\{[^}]*border-left-color:\s*#68a873[^}]*background:\s*#edf6ef/.test(html), "L1 未使用绿色卡片色");
+assert(/\.profile-row\.profile-level-L5\s*\{[^}]*border-left-color:\s*#b94b4b[^}]*background:\s*#f9e9e8/.test(html), "L5 未使用红色卡片色");
 assert(html.includes('class="profile-capacity">${active}/${escapeHtml(limit)}</strong>'), "每个等级未渲染活动数和上限");
 assert(!html.includes('平台容量'), "调度容量不应保留平台汇总行");
 assert(!html.includes('profile-channel'), "调度容量不应保留平台或模型组合明细");
 assert(!html.includes('profileLevelTooltip'), "调度容量不应展示模型组合 tooltip");
-assert(/\.profile-list\s*\{[\s\S]*?display:\s*grid;[\s\S]*?gap:\s*0;/.test(html), "档位列表未使用紧凑单列布局");
+assert(/\.profile-list\s*\{[\s\S]*?display:\s*grid;[\s\S]*?gap:\s*8px;/.test(html), "档位列表未使用纵向卡片布局");
+assert(/\.profile-row\s*\{[\s\S]*?min-height:\s*42px;[\s\S]*?border:\s*1px solid var\(--line-strong\);[\s\S]*?border-radius:\s*5px;/.test(html), "档位卡片缺少稳定尺寸和独立边界");
 assert((html.match(/class="side-heading"/g) ?? []).length === 1, "右侧仅应保留调度容量折叠标题");
 assert((html.match(/class="side-heading-group"/g) ?? []).length === 1, "调度容量标题未使用统一的左侧标题摘要组");
 assert((html.match(/class="side-heading-summary"/g) ?? []).length === 1, "调度容量标题未保留摘要样式");

@@ -969,7 +969,7 @@
 
     .profile-list {
       display: grid;
-      gap: 0;
+      gap: 8px;
       margin: 0;
       padding: 0;
       list-style: none;
@@ -980,18 +980,19 @@
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       min-width: 0;
-      min-height: 34px;
-      padding: 6px 10px;
-      border-bottom: 1px solid var(--line);
+      min-height: 42px;
+      padding: 8px 10px;
+      border: 1px solid var(--line-strong);
       border-left: 4px solid var(--line);
+      border-radius: 5px;
       color: #24313b;
     }
 
-    .profile-row.profile-level-L1 { border-left-color: #68a873; }
-    .profile-row.profile-level-L2 { border-left-color: #9cba55; }
-    .profile-row.profile-level-L3 { border-left-color: #d0aa35; }
-    .profile-row.profile-level-L4 { border-left-color: #d98239; }
-    .profile-row.profile-level-L5 { border-left-color: #b94b4b; }
+    .profile-row.profile-level-L1 { border-left-color: #68a873; background: #edf6ef; }
+    .profile-row.profile-level-L2 { border-left-color: #9cba55; background: #f1f6e8; }
+    .profile-row.profile-level-L3 { border-left-color: #d0aa35; background: #faf5df; }
+    .profile-row.profile-level-L4 { border-left-color: #d98239; background: #fcf0e5; }
+    .profile-row.profile-level-L5 { border-left-color: #b94b4b; background: #f9e9e8; }
 
     .profile-level-label {
       color: #24313b;
@@ -1485,7 +1486,7 @@
       td.task-action-cell:empty::before { display: none; }
       .side-section { grid-template-columns: minmax(0, 1fr); }
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
-      .profile-row { padding-block: 10px; }
+      .profile-row { min-height: 44px; padding-block: 10px; }
       .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
@@ -1642,7 +1643,7 @@
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
     const HEADER_FILTER_STATUSES = ["DRAFT", "PENDING", "RUNNING", "WAITING_CONFLICT", "WAITING_HUMAN", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"];
     const HEADER_FILTER_PRIORITIES = ["blocker", "critical", "high", "medium", "low"];
-    const TASK_SCHEMA_VERSION = "3.5.0";
+    const TASK_SCHEMA_VERSION = "3.6.0";
     const STATE_ENDPOINT = "/api/state";
     const TASK_ACTION_ENDPOINT = "/api/task-action";
     const SECRET_API_ENDPOINT = "/api/secrets";
@@ -2218,8 +2219,9 @@
       return Object.entries(candidate?.runtime_config?.runtime_environments ?? {});
     }
 
-    function runtimeEnvironmentName(environment) {
-      return state?.runtime_config?.runtime_environments?.[environment]?.name ?? environment;
+    function runtimeEnvironmentName(environment, candidate = state) {
+      if (environment === "self_hosted_agent") return "DeepSeek";
+      return candidate?.runtime_config?.runtime_environments?.[environment]?.name ?? environment;
     }
 
     function environmentCell(task) {
@@ -2244,7 +2246,7 @@
       }
       if (kind === "environment") {
         const values = new Set(contextualTasks.map((task) => task.runtime_environment));
-        return [["all", "全部环境"], ...runtimeEnvironmentEntries().filter(([environment]) => values.has(environment)).map(([environment, config]) => [environment, config.name])];
+        return [["all", "全部环境"], ...runtimeEnvironmentEntries().filter(([environment]) => values.has(environment)).map(([environment, config]) => [environment, runtimeEnvironmentName(environment, state) || config.name])];
       }
       const values = new Set(contextualTasks.map((task) => task.capability_level));
       return [["all", "全部能力等级"], ...CAPABILITY_LEVELS.filter((level) => values.has(level)).map((level) => [level, CAPABILITY_LABELS[level]])];
@@ -2372,6 +2374,13 @@
         }
         if (task?.depends_on !== undefined && (!Array.isArray(task.depends_on) || task.depends_on.some((id) => typeof id !== "string"))) {
           errors.push(`任务 ${task?.id ?? index} depends_on 无效`);
+        }
+        if (!task?.result || typeof task.result !== "object" || Array.isArray(task.result)) {
+          errors.push(`任务 ${task?.id ?? index} result 无效`);
+        } else if (task.result.diagnostic !== null && task.result.diagnostic !== undefined && (
+          typeof task.result.diagnostic !== "object" || Array.isArray(task.result.diagnostic)
+        )) {
+          errors.push(`任务 ${task?.id ?? index} result.diagnostic 无效`);
         }
         if (!Number.isInteger(task?.progress?.percent) || task.progress.percent < 0 || task.progress.percent > 100) {
           errors.push(`任务 ${task?.id ?? index} 进度无效`);
@@ -2712,6 +2721,37 @@
       return `<section class="detail-block"><h3>附件</h3>${gallery}${fileList}</section>`;
     }
 
+    function renderResultDiagnostic(task) {
+      const diagnostic = task.result?.diagnostic;
+      if (!diagnostic) return "";
+      const values = [
+        ["类别", diagnostic.category],
+        ["HTTP", diagnostic.http_status],
+        ["可重试", diagnostic.retryable ? "是" : "否"],
+        ["重试已耗尽", diagnostic.retry_exhausted ? "是" : "否"],
+        ["结束原因", diagnostic.finish_reason],
+        ["Agent 尝试", diagnostic.agent_attempt],
+        ["模型步骤", diagnostic.model_step],
+      ].filter(([, value]) => value !== null && value !== undefined);
+      const shape = diagnostic.final_shape;
+      if (shape) {
+        values.push(
+          ["JSON 状态", shape.json_parse_state],
+          ["顶层类型", shape.top_level_type],
+          ["内容长度", shape.content_length],
+          ["未知字段数", shape.unknown_field_count],
+        );
+        const presentFields = Object.entries(shape.allowed_fields ?? {})
+          .filter(([, metadata]) => metadata?.present)
+          .map(([name, metadata]) => `${name}: ${metadata.type}`)
+          .join("；");
+        if (presentFields) values.push(["返回字段类型", presentFields]);
+      }
+      return `<section class="detail-block"><h3>安全诊断</h3><ul>${values.map(([label, value]) => (
+        `<li><strong>${escapeHtml(label)}</strong>：${escapeHtml(value)}</li>`
+      )).join("")}</ul></section>`;
+    }
+
     function openTask(taskId) {
       const task = state?.tasks?.find((candidate) => candidate.id === taskId);
       if (!task) return;
@@ -2752,6 +2792,7 @@
         ${intervention}
         ${recoveryPanel}
         ${result}
+        ${renderResultDiagnostic(task)}
         ${renderConflictDetails(task, state.tasks)}
         ${listBlock("验证记录", task.result?.verification)}
         ${renderAttachments(task)}

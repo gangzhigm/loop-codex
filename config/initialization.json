@@ -8,7 +8,7 @@
   },
   "database": {
     "path": "data/loop-agent.sqlite3",
-    "schema_version": "3.5.0"
+    "schema_version": "3.6.0"
   },
   "prompts": {
     "operator": "prompts/operator.md",
@@ -95,6 +95,7 @@
   },
   "self_hosted_agent": {
     "max_steps": 24,
+    "max_final_repairs": 1,
     "model_timeout_seconds": 120,
     "tool_timeout_seconds": 120,
     "provider_termination_grace_seconds": 5,

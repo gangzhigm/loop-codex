@@ -12,8 +12,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB = BASE_DIR / "data" / "loop-agent.sqlite3"
 SCHEMA_PATH = BASE_DIR / "schemas" / "loop-agent.sql"
 CONFIG_PATH = BASE_DIR / "config" / "initialization.json"
-SCHEMA_VERSION = "3.5.0"
-SCHEMA_USER_VERSION = 30500
+SCHEMA_VERSION = "3.6.0"
+SCHEMA_USER_VERSION = 30600
+DIAGNOSTIC_SCHEMA_USER_VERSION = 30500
 RECOVERY_SCHEMA_USER_VERSION = 30400
 PROFILE_ROUTING_SCHEMA_USER_VERSION = 30300
 ROUTING_SCHEMA_USER_VERSION = 30200
@@ -37,6 +38,26 @@ LEGACY_PROFILE_TO_CAPABILITY = {
     "deep": "L4", "complex": "L5", "exceptional": "L5",
 }
 FORBIDDEN_SCOPE_ROOTS = {"$CODEX_HOME", ".reasonix", ".env"}
+RESULT_DIAGNOSTIC_CATEGORIES = {
+    "authentication", "connection", "empty_or_malformed_response", "final_schema",
+    "invalid_final_json", "invalid_tool_call", "local_protocol", "rate_limited",
+    "request_invalid", "request_timeout", "server_error", "truncated_response",
+    "unsupported_finish_reason",
+}
+RESULT_DIAGNOSTIC_FINISH_REASONS = {
+    "length", "content_filter", "insufficient_system_resource", "stop", "tool_calls",
+}
+RESULT_DIAGNOSTIC_FIELD_NAMES = (
+    "status", "summary", "verification", "completed", "error", "question", "options",
+    "result", "message", "output",
+)
+RESULT_DIAGNOSTIC_TYPE_TAGS = {
+    "array", "boolean", "null", "number", "object", "string", "unavailable",
+}
+RESULT_DIAGNOSTIC_PARSE_STATES = {"invalid_json", "parsed", "unavailable"}
+TRANSIENT_RESULT_DIAGNOSTIC_CATEGORIES = {
+    "connection", "rate_limited", "request_timeout", "server_error",
+}
 ALLOWED_TABLES = {
     "tasks",
     "task_dependencies",
@@ -84,6 +105,7 @@ CREATE TABLE tasks_new (
   progress_next_step TEXT,
   result_summary TEXT,
   result_error TEXT,
+  result_diagnostic_json TEXT,
   human_required INTEGER NOT NULL DEFAULT 0 CHECK (human_required IN (0, 1)),
   human_question TEXT,
   human_options_json TEXT NOT NULL DEFAULT '[]',
@@ -97,6 +119,119 @@ CREATE TABLE tasks_new (
   )
 )
 """
+
+
+def normalize_result_diagnostic(raw: Any) -> dict[str, Any] | None:
+    """Validate and canonicalize value-free result diagnostics."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise LoopError("result diagnostic 必须是对象")
+    allowed = {
+        "category", "http_status", "retryable", "retry_exhausted", "finish_reason",
+        "agent_attempt", "model_step", "final_shape",
+    }
+    if set(raw) - allowed:
+        raise LoopError("result diagnostic 包含未知字段")
+    category = raw.get("category")
+    if category not in RESULT_DIAGNOSTIC_CATEGORIES:
+        raise LoopError("result diagnostic category 无效")
+    http_status = raw.get("http_status")
+    if http_status is not None and (
+        not isinstance(http_status, int) or isinstance(http_status, bool) or not 100 <= http_status <= 599
+    ):
+        raise LoopError("result diagnostic HTTP status 无效")
+    retryable = raw.get("retryable")
+    retry_exhausted = raw.get("retry_exhausted")
+    if not isinstance(retryable, bool) or not isinstance(retry_exhausted, bool):
+        raise LoopError("result diagnostic retry 字段无效")
+    if retryable and category not in TRANSIENT_RESULT_DIAGNOSTIC_CATEGORIES:
+        raise LoopError("result diagnostic category 不允许重试")
+    if retry_exhausted and not retryable:
+        raise LoopError("result diagnostic retry_exhausted 无效")
+    finish_reason = raw.get("finish_reason")
+    if finish_reason is not None and finish_reason not in RESULT_DIAGNOSTIC_FINISH_REASONS:
+        raise LoopError("result diagnostic finish_reason 无效")
+    attempts: dict[str, int | None] = {}
+    for key in ("agent_attempt", "model_step"):
+        value = raw.get(key)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 10_000
+        ):
+            raise LoopError(f"result diagnostic {key} 无效")
+        attempts[key] = value
+    final_shape = _normalize_final_shape(raw.get("final_shape"))
+    if final_shape is not None and finish_reason != "stop":
+        raise LoopError("result diagnostic final_shape 需要 stop")
+    if final_shape is not None and category not in {"final_schema", "invalid_final_json"}:
+        raise LoopError("result diagnostic category 不允许 final_shape")
+    result: dict[str, Any] = {
+        "category": category,
+        "http_status": http_status,
+        "retryable": retryable,
+        "retry_exhausted": retry_exhausted,
+        "finish_reason": finish_reason,
+        **attempts,
+    }
+    if final_shape is not None:
+        result["final_shape"] = final_shape
+    return result
+
+
+def _normalize_final_shape(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {
+        "finish_reason", "content_length", "json_parse_state", "top_level_type",
+        "allowed_fields", "unknown_field_count", "unknown_fields_present",
+    }:
+        raise LoopError("result diagnostic final_shape 无效")
+    if raw.get("finish_reason") != "stop":
+        raise LoopError("result diagnostic shape finish_reason 无效")
+    content_length = raw.get("content_length")
+    unknown_count = raw.get("unknown_field_count")
+    unknown_present = raw.get("unknown_fields_present")
+    if not isinstance(content_length, int) or isinstance(content_length, bool) or not 0 <= content_length <= 10_000_000:
+        raise LoopError("result diagnostic content_length 无效")
+    if not isinstance(unknown_count, int) or isinstance(unknown_count, bool) or not 0 <= unknown_count <= 10_000:
+        raise LoopError("result diagnostic unknown_field_count 无效")
+    if not isinstance(unknown_present, bool) or unknown_present != (unknown_count > 0):
+        raise LoopError("result diagnostic unknown_fields_present 无效")
+    parse_state = raw.get("json_parse_state")
+    top_level_type = raw.get("top_level_type")
+    if parse_state not in RESULT_DIAGNOSTIC_PARSE_STATES or top_level_type not in RESULT_DIAGNOSTIC_TYPE_TAGS:
+        raise LoopError("result diagnostic shape 类型无效")
+    fields = raw.get("allowed_fields")
+    if not isinstance(fields, dict) or set(fields) != set(RESULT_DIAGNOSTIC_FIELD_NAMES):
+        raise LoopError("result diagnostic allowed_fields 无效")
+    normalized_fields: dict[str, dict[str, Any]] = {}
+    for name in RESULT_DIAGNOSTIC_FIELD_NAMES:
+        field = fields[name]
+        if not isinstance(field, dict) or set(field) != {"present", "type"}:
+            raise LoopError("result diagnostic field metadata 无效")
+        present = field.get("present")
+        value_type = field.get("type")
+        if not isinstance(present, bool) or value_type not in RESULT_DIAGNOSTIC_TYPE_TAGS:
+            raise LoopError("result diagnostic field type 无效")
+        if present == (value_type == "unavailable"):
+            raise LoopError("result diagnostic field presence/type 不一致")
+        normalized_fields[name] = {"present": present, "type": value_type}
+    if parse_state == "parsed" and top_level_type == "unavailable":
+        raise LoopError("result diagnostic parsed top-level type 无效")
+    if parse_state != "parsed" and (
+        top_level_type != "unavailable" or unknown_count != 0
+        or any(field["present"] for field in normalized_fields.values())
+    ):
+        raise LoopError("result diagnostic unparsed shape 无效")
+    return {
+        "finish_reason": "stop",
+        "content_length": content_length,
+        "json_parse_state": parse_state,
+        "top_level_type": top_level_type,
+        "allowed_fields": normalized_fields,
+        "unknown_field_count": unknown_count,
+        "unknown_fields_present": unknown_present,
+    }
 
 EXECUTIONS_TABLE_SQL = """
 CREATE TABLE executions_new (
@@ -321,6 +456,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and isinstance(execution.get("require_human_approval_for"), list)
         and isinstance(self_hosted_agent.get("max_steps"), int)
         and 1 <= self_hosted_agent["max_steps"] <= 200
+        and isinstance(self_hosted_agent.get("max_final_repairs"), int)
+        and self_hosted_agent["max_final_repairs"] in {0, 1}
         and isinstance(self_hosted_agent.get("model_timeout_seconds"), (int, float))
         and self_hosted_agent["model_timeout_seconds"] > 0
         and isinstance(self_hosted_agent.get("tool_timeout_seconds"), (int, float))
@@ -398,6 +535,19 @@ def json_load(value: str | None, default: Any) -> Any:
         return default
 
 
+def load_result_diagnostic(value: str | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise LoopError("result diagnostic JSON 无效") from error
+    normalized = normalize_result_diagnostic(parsed)
+    if normalized is None or json_dump(normalized) != value:
+        raise LoopError("result diagnostic 不是规范 JSON")
+    return normalized
+
+
 def connect(path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
     database_path = Path(path)
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -438,6 +588,7 @@ def _migrate_recovery_schema(database: sqlite3.Connection) -> dict[str, Any]:
     database.execute("PRAGMA foreign_keys = OFF")
     try:
         transaction(database)
+        database.execute("ALTER TABLE tasks ADD COLUMN result_diagnostic_json TEXT")
         database.execute("DROP TABLE scope_locks")
         database.execute(EXECUTIONS_TABLE_SQL)
         for row in execution_rows:
@@ -493,6 +644,28 @@ def _migrate_recovery_schema(database: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def _migrate_diagnostic_schema(database: sqlite3.Connection) -> dict[str, Any]:
+    active = int(database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0])
+    try:
+        transaction(database)
+        database.execute("ALTER TABLE tasks ADD COLUMN result_diagnostic_json TEXT")
+        database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
+        if database.execute("PRAGMA foreign_key_check").fetchall():
+            raise LoopError("Schema 迁移产生外键错误")
+        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise LoopError("Schema 迁移后 quick_check 失败")
+        commit(database)
+    except Exception:
+        rollback(database)
+        raise
+    return {
+        "from": "3.5.0",
+        "to": SCHEMA_VERSION,
+        "migrated": True,
+        "active_executions_preserved": active,
+    }
+
+
 def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
     current = int(database.execute("PRAGMA user_version").fetchone()[0])
     if current == SCHEMA_USER_VERSION:
@@ -500,6 +673,8 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
             "archived": 0, "tasks_mapped": 0, "executions_snapshotted": 0,
         }
+    if current == DIAGNOSTIC_SCHEMA_USER_VERSION:
+        return _migrate_diagnostic_schema(database)
     if current == RECOVERY_SCHEMA_USER_VERSION:
         return _migrate_recovery_schema(database)
     supported_versions = {
@@ -570,9 +745,10 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
                   id, title, description, status, priority, capability_level, runtime_environment,
                   provider_id, execution_policy, assigned_agent, created_at, started_at, updated_at,
                   heartbeat_at, completed_at, archived_at, attempt, progress_percent, progress_summary,
-                  progress_next_step, result_summary, result_error, human_required, human_question,
+                  progress_next_step, result_summary, result_error, result_diagnostic_json,
+                  human_required, human_question,
                   human_options_json, human_requested_at, human_responded_at, human_response, row_version
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row["id"], row["title"], row.get("description", ""), row["status"], row["priority"],
                     route["capability_level"], route["runtime_environment"], route["provider_id"],
@@ -689,6 +865,11 @@ def uses_recovery_schema(database: sqlite3.Connection) -> bool:
     execution_columns = {row[1] for row in database.execute("PRAGMA table_info(executions)").fetchall()}
     lock_columns = {row[1] for row in database.execute("PRAGMA table_info(scope_locks)").fetchall()}
     return "recovery_required" in execution_columns and "status" in lock_columns
+
+
+def uses_result_diagnostic_schema(database: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)").fetchall()}
+    return "result_diagnostic_json" in columns
 
 
 def parse_project_registry(path: Path) -> list[dict[str, Any]]:
@@ -848,6 +1029,8 @@ def insert_task(
     stamp = task.get("created_at") or now_shanghai()
     progress = task.get("progress") or {}
     result = task.get("result") or {}
+    diagnostic = normalize_result_diagnostic(result.get("diagnostic"))
+    diagnostic_json = json_dump(diagnostic) if diagnostic is not None else None
     human = task.get("human_intervention") or {}
     common_tail = (
         task.get("assigned_agent"), stamp, task.get("started_at"), task.get("updated_at") or stamp,
@@ -859,19 +1042,27 @@ def insert_task(
         human.get("response"), int(task.get("row_version", 1)),
     )
     if uses_capability_schema(database):
-        database.execute(
-            """INSERT INTO tasks(
-              id, title, description, status, priority, capability_level, runtime_environment, provider_id,
-              execution_policy, assigned_agent, created_at, started_at, updated_at, heartbeat_at,
-              completed_at, archived_at, attempt, progress_percent, progress_summary, progress_next_step,
-              result_summary, result_error, human_required, human_question, human_options_json,
-              human_requested_at, human_responded_at, human_response, row_version
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task_id, str(task.get("title") or task_id), str(task.get("description") or ""), status,
-                priority, capability_level, runtime_environment, provider_id, execution_policy, *common_tail,
-            ),
+        columns = (
+            "id, title, description, status, priority, capability_level, runtime_environment, provider_id, "
+            "execution_policy, assigned_agent, created_at, started_at, updated_at, heartbeat_at, "
+            "completed_at, archived_at, attempt, progress_percent, progress_summary, progress_next_step, "
+            "result_summary, result_error"
         )
+        values = (
+            task_id, str(task.get("title") or task_id), str(task.get("description") or ""), status,
+            priority, capability_level, runtime_environment, provider_id, execution_policy,
+            *common_tail[:13],
+        )
+        if uses_result_diagnostic_schema(database):
+            columns += ", result_diagnostic_json"
+            values += (diagnostic_json,)
+        columns += (
+            ", human_required, human_question, human_options_json, human_requested_at, "
+            "human_responded_at, human_response, row_version"
+        )
+        values += common_tail[13:]
+        placeholders = ", ".join("?" for _ in values)
+        database.execute(f"INSERT INTO tasks({columns}) VALUES({placeholders})", values)
     else:
         if execution_policy == "manual" and capability_level != "L5":
             raise LoopError("Schema 3.3.0 兼容层无法表示 L1-L4 manual execution_policy")
@@ -994,6 +1185,11 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
             "summary": row["result_summary"],
             "verification": task_children(database, task_id, "task_verifications"),
             "error": row["result_error"],
+            "diagnostic": (
+                load_result_diagnostic(row["result_diagnostic_json"])
+                if "result_diagnostic_json" in columns and row["result_diagnostic_json"] is not None
+                else None
+            ),
         },
         "history": history, "conflicts": conflicts, "row_version": row["row_version"],
     }
@@ -1140,6 +1336,17 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
         errors.append("数据库包含非任务表: " + ",".join(unexpected))
     if missing:
         errors.append("数据库缺少任务表: " + ",".join(missing))
+    if uses_result_diagnostic_schema(database):
+        invalid_diagnostics: list[str] = []
+        for row in database.execute(
+            "SELECT id, result_diagnostic_json FROM tasks WHERE result_diagnostic_json IS NOT NULL"
+        ):
+            try:
+                load_result_diagnostic(row["result_diagnostic_json"])
+            except LoopError:
+                invalid_diagnostics.append(row["id"])
+        if invalid_diagnostics:
+            errors.append("任务结果诊断无效: " + ",".join(invalid_diagnostics))
     invalid_confirmed = database.execute(
         """SELECT t.id FROM tasks t WHERE t.status='CONFIRMED' AND NOT EXISTS (
           SELECT 1 FROM task_history h WHERE h.task_id=t.id AND h.to_status='CONFIRMED' AND h.from_status='SUCCEEDED'

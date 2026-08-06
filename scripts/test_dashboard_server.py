@@ -130,7 +130,7 @@ class AttachmentImageTests(unittest.TestCase):
             for task in payload["tasks"]
         }
 
-        self.assertEqual(payload["schema_version"], "3.5.0")
+        self.assertEqual(payload["schema_version"], "3.6.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
             {"codex_automation": 5, "codex_cli": 5, "self_hosted_agent": 5},

@@ -44,6 +44,7 @@ from loopdb import (
     legacy_profile_for,
     LEGACY_PROFILE_TO_CAPABILITY,
     normalize_execution_target,
+    normalize_result_diagnostic,
     resolve_execution_profile,
     resolve_scope_key,
     rollback,
@@ -54,6 +55,7 @@ from loopdb import (
     transaction,
     uses_capability_schema,
     uses_recovery_schema,
+    uses_result_diagnostic_schema,
     validate_database,
 )
 
@@ -516,10 +518,12 @@ def command_recover(args: argparse.Namespace) -> None:
             "UPDATE executions SET recovery_required=0, recovered_at=?, recovery_action=? WHERE execution_id=?",
             (stamp, action, args.execution_id),
         )
+        diagnostic_reset = "result_diagnostic_json=NULL, " if uses_result_diagnostic_schema(database) else ""
         database.execute(
-            "UPDATE tasks SET status=?, assigned_agent=NULL, heartbeat_at=NULL, updated_at=?, "
+            f"UPDATE tasks SET status=?, assigned_agent=NULL, heartbeat_at=NULL, updated_at=?, "
             "completed_at=?, progress_percent=?, progress_summary=?, progress_next_step=?, result_error=?, "
-            "human_required=0, human_question=NULL, human_options_json='[]', human_requested_at=NULL, "
+            f"{diagnostic_reset}human_required=0, human_question=NULL, "
+            "human_options_json='[]', human_requested_at=NULL, "
             "human_responded_at=?, human_response=?, row_version=row_version+1 WHERE id=?",
             (
                 new_status, stamp, stamp if new_status == "FAILED" else None,
@@ -821,10 +825,11 @@ def command_claim(args: argparse.Namespace) -> None:
                 "VALUES(?, ?, ?, ?, ?)",
                 (scope["scope_key"], task_row["id"], args.execution_id, stamp, expiry),
             )
+        diagnostic_reset = "result_diagnostic_json=NULL, " if uses_result_diagnostic_schema(database) else ""
         database.execute(
-            "UPDATE tasks SET status='RUNNING', assigned_agent=?, started_at=?, updated_at=?, heartbeat_at=?, "
+            f"UPDATE tasks SET status='RUNNING', assigned_agent=?, started_at=?, updated_at=?, heartbeat_at=?, "
             "completed_at=NULL, attempt=attempt+1, progress_summary=?, progress_next_step=?, "
-            "result_summary=NULL, result_error=NULL, human_required=0, human_question=NULL, "
+            f"result_summary=NULL, result_error=NULL, {diagnostic_reset}human_required=0, human_question=NULL, "
             "human_options_json='[]', human_requested_at=NULL, human_responded_at=NULL, human_response=NULL, "
             "row_version=row_version+1 WHERE id=?",
             (
@@ -925,6 +930,10 @@ def command_finish(args: argparse.Namespace) -> None:
         raise LoopError("FAILED 必须提供 error")
     if status == "WAITING_HUMAN" and not str(report.get("question") or "").strip():
         raise LoopError("WAITING_HUMAN 必须提供 question")
+    diagnostic = normalize_result_diagnostic(report.get("diagnostic"))
+    if status == "SUCCEEDED" and diagnostic is not None:
+        raise LoopError("SUCCEEDED 不得包含 result diagnostic")
+    diagnostic_json = json_dump(diagnostic) if diagnostic is not None else None
     database = connect(args.db)
     try:
         transaction(database)
@@ -938,31 +947,37 @@ def command_finish(args: argparse.Namespace) -> None:
             raise LoopError("任务不处于 RUNNING")
         stamp = now_shanghai()
         waiting = status == "WAITING_HUMAN"
+        diagnostic_column = "result_diagnostic_json=?, " if uses_result_diagnostic_schema(database) else ""
+        values: list[Any] = [
+            status,
+            stamp,
+            stamp,
+            None if waiting else stamp,
+            max(0, min(99, int(report.get("percent", 0)))) if waiting else 100,
+            report["summary"],
+            report.get("next_step", "等待人工答复。") if waiting else None,
+            report["summary"] if status == "SUCCEEDED" else None,
+            report.get("error") if status == "FAILED" else None,
+        ]
+        if diagnostic_column:
+            values.append(diagnostic_json)
+        values.extend([
+            int(waiting),
+            report.get("question") if waiting else None,
+            json_dump(report.get("options") or []),
+            stamp if waiting else None,
+            args.task_id,
+        ])
         database.execute(
-            """
+            f"""
             UPDATE tasks SET status=?, updated_at=?, heartbeat_at=?, completed_at=?,
               progress_percent=?, progress_summary=?, progress_next_step=?,
-              result_summary=?, result_error=?, human_required=?, human_question=?,
+              result_summary=?, result_error=?, {diagnostic_column}human_required=?, human_question=?,
               human_options_json=?, human_requested_at=?, human_responded_at=NULL,
               human_response=NULL, row_version=row_version+1
             WHERE id=?
             """,
-            (
-                status,
-                stamp,
-                stamp,
-                None if waiting else stamp,
-                max(0, min(99, int(report.get("percent", 0)))) if waiting else 100,
-                report["summary"],
-                report.get("next_step", "等待人工答复。") if waiting else None,
-                report["summary"] if status == "SUCCEEDED" else None,
-                report.get("error") if status == "FAILED" else None,
-                int(waiting),
-                report.get("question") if waiting else None,
-                json_dump(report.get("options") or []),
-                stamp if waiting else None,
-                args.task_id,
-            ),
+            values,
         )
         if "completed" in report:
             replace_ordered_text(database, "task_completed_items", args.task_id, report.get("completed") or [])
@@ -1086,11 +1101,12 @@ def command_resolve_human(args: argparse.Namespace) -> None:
             raise LoopError("完成摘要不能为空")
         stamp = now_shanghai()
         previous_status = task["status"]
+        diagnostic_reset = "result_diagnostic_json=NULL, " if uses_result_diagnostic_schema(database) else ""
         database.execute(
-            """
+            f"""
             UPDATE tasks SET status='SUCCEEDED', updated_at=?, completed_at=?,
               progress_percent=100, progress_summary=?, progress_next_step=NULL,
-              result_summary=?, result_error=NULL, human_required=0,
+              result_summary=?, result_error=NULL, {diagnostic_reset}human_required=0,
               human_responded_at=?, human_response=?, row_version=row_version+1
             WHERE id=?
             """,
@@ -1389,10 +1405,11 @@ def command_requeue(args: argparse.Namespace) -> None:
             raise LoopError("已归档任务必须先取消归档")
         stamp = now_shanghai()
         database.execute("DELETE FROM task_conflicts WHERE task_id=?", (args.task_id,))
+        diagnostic_reset = "result_diagnostic_json=NULL, " if uses_result_diagnostic_schema(database) else ""
         database.execute(
-            "UPDATE tasks SET status='PENDING', assigned_agent=NULL, heartbeat_at=NULL, completed_at=NULL, "
+            f"UPDATE tasks SET status='PENDING', assigned_agent=NULL, heartbeat_at=NULL, completed_at=NULL, "
             "updated_at=?, progress_percent=0, progress_summary='任务已人工重新排队。', "
-            "progress_next_step='等待并发 Worker 领取。', human_required=0, human_question=NULL, "
+            f"progress_next_step='等待并发 Worker 领取。', {diagnostic_reset}human_required=0, human_question=NULL, "
             "human_options_json='[]', human_requested_at=NULL, human_responded_at=NULL, human_response=NULL, "
             "row_version=row_version+1 WHERE id=?",
             (stamp, args.task_id),

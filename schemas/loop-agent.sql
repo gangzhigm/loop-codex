@@ -1,5 +1,5 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 30500;
+PRAGMA user_version = 30600;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   progress_next_step TEXT,
   result_summary TEXT,
   result_error TEXT,
+  result_diagnostic_json TEXT,
   human_required INTEGER NOT NULL DEFAULT 0 CHECK (human_required IN (0, 1)),
   human_question TEXT,
   human_options_json TEXT NOT NULL DEFAULT '[]',

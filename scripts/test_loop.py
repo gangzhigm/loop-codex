@@ -160,7 +160,12 @@ class LoopConcurrencyTests(unittest.TestCase):
             runtime_environment,
         )
 
-    def run_ctl_error(self, *arguments: str, db_path: Path | None = None) -> dict[str, object]:
+    def run_ctl_error(
+        self,
+        *arguments: str,
+        db_path: Path | None = None,
+        input_text: str | None = None,
+    ) -> dict[str, object]:
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "utf-8"
         completed = subprocess.run(
@@ -171,6 +176,7 @@ class LoopConcurrencyTests(unittest.TestCase):
             text=True,
             encoding="utf-8",
             env=environment,
+            input=input_text,
         )
         self.assertNotEqual(completed.returncode, 0, completed.stdout)
         return json.loads(completed.stdout)
@@ -182,6 +188,37 @@ class LoopConcurrencyTests(unittest.TestCase):
             task_id,
             input_text=json.dumps({"status": "SUCCEEDED", "summary": "done", "verification": ["ok"]}),
         )
+
+    @staticmethod
+    def result_diagnostic() -> dict[str, object]:
+        field_names = (
+            "status", "summary", "verification", "completed", "error", "question",
+            "options", "result", "message", "output",
+        )
+        return {
+            "category": "final_schema",
+            "http_status": None,
+            "retryable": False,
+            "retry_exhausted": False,
+            "finish_reason": "stop",
+            "agent_attempt": 1,
+            "model_step": 1,
+            "final_shape": {
+                "finish_reason": "stop",
+                "content_length": 84,
+                "json_parse_state": "parsed",
+                "top_level_type": "object",
+                "allowed_fields": {
+                    name: {
+                        "present": name in {"status", "summary", "verification"},
+                        "type": "string" if name in {"status", "summary", "verification"} else "unavailable",
+                    }
+                    for name in field_names
+                },
+                "unknown_field_count": 0,
+                "unknown_fields_present": False,
+            },
+        }
 
     def test_database_contains_only_task_tables(self) -> None:
         database = connect(self.db_path)
@@ -200,7 +237,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         result = validate_database(database)
         database.close()
         self.assertTrue(result["ok"], result["errors"])
-        self.assertEqual(result["schema_version"], "3.5.0")
+        self.assertEqual(result["schema_version"], "3.6.0")
 
     def test_fresh_schema_has_capability_routing_and_execution_snapshot(self) -> None:
         database = connect(self.db_path)
@@ -212,6 +249,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertNotIn("execution_profile", columns)
         self.assertTrue({"capability_level", "provider_id", "execution_policy"}.issubset(columns))
         self.assertIn("runtime_environment", columns)
+        self.assertIn("result_diagnostic_json", columns)
         self.assertTrue(
             {
                 "runtime_environment", "provider_id", "capability_level", "execution_policy",
@@ -219,6 +257,97 @@ class LoopConcurrencyTests(unittest.TestCase):
             }.issubset(execution_columns)
         )
         self.assertEqual(version, SCHEMA_USER_VERSION)
+
+    def test_finish_round_trips_safe_diagnostic_and_requeue_clears_it(self) -> None:
+        self.add_task("DIAGNOSTIC-ROUNDTRIP", "project-1")
+        self.claim("diagnostic-execution")
+        canonical_diagnostic = self.result_diagnostic()
+        diagnostic = json.loads(json.dumps(canonical_diagnostic))
+        fields = diagnostic["final_shape"]["allowed_fields"]
+        diagnostic["final_shape"]["allowed_fields"] = dict(reversed(list(fields.items())))
+        self.run_ctl(
+            "finish",
+            "diagnostic-execution",
+            "DIAGNOSTIC-ROUNDTRIP",
+            input_text=json.dumps(
+                {
+                    "status": "FAILED",
+                    "summary": "Provider final result was invalid.",
+                    "error": "provider diagnostic: category=final_schema",
+                    "diagnostic": diagnostic,
+                }
+            ),
+        )
+
+        database = connect(self.db_path)
+        task = all_tasks(database)[0]
+        stored = database.execute(
+            "SELECT result_diagnostic_json FROM tasks WHERE id='DIAGNOSTIC-ROUNDTRIP'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(task["result"]["diagnostic"], canonical_diagnostic)
+        self.assertEqual(json.loads(stored), canonical_diagnostic)
+
+        self.run_ctl("requeue", "DIAGNOSTIC-ROUNDTRIP", "--reason", "retry safely")
+        database = connect(self.db_path)
+        cleared = database.execute(
+            "SELECT result_diagnostic_json FROM tasks WHERE id='DIAGNOSTIC-ROUNDTRIP'"
+        ).fetchone()[0]
+        database.close()
+        self.assertIsNone(cleared)
+
+    def test_finish_rejects_untrusted_diagnostic_fields_without_persisting_values(self) -> None:
+        self.add_task("DIAGNOSTIC-REJECT", "project-1")
+        self.claim("diagnostic-reject-execution")
+        canary = "credential-value-must-not-persist"
+        diagnostic = {**self.result_diagnostic(), "raw_response": canary}
+        error = self.run_ctl_error(
+            "finish",
+            "diagnostic-reject-execution",
+            "DIAGNOSTIC-REJECT",
+            input_text=json.dumps(
+                {
+                    "status": "FAILED",
+                    "summary": "failed",
+                    "error": "safe error",
+                    "diagnostic": diagnostic,
+                }
+            ),
+        )
+        self.assertIn("包含未知字段", error["message"])
+        self.assertNotIn(canary, json.dumps(error, ensure_ascii=False))
+        success_error = self.run_ctl_error(
+            "finish",
+            "diagnostic-reject-execution",
+            "DIAGNOSTIC-REJECT",
+            input_text=json.dumps(
+                {
+                    "status": "SUCCEEDED",
+                    "summary": "done",
+                    "verification": ["checked"],
+                    "diagnostic": self.result_diagnostic(),
+                }
+            ),
+        )
+        self.assertIn("SUCCEEDED 不得包含 result diagnostic", success_error["message"])
+        database = connect(self.db_path)
+        row = database.execute(
+            "SELECT status, result_diagnostic_json FROM tasks WHERE id='DIAGNOSTIC-REJECT'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(row), ("RUNNING", None))
+
+    def test_database_validation_rejects_noncanonical_diagnostic_json(self) -> None:
+        self.add_task("DIAGNOSTIC-INVALID-STORED", "project-1")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE tasks SET result_diagnostic_json=? WHERE id='DIAGNOSTIC-INVALID-STORED'",
+            ('{"category":"final_schema","raw_response":"forbidden"}',),
+        )
+        validation = validate_database(database)
+        database.close()
+        self.assertFalse(validation["ok"])
+        self.assertIn("任务结果诊断无效: DIAGNOSTIC-INVALID-STORED", validation["errors"])
 
     def test_global_eight_parallel_claims_and_ninth_slot_full(self) -> None:
         targets = [
@@ -970,6 +1099,70 @@ class LoopConcurrencyTests(unittest.TestCase):
                 self.assertEqual(result["outcome"], "ERROR")
                 self.assertIn("只有终态任务可以归档", result["message"])
 
+    def test_migrate_schema_35_adds_diagnostic_column_and_preserves_active_execution(self) -> None:
+        legacy_path = Path(self.temporary.name) / "schema-35-active.sqlite3"
+        database = connect(legacy_path)
+        database.executescript(self.schema_35())
+        stamp = now_shanghai()
+        insert_task(
+            database,
+            {
+                "id": "ACTIVE-35",
+                "title": "active",
+                "status": "RUNNING",
+                "priority": "blocker",
+                "capability_level": "L5",
+                "runtime_environment": "codex_automation",
+                "execution_policy": "automatic",
+                "assigned_agent": "active-35-execution",
+                "created_at": stamp,
+                "started_at": stamp,
+                "updated_at": stamp,
+                "heartbeat_at": stamp,
+                "attempt": 1,
+                "scope": ["local-agent-loop/scripts/loopctl.py"],
+            },
+            project_paths=["local-agent-loop"],
+        )
+        database.execute(
+            """INSERT INTO executions(
+              execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at,
+              runtime_environment, provider_id, capability_level, execution_policy, model, reasoning,
+              attempt_timeout_seconds, max_retries
+            ) VALUES('active-35-execution', 'ACTIVE-35', 'RUNNING', ?, ?,
+              '2999-01-01T00:00:00+08:00', 'codex_automation', NULL, 'L5', 'automatic',
+              'gpt-5.6-sol', 'xhigh', 3600, 1)""",
+            (stamp, stamp),
+        )
+        database.execute(
+            """INSERT INTO scope_locks(
+              scope_key, task_id, execution_id, acquired_at, lease_expires_at, status
+            ) VALUES('project:local-agent-loop', 'ACTIVE-35', 'active-35-execution', ?,
+              '2999-01-01T00:00:00+08:00', 'ACTIVE')""",
+            (stamp,),
+        )
+        database.close()
+
+        migrated = self.run_ctl("migrate", db_path=legacy_path)
+
+        self.assertEqual(migrated["from"], "3.5.0")
+        self.assertEqual(migrated["to"], "3.6.0")
+        self.assertEqual(migrated["active_executions_preserved"], 1)
+        database = connect(legacy_path)
+        columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)")}
+        execution = database.execute(
+            "SELECT status FROM executions WHERE execution_id='active-35-execution'"
+        ).fetchone()[0]
+        lock = database.execute(
+            "SELECT status FROM scope_locks WHERE execution_id='active-35-execution'"
+        ).fetchone()[0]
+        validation = validate_database(database)
+        database.close()
+        self.assertIn("result_diagnostic_json", columns)
+        self.assertEqual(execution, "RUNNING")
+        self.assertEqual(lock, "ACTIVE")
+        self.assertTrue(validation["ok"], validation["errors"])
+
     def test_migrate_schema_34_preserves_active_execution_without_guessing_quarantine(self) -> None:
         legacy_path = Path(self.temporary.name) / "schema-34-active.sqlite3"
         database = connect(legacy_path)
@@ -1008,7 +1201,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         migrated = self.run_ctl("migrate", db_path=legacy_path)
 
         self.assertEqual(migrated["from"], "3.4.0")
-        self.assertEqual(migrated["to"], "3.5.0")
+        self.assertEqual(migrated["to"], "3.6.0")
         self.assertEqual(migrated["active_executions_preserved"], 1)
         self.assertEqual(migrated["quarantines_created"], 0)
         database = connect(legacy_path)
@@ -1047,7 +1240,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         migrated = self.run_ctl("migrate", db_path=legacy_path)
         self.assertEqual(migrated["outcome"], "MIGRATED")
         self.assertEqual(migrated["from"], "3.3.0")
-        self.assertEqual(migrated["to"], "3.5.0")
+        self.assertEqual(migrated["to"], "3.6.0")
         self.assertEqual(migrated["tasks_mapped"], 2)
         self.assertEqual(migrated["executions_snapshotted"], 1)
         database = connect(legacy_path)
@@ -1234,7 +1427,7 @@ class LoopConcurrencyTests(unittest.TestCase):
 
         migrated = self.run_ctl("migrate", db_path=schema_32_path)
         self.assertEqual(migrated["from"], "3.2.0")
-        self.assertEqual(migrated["to"], "3.5.0")
+        self.assertEqual(migrated["to"], "3.6.0")
         self.assertEqual(migrated["tasks_mapped"], 2)
         self.assertEqual(migrated["executions_snapshotted"], 1)
 
@@ -1250,6 +1443,7 @@ class LoopConcurrencyTests(unittest.TestCase):
             self.assertEqual(after.pop("runtime_environment"), "codex_automation")
             self.assertIsNone(after.pop("provider_id"))
             self.assertEqual(after.pop("execution_policy"), "automatic")
+            self.assertIsNone(after.pop("result_diagnostic_json"))
             self.assertEqual(after, before)
         children_after = {
             table: [tuple(row) for row in database.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()]
@@ -1337,8 +1531,15 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(status, "PENDING")
 
     @staticmethod
-    def schema_34() -> str:
+    def schema_35() -> str:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        schema = schema.replace("PRAGMA user_version = 30600;", "PRAGMA user_version = 30500;")
+        schema = schema.replace("  result_diagnostic_json TEXT,\n", "")
+        return schema
+
+    @staticmethod
+    def schema_34() -> str:
+        schema = LoopConcurrencyTests.schema_35()
         schema = schema.replace("PRAGMA user_version = 30500;", "PRAGMA user_version = 30400;")
         schema = schema.replace(
             "  status TEXT NOT NULL CHECK (status IN (\n"

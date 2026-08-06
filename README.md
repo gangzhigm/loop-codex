@@ -4,7 +4,7 @@
 
 ## 固定配置
 
-- 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.5.0）
+- 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.6.0）
 - 初始化配置：`config/initialization.json`
 - 项目清单：`E:\code\根目录清单.md`
 - Worker：L1 至 L5 五条 automatic 定时自动化各自每 20 分钟唤起一次；`L5/manual` 仅人工批准后一次性执行
@@ -55,7 +55,7 @@ Dashboard 的“已结束”分段为未归档终态任务提供归档按钮；`
 
 Dashboard Server 固定绑定 `127.0.0.1`，命令行改为 `0.0.0.0` 或其他地址会拒绝启动。远程 Secret 管理必须等待服务器 Secret 后端同时提供 HTTPS、认证、授权和审计，不能通过修改 Dashboard 监听地址直接开放。
 
-Schema 3.0.0 至 3.4.0 数据库升级到 3.5.0 时运行 `loopctl.py migrate`。3.0.0 至 3.3.0 仍要求没有活动 execution，并完成 L1-L5、规范运行环境和执行配置快照迁移。3.4.0 到 3.5.0 会原样保留活动 execution 与 ACTIVE scope 锁，只增加 execution 终止/恢复字段和 scope 隔离状态；迁移不会根据时间自动猜测真实旧会话已结束，也不会创建隔离。迁移后由后续 `claim` 按独立计时条件推进状态。
+Schema 3.0.0 至 3.5.0 数据库升级到 3.6.0 时运行 `loopctl.py migrate`。3.0.0 至 3.3.0 仍要求没有活动 execution，并完成 L1-L5、规范运行环境和执行配置快照迁移。3.4.0 会原样保留活动 execution 与 ACTIVE scope 锁并补齐恢复及安全诊断字段；3.5.0 只增加安全结果诊断字段，同样保留活动 execution。迁移不会根据时间自动猜测真实旧会话已结束，也不会创建隔离。迁移后由后续 `claim` 按独立计时条件推进状态。
 
 Worker 协议：
 
@@ -115,7 +115,7 @@ Provider 工厂必须接受 `config` 与 `secret_store` 关键字参数，返回
 
 DeepSeek Provider 的公开失败诊断是允许列表式结构：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。类别仅包括鉴权、限流、服务端、连接、请求超时、空或畸形响应、截断响应、无效工具调用、无效最终 JSON、本地协议和未知结束原因。401/403 和本地配置/批准问题进入 `WAITING_HUMAN`；429、5xx、连接或请求超时会受 Provider 配置约束重试，并在耗尽后标记 `retry_exhausted=true`。Runtime 只接受该受信任诊断契约；未知异常只公开固定前缀和异常类型。诊断、事件和最终结果绝不包含 API key、Authorization、请求或响应正文、完整提示词、工具参数值、业务文件内容或隐藏推理。
 
-最终协议拒绝的允许列表类别为 `final_schema`；它与无效最终 JSON 一样是确定性错误，不会进入请求或完整 Agent attempt 重试。
+最终协议拒绝的允许列表类别为 `final_schema`。它与无效最终 JSON 一样不会进入 Provider HTTP 重试或完整 Agent attempt 重试；Runtime 可按 `self_hosted_agent.max_final_repairs` 发起最多一次专用 final 修复请求。修复请求不携带工具或 `tool_choice`，不会重放工具，也不会包含被拒绝 final 的字段值。
 
 对 `finish_reason=stop`，final JSON 解析失败、顶层不是 object，或 Runtime 发现缺少 `summary` 等终态契约字段时，诊断可附加 `final_shape`，并将最终契约类错误稳定归类为 `final_schema`。它只记录 finish reason、content Unicode 字符长度、解析状态、顶层类型、固定允许列表 `status`、`summary`、`verification`、`completed`、`error`、`question`、`options`、`result`、`message`、`output` 的存在性和值类型，以及未知字段数量/是否存在；不记录字段值、未知字段名、摘要、哈希、前后缀或原始 JSON。Runtime 保留该元数据并补入 `agent_attempt`、`model_step`。
 
@@ -123,7 +123,7 @@ DeepSeek Provider 的公开失败诊断是允许列表式结构：`category`、`
 
 Runtime 在每轮工具调用后保留对应的 assistant `tool_calls`，Provider 再把每个 runtime `tool_result` 映射为带匹配 `tool_call_id` 的 `tool` 消息；重复只读调用继续追加成有序消息链。最终轮要求 JSON object，并由 Runtime 按协议 1.0 的 `SUCCEEDED/FAILED/WAITING_HUMAN` 契约再次校验。`max_steps` 计算模型轮次，不计算 Provider 内部 HTTP 重试。现有安全诊断与本地假 HTTP 服务可以确认这些控制流和分类，但没有保存此前两次真实失败的原始 Provider 响应形态，因此无法确认它们分别属于哪个具体类别；本轮未读取真实凭据，也未调用真实 Provider。
 
-排查 final 失败时先查看稳定类别和 value-free `final_shape`，不要索取响应正文；`invalid_final_json`、`final_schema` 和截断均不触发完整 Agent attempt 重试。本地 fake HTTP 测试覆盖合法 final、缺少 summary、允许列表别名、顶层数组、非 JSON、空 content、截断、未知字段和嵌套值类型。
+排查 final 失败时先查看稳定类别和 value-free `final_shape`，不要索取响应正文；`invalid_final_json` 和 `final_schema` 最多触发一次无工具 final 修复，修复仍失败即按最新安全诊断结束，截断则直接失败；三者均不触发完整 Agent attempt 重试。本地 fake HTTP 测试覆盖合法 final、缺少 summary、一次修复成功/失败、允许列表别名、顶层数组、非 JSON、空 content、截断、未知字段和嵌套值类型。
 
 DeepSeek 的非敏感端点、模型、超时、重试和 `secret_ref` 位于 `config/initialization.json`。密钥由统一 SecretStore 按引用读取；缺失、账户不符、权限不足或后端不可用会快速失败且不打印其值。先用隐藏输入初始化并查看不含原值或掩码的状态：
 
@@ -154,7 +154,7 @@ py -3 .\scripts\agent_runtime.py `
 ## 文件
 
 - `data/loop-agent.sqlite3`：唯一任务事实源。
-- `schemas/loop-agent.sql`：Schema 3.5.0。
+- `schemas/loop-agent.sql`：Schema 3.6.0。
 - `config/initialization.json`：执行、自动化与服务配置。
 - `prompts/operator.md`：任务管理主对话提示词和查重、状态、独立归档流程。
 - `prompts/worker.md`：Codex Worker 自动化的权威提示词。

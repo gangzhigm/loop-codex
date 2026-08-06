@@ -31,6 +31,42 @@ from secret_store import SecretStore, create_secret_store
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOOPCTL = BASE_DIR / "scripts" / "loopctl.py"
 FINAL_STATUSES = {"SUCCEEDED", "FAILED", "WAITING_HUMAN"}
+FINAL_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["SUCCEEDED", "FAILED", "WAITING_HUMAN"]},
+        "summary": {"type": "string", "minLength": 1},
+        "verification": {
+            "type": "array", "items": {"type": "string", "minLength": 1},
+        },
+        "completed": {"type": "array", "items": {"type": "string"}},
+        "error": {"type": "string", "minLength": 1},
+        "question": {"type": "string", "minLength": 1},
+        "options": {"type": "array", "items": {"type": "string"}},
+        "next_step": {"type": "string"},
+        "percent": {"type": "integer", "minimum": 0, "maximum": 99},
+    },
+    "required_by_status": {
+        "SUCCEEDED": ["status", "summary", "verification"],
+        "FAILED": ["status", "summary", "error"],
+        "WAITING_HUMAN": ["status", "summary", "question"],
+    },
+    "examples": {
+        "SUCCEEDED": {
+            "status": "SUCCEEDED",
+            "summary": "Work completed.",
+            "verification": ["A concrete verification passed."],
+        },
+        "FAILED": {
+            "status": "FAILED", "summary": "Work failed.", "error": "Failure category.",
+        },
+        "WAITING_HUMAN": {
+            "status": "WAITING_HUMAN",
+            "summary": "Human input is required.",
+            "question": "What decision is required?",
+        },
+    },
+}
 HIGH_RISK_ACTIONS = {"delete", "publish", "git_commit", "external_message", "credential_access"}
 SENSITIVE_COMPONENT = re.compile(
     r"(^|[._-])(secret|secrets|credential|credentials|api[_-]?key|access[_-]?token|private[_-]?key)([._-]|$)",
@@ -326,6 +362,7 @@ class RuntimeSettings:
     max_tool_output_chars: int
     stalled_after_seconds: float = 300
     provider_termination_grace_seconds: float = 5
+    max_final_repairs: int = 1
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "RuntimeSettings":
@@ -339,7 +376,10 @@ class RuntimeSettings:
             max_tool_output_chars=int(agent["max_tool_output_chars"]),
             stalled_after_seconds=float(config["task_execution"]["stalled_after_seconds"]),
             provider_termination_grace_seconds=float(agent["provider_termination_grace_seconds"]),
+            max_final_repairs=int(agent.get("max_final_repairs", 1)),
         )
+        if settings.max_final_repairs not in {0, 1}:
+            raise AgentRuntimeError("max_final_repairs must be zero or one")
         if not 0 < settings.heartbeat_interval_seconds < settings.stalled_after_seconds:
             raise AgentRuntimeError("heartbeat interval must be below stalled detection")
         profiles = config.get("execution_profiles") or {}
@@ -1132,16 +1172,28 @@ class SingleTaskAgent:
                 "tools": ToolSandbox.TOOL_SCHEMAS,
                 "credential_access_approved": credential_access_approved,
                 "execution_profile": execution_profile.request_payload(),
-                "final_result_schema": {
-                    "status": sorted(FINAL_STATUSES),
-                    "required": {"SUCCEEDED": ["summary", "verification"], "FAILED": ["summary", "error"], "WAITING_HUMAN": ["summary", "question"]},
-                },
+                "final_result_schema": FINAL_RESULT_SCHEMA,
             }
             self.logger.event("model_request", step=step)
             try:
                 raw = self._call_provider(request, deadline)
                 response = validate_model_response(raw)
             except Exception as error:
+                if self._can_repair_final(error):
+                    try:
+                        response = self._repair_final(
+                            request,
+                            messages,
+                            error,
+                            step,
+                            deadline,
+                            guard,
+                        )
+                    except Exception as repair_error:
+                        error = repair_error
+                    else:
+                        self.logger.event("model_response", step=step, type=response["type"])
+                        return response["result"]
                 diagnostic = self._trusted_diagnostic(error, model_step=step)
                 if isinstance(error, TrustedDiagnosticError) and diagnostic is not None:
                     error.diagnostic = diagnostic
@@ -1149,7 +1201,7 @@ class SingleTaskAgent:
                 if diagnostic is not None:
                     event_fields.update(diagnostic.as_dict())
                 self.logger.event("model_request_failed", **event_fields)
-                raise
+                raise error
             self.logger.event("model_response", step=step, type=response["type"])
             if response["type"] == "final":
                 return response["result"]
@@ -1173,6 +1225,72 @@ class SingleTaskAgent:
             messages.append({"role": "provider", "content": {"tool_calls": response["calls"]}})
             messages.append({"role": "runtime", "content": {"tool_results": tool_results}})
         return self._failed("maximum agent steps exhausted before a valid final result")
+
+    def _can_repair_final(self, error: Exception) -> bool:
+        return (
+            self.settings.max_final_repairs == 1
+            and isinstance(error, TrustedDiagnosticError)
+            and error.diagnostic.category in {"final_schema", "invalid_final_json"}
+        )
+
+    def _repair_final(
+        self,
+        request: dict[str, Any],
+        messages: list[dict[str, Any]],
+        original_error: Exception,
+        step: int,
+        deadline: float,
+        guard: HeartbeatGuard,
+    ) -> dict[str, Any]:
+        diagnostic = self._trusted_diagnostic(original_error, model_step=step)
+        assert diagnostic is not None
+        guard.ensure_healthy()
+        guard.beat()
+        self.logger.event(
+            "model_final_repair_started", step=step, repair_attempt=1,
+            category=diagnostic.category,
+        )
+        repair_request = {
+            **request,
+            "messages": [
+                *messages,
+                {
+                    "role": "runtime",
+                    "content": {
+                        "final_repair": {
+                            "reason": diagnostic.category,
+                            "instruction": (
+                                "Return one corrected final JSON object matching final_result_schema. "
+                                "Do not call tools."
+                            ),
+                        }
+                    },
+                },
+            ],
+            "tools": [],
+            "final_repair": True,
+        }
+        try:
+            raw = self._call_provider(repair_request, deadline)
+            response = validate_model_response(raw)
+            if response["type"] != "final":
+                raise TrustedDiagnosticError(
+                    ProviderDiagnostic("final_schema", finish_reason="tool_calls")
+                )
+        except Exception as error:
+            repair_diagnostic = self._trusted_diagnostic(error, model_step=step)
+            fields: dict[str, Any] = {
+                "step": step, "repair_attempt": 1, "error": type(error).__name__,
+            }
+            if repair_diagnostic is not None:
+                fields.update(repair_diagnostic.as_dict())
+                if isinstance(error, TrustedDiagnosticError):
+                    error.diagnostic = repair_diagnostic
+            self.logger.event("model_final_repair_failed", **fields)
+            raise
+        guard.beat()
+        self.logger.event("model_final_repair_succeeded", step=step, repair_attempt=1)
+        return response
 
     def _call_provider(self, request: dict[str, Any], deadline: float) -> dict[str, Any]:
         completed: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)

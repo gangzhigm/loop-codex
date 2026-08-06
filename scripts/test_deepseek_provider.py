@@ -238,6 +238,52 @@ class DeepSeekProviderTests(unittest.TestCase):
             ) + log_stream.getvalue()
             self.assertNotIn(token, persisted_surface)
 
+    def test_local_fake_service_repairs_final_schema_without_repeating_tools(self) -> None:
+        invalid_final = 200, {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
+            "status": "SUCCEEDED", "summary": "patched", "verification": "local check",
+        })}}]}
+        with TemporaryDirectory() as temporary, LocalServer([
+            tool_response(), invalid_final, final_response(),
+        ]) as server:
+            workspace = Path(temporary)
+            project = workspace / "project"
+            project.mkdir()
+            (project / "AGENTS.md").write_text("Use UTF-8.\n", encoding="utf-8")
+            (project / "file.txt").write_text("before\n", encoding="utf-8")
+            task = {
+                "id": "DEEPSEEK-REPAIR-TEST",
+                "description": "Patch once. APPROVED_ACTIONS: credential_access",
+                "scope": ["project/"],
+                "acceptance": ["File is updated once."],
+                "depends_on": [],
+                "runtime_environment": "self_hosted_agent",
+                "provider_id": "deepseek",
+                "capability_level": "L2",
+            }
+            controller = FakeController(task)
+            provider = DeepSeekProvider(
+                self.settings(server.url),
+                self.store({"DEEPSEEK_API_KEY": "test-only-token"}),
+                sleeper=lambda _: None,
+            )
+            agent = SingleTaskAgent(
+                provider, controller, workspace,
+                RuntimeSettings(4, 2, 2, 60, 20_000, 10_000),
+                SafeLogger(io.StringIO()), config=load_initialization_config(),
+            )
+            result = agent.run("repair-execution", "self_hosted_agent", "L2", "deepseek")
+            file_content = (project / "file.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(file_content, "after\n")
+        self.assertEqual(len(ScriptedHandler.requests), 3)
+        repair_body = ScriptedHandler.requests[2]["body"]
+        self.assertNotIn("tools", repair_body)
+        self.assertNotIn("tool_choice", repair_body)
+        self.assertIn("final repair request", repair_body["messages"][0]["content"])
+        self.assertEqual(repair_body["messages"][-1]["role"], "system")
+        self.assertIn('"verification": {"type": "array"', repair_body["messages"][0]["content"])
+
     def test_local_fake_service_preserves_repeated_read_only_tool_sequence(self) -> None:
         responses = [
             tool_response("read_file", {"path": "project/file.txt"}, "read-1"),
@@ -300,7 +346,6 @@ class DeepSeekProviderTests(unittest.TestCase):
         ]}}]})
         cases = [
             ((400, {}), "request_invalid"),
-            ((200, {"choices": [{"finish_reason": "stop", "message": {"content": "not-json"}}]}), "invalid_final_json"),
             ((200, {"choices": [{"finish_reason": "length", "message": {}}]}), "truncated_response"),
             (invalid_tool, "invalid_tool_call"),
         ]
@@ -311,6 +356,19 @@ class DeepSeekProviderTests(unittest.TestCase):
             self.assertEqual(result["result"]["diagnostic"]["category"], category)
             self.assertEqual(len(ScriptedHandler.requests), 1)
             self.assertNotIn('"event": "agent_attempt_retry"', log)
+
+    def test_invalid_final_json_uses_one_final_repair_request(self) -> None:
+        invalid = 200, {"choices": [{
+            "finish_reason": "stop", "message": {"content": "not-json"},
+        }]}
+        with LocalServer([invalid, final_response()]) as server:
+            result, _controller, log = self.run_local_agent(server)
+
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(len(ScriptedHandler.requests), 2)
+        self.assertNotIn("tools", ScriptedHandler.requests[1]["body"])
+        self.assertEqual(log.count('"event": "model_final_repair_started"'), 1)
+        self.assertEqual(log.count('"event": "model_final_repair_succeeded"'), 1)
 
     def test_auth_failure_is_not_retried(self) -> None:
         token = "auth-failure-test-token"
@@ -490,7 +548,7 @@ class DeepSeekProviderTests(unittest.TestCase):
             unknown_name: secret,
         }
         response = (200, {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(malformed)}}]})
-        with LocalServer([response]) as server:
+        with LocalServer([response, response]) as server:
             result, controller, log = self.run_local_agent(server)
 
         failed = result["result"]
@@ -501,6 +559,7 @@ class DeepSeekProviderTests(unittest.TestCase):
         self.assertEqual(diagnostic["model_step"], 1)
         self.assertFalse(diagnostic["final_shape"]["allowed_fields"]["summary"]["present"])
         self.assertEqual(diagnostic["final_shape"]["unknown_field_count"], 1)
+        self.assertEqual(len(ScriptedHandler.requests), 2)
         persisted_surface = json.dumps(
             {"result": result, "task_result": controller.result, "events": log}, ensure_ascii=False
         )

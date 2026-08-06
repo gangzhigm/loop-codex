@@ -388,11 +388,30 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn("interrupted", result["result"]["error"])
         self.assertEqual(controller.finishes[0][2]["status"], "FAILED")
 
-    def test_invalid_final_result_becomes_failed(self) -> None:
+    def test_invalid_final_result_is_repaired_once_without_agent_retry(self) -> None:
         self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 2
         provider = ScriptedProvider([
             {"type": "final", "result": {"status": "SUCCEEDED", "summary": "no proof"}},
-            success_result("must not retry"),
+            success_result("repaired final"),
+        ])
+        result, _ = self.run_agent(provider)
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(result["result"]["verification"], ["repaired final"])
+        self.assertEqual(len(provider.requests), 2)
+        repair = provider.requests[1]
+        self.assertTrue(repair["final_repair"])
+        self.assertEqual(repair["tools"], [])
+        self.assertEqual(
+            repair["final_result_schema"]["properties"]["verification"]["type"], "array"
+        )
+
+    def test_invalid_final_repair_is_attempted_only_once(self) -> None:
+        provider = ScriptedProvider([
+            {"type": "final", "result": {"status": "SUCCEEDED", "summary": "no proof"}},
+            {"type": "final", "result": {
+                "status": "SUCCEEDED", "summary": "still wrong", "verification": "one",
+            }},
+            success_result("must not be requested"),
         ])
         result, _ = self.run_agent(provider)
         failed = result["result"]
@@ -400,11 +419,11 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(failed["diagnostic"]["category"], "final_schema")
         self.assertEqual(failed["diagnostic"]["agent_attempt"], 1)
         self.assertEqual(failed["diagnostic"]["model_step"], 1)
-        shape = failed["diagnostic"]["final_shape"]
-        self.assertEqual(shape["json_parse_state"], "parsed")
-        self.assertTrue(shape["allowed_fields"]["summary"]["present"])
-        self.assertFalse(shape["allowed_fields"]["verification"]["present"])
-        self.assertEqual(len(provider.requests), 1)
+        self.assertEqual(
+            failed["diagnostic"]["final_shape"]["allowed_fields"]["verification"]["type"],
+            "string",
+        )
+        self.assertEqual(len(provider.requests), 2)
 
     def test_invalid_tool_arguments_do_not_restart_agent_attempt(self) -> None:
         self.config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"]["max_retries"] = 2

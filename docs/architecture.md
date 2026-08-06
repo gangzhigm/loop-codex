@@ -17,7 +17,7 @@ config/initialization.json --backend/service/secret_ref--> SecretStore ---> OS k
                                                                `-------> explicit process environment
 ```
 
-SQLite 只包含任务及其执行一致性表：`tasks`（包括任务所选的 `runtime_environment`、`capability_level`、`provider_id`、`execution_policy` 和独立的 nullable `archived_at`）、7 张任务子表、`executions`、`scope_locks` 和 `task_conflicts`。Schema 3.5.0 中 execution 可记录 `STALLED/TIMED_OUT`、终止原因和恢复处置，scope lock 独立记录 `ACTIVE/QUARANTINED`。它不保存密钥、Authorization、可逆密文、密钥片段、运行环境目录及入口配置、模型映射、自动化周期、metadata、settings、projects、change requests、health events 或 service state。旧 `execution_profile` 只在过渡期输入与展示兼容层中推导，不是队列键。
+SQLite 只包含任务及其执行一致性表：`tasks`（包括任务所选的 `runtime_environment`、`capability_level`、`provider_id`、`execution_policy`、独立的 nullable `archived_at`，以及不含响应原文和字段值的 nullable `result_diagnostic_json`）、7 张任务子表、`executions`、`scope_locks` 和 `task_conflicts`。Schema 3.6.0 中 execution 可记录 `STALLED/TIMED_OUT`、终止原因和恢复处置，scope lock 独立记录 `ACTIVE/QUARANTINED`。它不保存密钥、Authorization、可逆密文、密钥片段、运行环境目录及入口配置、模型映射、自动化周期、metadata、settings、projects、change requests、health events 或 service state。旧 `execution_profile` 只在过渡期输入与展示兼容层中推导，不是队列键。
 
 ## SecretStore 边界
 
@@ -47,7 +47,7 @@ stdout 与 stderr 由独立线程持续排空并只保留配置上限内的尾�
 
 模型上下文只使用领取任务的 `id`、`description`、`scope`、`acceptance` 和已满足依赖标记，不传入完整队列状态。日志只记录步骤、工具名和错误类型，不记录模型密钥、Authorization、文件全文、完整提示词或隐藏推理。Provider 失败只有继承 Runtime 受信任诊断契约时才能进入事件及 `FAILED`/`WAITING_HUMAN` 结果；固定字段为 `category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。未知异常只降级为固定消息与异常类型，绝不透传异常文本。
 
-对 `finish_reason=stop` 的 final，Provider 和 Runtime 共享 value-free `final_shape` 诊断：只含 content Unicode 字符长度、`invalid_json`/`parsed`/`unavailable` 状态、顶层类型、十个固定允许列表字段的存在性/类型和未知字段数量；不含字段值或未知字段名。Provider 在 JSON 解析失败或顶层非 object 时附加它，Runtime 在 required `summary` 等终态契约失败时以 `final_schema` 保留该 shape，并补入 attempt/step 上下文写入事件和 `FAILED` 结果。
+对 `finish_reason=stop` 的 final，Provider 和 Runtime 共享 value-free `final_shape` 诊断：只含 content Unicode 字符长度、`invalid_json`/`parsed`/`unavailable` 状态、顶层类型、十个固定允许列表字段的存在性/类型和未知字段数量；不含字段值或未知字段名。Provider 在 JSON 解析失败或顶层非 object 时附加它，Runtime 在 required `summary` 等终态契约失败时以 `final_schema` 保留该 shape。Runtime 可发起最多一次不带工具的专用 final 修复请求；修复不重放工具、不启动新的 Agent attempt，也不包含被拒绝 final，仍失败时保留最新 shape 并补入 attempt/step 上下文。
 
 工具层提供 UTF-8 文本读取、正则搜索、精确文本 patch/新文件创建和受限命令执行。所有路径在解析符号链接后必须位于领取 scope；绝对路径、`..`、`.env*`、`.reasonix`、版本控制元数据、常见密钥及凭据命名默认拒绝。命令不经过 shell，只允许固定形态的 `git status/diff` 和 `rg`，可执行文件必须从工作区外解析，并关闭本地 fsmonitor、外部 diff、textconv、子模块与 ripgrep 配置执行面。解释器、重定向、任意子进程和未知命令默认拒绝。
 
@@ -135,7 +135,7 @@ STALLED -- 后续 attempt timeout --------> TIMED_OUT（容量保持释放，sco
 
 Codex CLI Runner 同样只有在 `finish` 返回 `FINISHED` 后才视为任务状态已更新；它不轮询或领取第二项，也不创建持久化 report、`CONFIRMED` 或 `archived_at`。正常退出后不保留 CLI 会话，超时和中断路径会回收进程树；若操作系统拒绝终止或 `finish` 自身不可用，Runner 只能报告真实运行错误，后续领取仍由既有心跳/租约机制回收 execution 与 scope 锁。
 
-Schema 3.0.0 至 3.4.0 到 3.5.0 的迁移使用受控的 `loopctl.py migrate`。3.0.0 至 3.3.0 要求没有活动 execution，并完成规范路由与执行快照迁移；3.4.0 迁移允许活动 execution，原样保留其 `RUNNING` 状态与 ACTIVE scope lock，只扩展恢复字段。迁移本身不根据旧时间戳创建 `STALLED/TIMED_OUT/QUARANTINED`，因此不会自动解除或误判真实旧会话；迁移后的下一次 `claim` 才按当前时钟推进状态。所有路径保留任务、execution、历史、结果、依赖、scope、归档和 row version，并执行外键与 quick check。
+Schema 3.0.0 至 3.5.0 到 3.6.0 的迁移使用受控的 `loopctl.py migrate`。3.0.0 至 3.3.0 要求没有活动 execution，并完成规范路由与执行快照迁移；3.4.0/3.5.0 迁移允许活动 execution，原样保留其 `RUNNING` 状态与 ACTIVE scope lock，并扩展恢复字段及不含模型原文的安全结果诊断字段。迁移本身不根据旧时间戳创建 `STALLED/TIMED_OUT/QUARANTINED`，因此不会自动解除或误判真实旧会话；迁移后的下一次 `claim` 才按当前时钟推进状态。所有路径保留任务、execution、历史、结果、依赖、scope、归档和 row version，并执行外键与 quick check。
 
 ## 安全边界
 
