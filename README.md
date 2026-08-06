@@ -67,6 +67,8 @@ $resultJson | py -3 .\scripts\loopctl.py finish <execution-id> <task-id> -
 
 `finish` 默认从 stdin 读取 UTF-8 JSON，也兼容显式 JSON 文件路径。正常流程不持久化中间 report。`claim` 强制显式提供 `runtime_environment`、`capability_level` 和 `execution_policy`，只扫描三个字段同时匹配的任务；它会把冲突候选转为 `WAITING_CONFLICT` 后继续寻找其他可运行 scope。全局 8、平台 5、依赖与 scope 锁跨运行环境共同生效。它可能返回 `CLAIMED`、`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED`；除 `CLAIMED` 外均立即结束。
 
+Codex Worker 可自行清理当前 execution 在任务登记项目内明确新生成且仍未被 Git 跟踪的普通临时文件，不需要额外 `delete` 批准。自动清理要求执行前状态、生成命令与时间证据，只允许逐个精确文件路径，并禁止目录、符号链接/重解析点、源码、配置、凭据、用户数据、通配符、递归删除和跨项目操作。Git 已跟踪、execution 前已存在或归属不明的文件仍需人工授权；清理后必须复核 Git 状态并记录 verification。自建 Agent Runtime 当前没有删除工具，不适用该例外。
+
 Codex 客户端的 heartbeat stalled、renewable lease expiry 与 attempt timeout 独立计算。任一存活性条件触发后，任务进入 `WAITING_HUMAN`，execution 转为非活动 `STALLED`；attempt timeout 到达后进一步转为 `TIMED_OUT`。这会释放全局和平台活动容量，但 scope lock 转为 `QUARANTINED`，继续阻止同项目写入。只有人工确认旧客户端会话已结束后，才能用 `recover --human-confirmed-safe --action requeue|failed|wait` 处置；迟到 heartbeat/finish 会被 execution fencing 拒绝。受控 Runner 平台改用 `--runner-confirmed-terminated`。
 
 复现缺陷的时间线为：`2026-08-05T12:12:46.282+08:00` 首次观测旧 execution 心跳停滞但租约和 attempt 尚未超时；`2026-08-05T13:39:32.463+08:00` 三项条件均到达后，它仍错误保持 `RUNNING` 并占用容量与 scope。修复后的预期是首次停滞即变为 `STALLED + WAITING_HUMAN + QUARANTINED` 并释放容量，attempt 到期再记录 `TIMED_OUT`，隔离继续保留直至人工安全恢复。旧客户端实际是否已经结束仍无法从这些时间信号确认。
@@ -113,9 +115,15 @@ Provider 工厂必须接受 `config` 与 `secret_store` 关键字参数，返回
 
 DeepSeek Provider 的公开失败诊断是允许列表式结构：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。类别仅包括鉴权、限流、服务端、连接、请求超时、空或畸形响应、截断响应、无效工具调用、无效最终 JSON、本地协议和未知结束原因。401/403 和本地配置/批准问题进入 `WAITING_HUMAN`；429、5xx、连接或请求超时会受 Provider 配置约束重试，并在耗尽后标记 `retry_exhausted=true`。Runtime 只接受该受信任诊断契约；未知异常只公开固定前缀和异常类型。诊断、事件和最终结果绝不包含 API key、Authorization、请求或响应正文、完整提示词、工具参数值、业务文件内容或隐藏推理。
 
+最终协议拒绝的允许列表类别为 `final_schema`；它与无效最终 JSON 一样是确定性错误，不会进入请求或完整 Agent attempt 重试。
+
+对 `finish_reason=stop`，final JSON 解析失败、顶层不是 object，或 Runtime 发现缺少 `summary` 等终态契约字段时，诊断可附加 `final_shape`，并将最终契约类错误稳定归类为 `final_schema`。它只记录 finish reason、content Unicode 字符长度、解析状态、顶层类型、固定允许列表 `status`、`summary`、`verification`、`completed`、`error`、`question`、`options`、`result`、`message`、`output` 的存在性和值类型，以及未知字段数量/是否存在；不记录字段值、未知字段名、摘要、哈希、前后缀或原始 JSON。Runtime 保留该元数据并补入 `agent_attempt`、`model_step`。
+
 两个 `max_retries` 属于不同边界：`deepseek.max_retries=2` 表示每个模型步骤首次 HTTP 请求失败后最多再请求 2 次；`execution_profiles.self_hosted_agent.providers.deepseek.capabilities.<level>.max_retries=2` 表示一次完整 Agent attempt 失败后最多再启动 2 个干净 attempt。只有 Provider 请求预算已耗尽的瞬态类别，或明确的请求/attempt 超时，才能在没有本地副作用时进入后一层；400、无效工具调用、无效 final JSON、截断、`max_steps` 和未知错误不重启完整工具循环。持续 5xx 的最坏边界因此是每个 attempt 3 次请求、最多 3 个 attempt，共 9 次请求。日志分别使用 `provider_request_retry`、`provider_request_retries_exhausted` 和 `agent_attempt_retry`，不会把两层重试混为一谈。
 
 Runtime 在每轮工具调用后保留对应的 assistant `tool_calls`，Provider 再把每个 runtime `tool_result` 映射为带匹配 `tool_call_id` 的 `tool` 消息；重复只读调用继续追加成有序消息链。最终轮要求 JSON object，并由 Runtime 按协议 1.0 的 `SUCCEEDED/FAILED/WAITING_HUMAN` 契约再次校验。`max_steps` 计算模型轮次，不计算 Provider 内部 HTTP 重试。现有安全诊断与本地假 HTTP 服务可以确认这些控制流和分类，但没有保存此前两次真实失败的原始 Provider 响应形态，因此无法确认它们分别属于哪个具体类别；本轮未读取真实凭据，也未调用真实 Provider。
+
+排查 final 失败时先查看稳定类别和 value-free `final_shape`，不要索取响应正文；`invalid_final_json`、`final_schema` 和截断均不触发完整 Agent attempt 重试。本地 fake HTTP 测试覆盖合法 final、缺少 summary、允许列表别名、顶层数组、非 JSON、空 content、截断、未知字段和嵌套值类型。
 
 DeepSeek 的非敏感端点、模型、超时、重试和 `secret_ref` 位于 `config/initialization.json`。密钥由统一 SecretStore 按引用读取；缺失、账户不符、权限不足或后端不可用会快速失败且不打印其值。先用隐藏输入初始化并查看不含原值或掩码的状态：
 

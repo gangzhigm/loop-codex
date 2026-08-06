@@ -47,6 +47,8 @@ stdout 与 stderr 由独立线程持续排空并只保留配置上限内的尾�
 
 模型上下文只使用领取任务的 `id`、`description`、`scope`、`acceptance` 和已满足依赖标记，不传入完整队列状态。日志只记录步骤、工具名和错误类型，不记录模型密钥、Authorization、文件全文、完整提示词或隐藏推理。Provider 失败只有继承 Runtime 受信任诊断契约时才能进入事件及 `FAILED`/`WAITING_HUMAN` 结果；固定字段为 `category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。未知异常只降级为固定消息与异常类型，绝不透传异常文本。
 
+对 `finish_reason=stop` 的 final，Provider 和 Runtime 共享 value-free `final_shape` 诊断：只含 content Unicode 字符长度、`invalid_json`/`parsed`/`unavailable` 状态、顶层类型、十个固定允许列表字段的存在性/类型和未知字段数量；不含字段值或未知字段名。Provider 在 JSON 解析失败或顶层非 object 时附加它，Runtime 在 required `summary` 等终态契约失败时以 `final_schema` 保留该 shape，并补入 attempt/step 上下文写入事件和 `FAILED` 结果。
+
 工具层提供 UTF-8 文本读取、正则搜索、精确文本 patch/新文件创建和受限命令执行。所有路径在解析符号链接后必须位于领取 scope；绝对路径、`..`、`.env*`、`.reasonix`、版本控制元数据、常见密钥及凭据命名默认拒绝。命令不经过 shell，只允许固定形态的 `git status/diff` 和 `rg`，可执行文件必须从工作区外解析，并关闭本地 fsmonitor、外部 diff、textconv、子模块与 ripgrep 配置执行面。解释器、重定向、任意子进程和未知命令默认拒绝。
 
 `delete`、`publish`、`git_commit`、`external_message`、`credential_access` 必须在当前任务文本中使用 `APPROVED_ACTIONS: action1,action2` 明确授权；缺少标记时 Runtime 直接以 `WAITING_HUMAN` finish。即使授权，未实现的高风险工具仍拒绝执行，避免把授权误当作实现。
@@ -139,7 +141,7 @@ Schema 3.0.0 至 3.4.0 到 3.5.0 的迁移使用受控的 `loopctl.py migrate`�
 
 scope 必须相对 `E:\code` 并匹配项目清单中最长的项目路径。绝对路径、`..`、`$CODEX_HOME`、`.reasonix`、`.env` 和未登记项目会被拒绝。Worker 还必须读取目标项目适用的 `AGENTS.md`、检查 Git 工作树、保留既有改动并只处理已领取 scope。
 
-删除、发布、Git 提交、外部消息和凭据访问需要明确人工授权；授权应体现在当前任务内容或 Operator 的明确指令中。缺少授权时以 `WAITING_HUMAN` 完成本轮。
+删除 Git 已跟踪、execution 前已存在或归属不明的文件，以及发布、Git 提交、外部消息和凭据访问，需要明确人工授权；授权应体现在当前任务内容或 Operator 的明确指令中。Codex 自动化与 Codex CLI 可自行清理本次 execution 在任务登记项目内新生成且仍未被 Git 跟踪的普通临时文件，但必须有执行前状态、具体生成命令和时间证据，只能逐个使用精确路径，且不得删除目录、符号链接/重解析点、源码、配置、凭据或用户数据。通配符、递归删除、跨项目清理和归属不明的文件仍必须进入 `WAITING_HUMAN`。自建 Agent Runtime 未实现删除工具，即使满足条件也不会获得隐式删除能力。
 
 ## 服务健康
 

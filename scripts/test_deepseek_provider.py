@@ -428,6 +428,85 @@ class DeepSeekProviderTests(unittest.TestCase):
             self.assertEqual(captured.exception.diagnostic.finish_reason, finish_reason)
             self.assertNotIn("private", str(captured.exception))
 
+    def test_final_shape_diagnostics_are_fixed_and_value_free(self) -> None:
+        secret = "deepseek-test-secret-value"
+        authorization = "Bearer private-authorization"
+        hidden_reasoning = "private hidden reasoning"
+        business_text = "confidential business document"
+        unknown_name = "AuthorizationPrivateField"
+        result = {
+            "status": "FAILED",
+            "summary": "safe summary",
+            "error": secret,
+            "result": {"nested": authorization},
+            "message": [hidden_reasoning],
+            "output": {"business": business_text},
+            unknown_name: secret,
+        }
+        raw = json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]}).encode("utf-8")
+        normalized = DeepSeekProvider._normalize_response(raw)
+        shape = normalized["final_shape"].as_dict()
+        self.assertEqual(shape["finish_reason"], "stop")
+        self.assertEqual(shape["json_parse_state"], "parsed")
+        self.assertEqual(shape["top_level_type"], "object")
+        self.assertEqual(shape["allowed_fields"]["result"], {"present": True, "type": "object"})
+        self.assertEqual(shape["allowed_fields"]["message"], {"present": True, "type": "array"})
+        self.assertEqual(shape["allowed_fields"]["output"], {"present": True, "type": "object"})
+        self.assertEqual(shape["unknown_field_count"], 1)
+        self.assertTrue(shape["unknown_fields_present"])
+        serialized = json.dumps(shape, ensure_ascii=False)
+        for private_value in (secret, authorization, hidden_reasoning, business_text, unknown_name):
+            self.assertNotIn(private_value, serialized)
+
+        cases = [
+            ("not-json-" + secret, "invalid_json", "unavailable"),
+            ("", "invalid_json", "unavailable"),
+            (json.dumps([secret]), "parsed", "array"),
+        ]
+        for content, parse_state, top_level_type in cases:
+            with self.subTest(content_type=top_level_type):
+                payload = json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": content}}]}).encode("utf-8")
+                with self.assertRaises(DeepSeekProviderError) as captured:
+                    DeepSeekProvider._normalize_response(payload)
+                diagnostic = captured.exception.diagnostic
+                self.assertEqual(diagnostic.category, "invalid_final_json")
+                self.assertEqual(diagnostic.final_shape.json_parse_state, parse_state)
+                self.assertEqual(diagnostic.final_shape.top_level_type, top_level_type)
+                surface = json.dumps(diagnostic.as_dict(), ensure_ascii=False) + str(captured.exception)
+                self.assertNotIn(secret, surface)
+
+    def test_missing_final_summary_reaches_runtime_as_safe_schema_diagnostic(self) -> None:
+        secret = "deepseek-test-secret-value"
+        authorization = "Bearer private-authorization"
+        hidden_reasoning = "private hidden reasoning"
+        business_text = "confidential business document"
+        unknown_name = "AuthorizationPrivateField"
+        malformed = {
+            "status": "FAILED",
+            "error": secret,
+            "result": {"nested": authorization},
+            "message": [hidden_reasoning],
+            "output": {"business": business_text},
+            unknown_name: secret,
+        }
+        response = (200, {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(malformed)}}]})
+        with LocalServer([response]) as server:
+            result, controller, log = self.run_local_agent(server)
+
+        failed = result["result"]
+        self.assertEqual(failed["status"], "FAILED")
+        diagnostic = failed["diagnostic"]
+        self.assertEqual(diagnostic["category"], "final_schema")
+        self.assertEqual(diagnostic["agent_attempt"], 1)
+        self.assertEqual(diagnostic["model_step"], 1)
+        self.assertFalse(diagnostic["final_shape"]["allowed_fields"]["summary"]["present"])
+        self.assertEqual(diagnostic["final_shape"]["unknown_field_count"], 1)
+        persisted_surface = json.dumps(
+            {"result": result, "task_result": controller.result, "events": log}, ensure_ascii=False
+        )
+        for private_value in (secret, authorization, hidden_reasoning, business_text, unknown_name):
+            self.assertNotIn(private_value, persisted_surface)
+
 
 if __name__ == "__main__":
     unittest.main()

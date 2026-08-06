@@ -395,8 +395,15 @@ class AgentRuntimeTests(unittest.TestCase):
             success_result("must not retry"),
         ])
         result, _ = self.run_agent(provider)
-        self.assertEqual(result["result"]["status"], "FAILED")
-        self.assertIn("verification", result["result"]["error"])
+        failed = result["result"]
+        self.assertEqual(failed["status"], "FAILED")
+        self.assertEqual(failed["diagnostic"]["category"], "final_schema")
+        self.assertEqual(failed["diagnostic"]["agent_attempt"], 1)
+        self.assertEqual(failed["diagnostic"]["model_step"], 1)
+        shape = failed["diagnostic"]["final_shape"]
+        self.assertEqual(shape["json_parse_state"], "parsed")
+        self.assertTrue(shape["allowed_fields"]["summary"]["present"])
+        self.assertFalse(shape["allowed_fields"]["verification"]["present"])
         self.assertEqual(len(provider.requests), 1)
 
     def test_invalid_tool_arguments_do_not_restart_agent_attempt(self) -> None:

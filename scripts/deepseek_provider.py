@@ -13,7 +13,13 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from agent_runtime import ExecutionProfile, ProviderDiagnostic, SafeLogger, TrustedDiagnosticError
+from agent_runtime import (
+    ExecutionProfile,
+    ProviderDiagnostic,
+    SafeLogger,
+    TrustedDiagnosticError,
+    final_shape_diagnostic,
+)
 from loopdb import CAPABILITY_LEVELS, load_initialization_config, resolve_execution_profile
 from secret_store import (
     SecretStore,
@@ -34,6 +40,7 @@ class DeepSeekProviderError(TrustedDiagnosticError):
         retryable: bool = False,
         retry_exhausted: bool = False,
         finish_reason: str | None = None,
+        final_shape: Any | None = None,
         requires_human: bool = False,
     ) -> None:
         super().__init__(
@@ -43,6 +50,7 @@ class DeepSeekProviderError(TrustedDiagnosticError):
                 retryable=retryable,
                 retry_exhausted=retry_exhausted,
                 finish_reason=finish_reason,
+                final_shape=final_shape,
             ),
             requires_human=requires_human,
         )
@@ -362,13 +370,28 @@ class DeepSeekProvider:
             return {"type": "tool_calls", "calls": normalized}
         if finish_reason != "stop" or not isinstance(message, dict) or not isinstance(message.get("content"), str):
             raise DeepSeekProviderError("unsupported_finish_reason")
+        content = message["content"]
         try:
-            result = json.loads(message["content"])
+            result = json.loads(content)
         except json.JSONDecodeError as error:
-            raise DeepSeekProviderError("invalid_final_json", finish_reason=finish_reason) from error
+            raise DeepSeekProviderError(
+                "invalid_final_json",
+                finish_reason=finish_reason,
+                final_shape=final_shape_diagnostic(
+                    None, content_length=len(content), json_parse_state="invalid_json"
+                ),
+            ) from None
         if not isinstance(result, dict):
-            raise DeepSeekProviderError("invalid_final_json", finish_reason=finish_reason)
-        return {"type": "final", "result": result}
+            raise DeepSeekProviderError(
+                "invalid_final_json",
+                finish_reason=finish_reason,
+                final_shape=final_shape_diagnostic(result, content_length=len(content)),
+            )
+        return {
+            "type": "final",
+            "result": result,
+            "final_shape": final_shape_diagnostic(result, content_length=len(content)),
+        }
 
 
 def verify_deepseek_credential(

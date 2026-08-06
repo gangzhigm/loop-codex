@@ -146,6 +146,10 @@ py -3 .\scripts\secretctl.py delete deepseek
 
 排查 self-hosted DeepSeek 执行失败时，只使用 Runtime 输出的受信任诊断字段：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。`authentication`（含 401/403）和本地配置/批准问题需要人工处理；`rate_limited`、`server_error`、`connection` 和 `request_timeout` 仅在 Provider 配置允许的次数内重试，耗尽后显示 `retry_exhausted=true`。`empty_or_malformed_response`、`truncated_response`、`invalid_tool_call`、`invalid_final_json`、`local_protocol` 与 `unsupported_finish_reason` 不重试。不要依据异常原文、请求/响应正文、Authorization、工具参数或业务文件内容排查，因为这些值不进入事件、任务结果或 SQLite。
 
+`final_schema` 同样属于确定性的受信任诊断类别，不会触发请求或完整 Agent attempt 重试。
+
+`finish_reason=stop` 的 final 失败可带 `final_shape`：只含 content Unicode 字符长度、解析状态、顶层类型、`status`、`summary`、`verification`、`completed`、`error`、`question`、`options`、`result`、`message`、`output` 的存在性和标准类型，以及未知顶层字段数量/是否存在。它不保存字段值、未知字段名、内容摘要、哈希、前后缀或可逆表示。缺少 required `summary` 等终态协议错误以 `final_schema` 报告，附带 shape、`agent_attempt` 和 `model_step`；只通过本地合成 fake HTTP 响应排查，禁止为此读取 SecretStore 或调用真实 API。
+
 配置中的两个同名字段不能混用：顶层 `deepseek.max_retries=2` 是单个模型步骤的 HTTP 请求重试数，含首次请求时最多调用 3 次；`execution_profiles.self_hosted_agent.providers.deepseek.capabilities.<level>.max_retries=2` 是完整 Agent attempt 的重试数，含首次 attempt 时最多执行 3 个 attempt。完整 attempt 只在瞬态 Provider 请求已耗尽，或明确请求/attempt 超时，且本地副作用计数为 0 时重启。持续瞬态故障的理论上限是 3 x 3 = 9 次 Provider 请求；400、无效工具参数、无效 final JSON、截断、`max_steps` 与未知错误均只执行当前 attempt。日志用 `provider_request_retry`、`provider_request_retries_exhausted` 与 `agent_attempt_retry` 区分两层。
 
 每轮响应为 `tool_calls` 时，Runtime 执行受限工具并追加与调用 ID 匹配的 `tool_results`；下一次 Provider 请求映射为按序的 assistant/tool 消息。重复只读调用允许继续收敛，写入等本地副作用一旦发生则禁止完整 attempt 自动重启。最终响应使用 JSON object 模式，并由 Runtime 校验协议 1.0 终态；`max_steps` 计算模型轮次而不是 HTTP 请求次数。当前本地证据没有包含此前两次真实失败的原始响应形态，只能确认安全分类与重试控制流，不能确认那两次失败的具体根因。
