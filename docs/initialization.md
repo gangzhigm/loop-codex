@@ -5,7 +5,8 @@
 - 根目录：`E:\code`
 - Loop 目录：`E:\code\local-agent-loop`
 - 数据库：`data/loop-agent.sqlite3`
-- Schema：`3.6.0`
+- Schema：`3.7.0`
+- Planner：一条独立 Terra/high 定时自动化，每 5 分钟一次；read-only、禁网、默认拒绝工具，最多 2 个活动预留，lease 600 秒，attempt timeout 1800 秒
 - 项目清单：`E:\code\根目录清单.md`
 - Worker：L1 至 L5 各一条 automatic 定时自动化，默认每 20 分钟，每轮最多领取一个完全匹配的任务
 - 运行环境：`codex_automation`、`codex_cli`、`self_hosted_agent`；五条定时自动化固定使用 `codex_automation`
@@ -22,7 +23,7 @@
 
 `config/initialization.json` 是初始化和部署配置模板的唯一来源。运行环境列表、显示名称和执行入口参数只在该配置中维护；SQLite 仅在任务行保存所选 `runtime_environment`，并继续保存任务和执行一致性数据。项目清单实时读取；健康状态写入 `runtime/health-state.json`。
 
-初始化必须检查五条普通档位 Codex Worker 自动化和一个 Windows 健康任务。Worker 按初始化配置中的模型、思考程度、错峰时间和入口提示创建或更新并启用；健康任务通过 `install_health_task.ps1` 注册或更新。不得创建 Health Codex 自动化或定时 `exceptional` 自动化。
+初始化必须检查一条 Planner、五条普通档位 Codex Worker 自动化和一个 Windows 健康任务。Planner 按 5 分钟、Terra/high、read-only 边界创建；Worker 按模型、思考程度、错峰时间和入口提示创建或更新；健康任务通过 `install_health_task.ps1` 注册或更新。不得创建 Health Codex 自动化或定时 `exceptional` 自动化。
 
 | 能力 | 兼容档位 | 模型 | 思考程度 | 定时 |
 |---|---|---|---|---:|
@@ -36,13 +37,13 @@
 
 ## 2. 从旧 JSON 迁移
 
-已有 Schema 3.0.0 至 3.4.0 SQLite 数据库先原位升级：
+已有 Schema 3.0.0 至 3.6.0 SQLite 数据库先原位升级：
 
 ```powershell
 py -3 .\scripts\loopctl.py migrate
 ```
 
-该命令幂等迁移到 3.6.0。3.0.0 至 3.3.0 要求先暂停领取并确认没有活动 execution，再完成 L1-L5、规范运行环境和 execution 快照转换。3.4.0 和 3.5.0 可以保留活动 execution：其 `RUNNING` 状态与 ACTIVE scope lock 原样迁移，不会根据时间戳自动创建隔离或释放 scope。迁移后由下一次 `claim` 独立判断 heartbeat stalled、lease expiry 和 attempt timeout。所有路径保留状态、结果、尝试次数、历史、依赖、scope、归档和 row version，并执行外键与 SQLite 完整性检查。
+该命令幂等迁移到 3.7.0。3.0.0 至 3.3.0 要求先暂停领取并确认没有活动 Worker execution；3.4.0 至 3.6.0 可以原样保留活动 Worker execution 与 ACTIVE scope lock。旧 DRAFT 转为 NEEDS_REVIEW 并记录原因，既有 PENDING 迁移为 READY；RUNNING、终态、结果、尝试次数、历史、依赖、scope、附件、归档和 row version 保留。迁移不会创建 Planner execution、猜测旧客户端结束或改变 Worker 隔离语义。
 
 仅在旧 JSON 系统仍存在时运行一次：
 
@@ -60,6 +61,7 @@ py -3 .\scripts\loopctl.py init `
 py -3 .\scripts\loopctl.py validate
 py -3 -B .\scripts\test_loop.py -v
 node .\scripts\check-dashboard.mjs .\dashboard.html
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-initialization.ps1
 ```
 
 必须核对任务及所有保留子表的迁移前后行数和内容。升级期间暂停 Worker；旧活动任务不得伪装为完成。
@@ -69,10 +71,11 @@ node .\scripts\check-dashboard.mjs .\dashboard.html
 所有 Loop 提示词集中在 `prompts/`：
 
 - `prompts/operator.md`：任务管理对话的查重、增删改、附件、状态和独立归档流程。
+- `prompts/planner.md`：Planner 的单个 DRAFT 只读静态预检和受控写回契约。
 - `prompts/worker.md`：Worker 自动化的完整执行提示词。
 - `prompts/cli-worker.md`：Codex CLI 子进程的单任务 scope、安全边界和最终结果契约。
 
-五条普通 Worker 默认每 20 分钟错峰运行。真实 Worker 自动化的入口提示只允许要求读取并执行 `prompts/worker.md`，固定提供 `runtime_environment=codex_automation` 并提供当前档位；不得在自动化配置、初始化文档或其他文件维护第二份正文。入口模板以 `config/initialization.json` 的 `automations.entry_prompt_template` 为准。
+Planner 每 5 分钟独立唤起，只读取并执行 `prompts/planner.md`；五条普通 Worker 每 20 分钟错峰运行，只读取并执行 `prompts/worker.md`。自动化配置不得复制提示词正文。Planner 固定提供 `runtime_environment=codex_automation`、`execution_kind=PLANNER` 和 `sandbox=read-only`；Worker 固定提供运行环境、当前能力等级和 automatic 策略。入口模板与完整部署清单以 `config/initialization.json` 为准。
 
 所有领取入口都必须显式声明运行环境，缺失或非法参数由 CLI 拒绝，不能通过默认值跨环境领取：
 
@@ -98,6 +101,59 @@ py -3 .\scripts\loopctl.py recover <execution-id> --human-confirmed-safe --actio
 ```
 
 三个动作分别为释放隔离并重新排队、释放隔离并标记失败、继续等待且保留隔离。命令幂等并记录 actor、Asia/Shanghai 时间与原因；未确认时不得释放。同一入口也可由 Dashboard 安全恢复面板调用。受控 Codex CLI/self-hosted Runner 在确认旧进程树终止后改用 `--runner-confirmed-terminated`。
+
+### Planner 预检协议
+
+`config/initialization.json` 的 `planner` 是预检容量、计时和客户端边界的唯一来源：
+
+```json
+{
+  "planner": {
+    "execution_kind": "PLANNER",
+    "default_runtime_environment": "codex_automation",
+    "max_active_executions": 2,
+    "heartbeat_interval_seconds": 30,
+    "stalled_after_seconds": 300,
+    "lease_seconds": 600,
+    "attempt_timeout_seconds": 1800,
+    "client_boundary": {
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "network_access": false,
+      "default_tool_action": "deny",
+      "source_access": "read-only",
+      "writeback": {
+        "transport": "host_controlled_loopctl_stdin",
+        "allowed_commands": [
+          "preflight-claim",
+          "preflight-heartbeat",
+          "preflight-ready",
+          "preflight-needs-review",
+          "preflight-fail"
+        ],
+        "direct_sql": false,
+        "report_files": false
+      }
+    }
+  }
+}
+```
+
+Operator 新建任务只写 DRAFT/UNINSPECTED、原始业务描述/验收、priority、runtime、依赖、附件、scope hint 和预估等级。Planner 每轮使用：
+
+```powershell
+py -3 .\scripts\loopctl.py preflight-claim planner-<GUID> --runtime-environment codex_automation --sandbox read-only
+py -3 .\scripts\loopctl.py preflight-heartbeat planner-<GUID> TASK-ID
+$readyJson | py -3 .\scripts\loopctl.py preflight-ready planner-<GUID> TASK-ID -
+$reviewJson | py -3 .\scripts\loopctl.py preflight-needs-review planner-<GUID> TASK-ID -
+$failureJson | py -3 .\scripts\loopctl.py preflight-fail planner-<GUID> TASK-ID -
+```
+
+READY JSON 必须且只能包含 `summary`、`capability_level`、非空 `scope`、`lock_mode=file|module|project`、非空 `technical_acceptance` 和非空 `evidence`。NEEDS_REVIEW 必须且只能包含 `summary`、`question`、`options`、`split_suggestions` 和非空 `evidence`；拆分建议使用 `reason` 与 `tasks`，不会自动创建任务。首次建议 L5/manual 必须 NEEDS_REVIEW；用户明确批准后，Operator 逐行写入 `APPROVED_PLANNER_ESCALATION: L5` 和/或 `APPROVED_PLANNER_ESCALATION: manual`，Planner 复检通过才可 READY。FAILED 只接受 `summary/error/evidence`。三种结果只接受 UTF-8 stdin，不能使用 report 文件。
+
+Planner 预留不占 Worker 容量、不获取业务 scope 锁。业务项目处于 read-only sandbox；唯一控制面写入是宿主按精确允许列表执行的 `loopctl.py preflight-*` stdin 通道，Planner 无权直接写 SQLite、Git、源码、配置或用户文件。heartbeat stalled、lease expiry 或 attempt timeout 会把 execution 标记 TIMED_OUT，并把任务恢复到 DRAFT/UNINSPECTED；旧 execution 的迟到结果会被拒绝。Operator 处理 NEEDS_REVIEW 后使用 `update` 或 `requeue` 回到 UNINSPECTED，不能直接写 PENDING。Planner 每轮结束，不是常驻 Dispatcher 或 Supervisor。
+
+本机 `codex-cli 0.146.0 --help` 已确认 `read-only` 是明确 sandbox 值，`codex features list` 已确认 hooks 功能为 stable；本轮官方 Codex manual 和 Docs MCP 因 DNS/网络传输失败未能取得，因此配置不声称未由本机帮助证明的私有自动化字段。真实自动化由 Operator 在 Codex 客户端中创建并复核；`check-initialization.ps1` 验证仓库模板、提示词、本机只读能力和切换清单，但不会读取或修改真实自动化。
 
 ### SecretStore 初始化
 
@@ -150,7 +206,7 @@ py -3 .\scripts\secretctl.py delete deepseek
 
 `finish_reason=stop` 的 final 失败可带 `final_shape`：只含 content Unicode 字符长度、解析状态、顶层类型、`status`、`summary`、`verification`、`completed`、`error`、`question`、`options`、`result`、`message`、`output` 的存在性和标准类型，以及未知顶层字段数量/是否存在。它不保存字段值、未知字段名、内容摘要、哈希、前后缀或可逆表示。缺少 required `summary` 等终态协议错误以 `final_schema` 报告，附带 shape、`agent_attempt` 和 `model_step`；只通过本地合成 fake HTTP 响应排查，禁止为此读取 SecretStore 或调用真实 API。
 
-Schema 3.6.0 的 `finish` 只接受上述固定允许列表并规范化写入 nullable `result_diagnostic_json`；未知字段、不一致类型、越界数值及成功结果携带诊断都会被拒绝。`loopctl state` 和 Dashboard 只展示这些安全元数据，任务重新领取、人工重新排队、恢复或人工解决成功时清空旧诊断。
+Schema 3.7.0 的 Worker `finish` 继续只接受上述固定允许列表并规范化写入 nullable `result_diagnostic_json`；Planner 结果使用独立的固定字段契约，不复用 Worker 诊断。`loopctl state` 和 Dashboard 只展示安全元数据与结构化预检结果。
 
 配置中的两个同名字段不能混用：顶层 `deepseek.max_retries=2` 是单个模型步骤的 HTTP 请求重试数，含首次请求时最多调用 3 次；`execution_profiles.self_hosted_agent.providers.deepseek.capabilities.<level>.max_retries=2` 是完整 Agent attempt 的重试数，含首次 attempt 时最多执行 3 个 attempt。完整 attempt 只在瞬态 Provider 请求已耗尽，或明确请求/attempt 超时，且本地副作用计数为 0 时重启。持续瞬态故障的理论上限是 3 x 3 = 9 次 Provider 请求；400、无效工具参数、无效 final JSON、截断、`max_steps` 与未知错误均只执行当前 attempt。日志用 `provider_request_retry`、`provider_request_retries_exhausted` 与 `agent_attempt_retry` 区分两层。
 
@@ -287,12 +343,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_health
 
 ## 5. 初始化顺序
 
-1. 暂停旧 Worker，确认没有活动 execution，备份 `data/loop-agent.sqlite3`。
-2. 使用 `loopctl.py migrate` 迁移数据库到 Schema 3.6.0；3.4.0/3.5.0 的活动 execution 与 ACTIVE scope lock 原样保留，不在迁移时推断隔离，随后运行数据库与回归测试。
+1. 暂停旧 Worker，确认没有活动 execution，备份 `data/loop-agent.sqlite3`；真实自动化变更前保留回滚信息。
+2. 使用 `loopctl.py migrate` 迁移数据库到 Schema 3.7.0；3.4.0 至 3.6.0 的活动 Worker execution 与 ACTIVE scope lock 原样保留，不在迁移时推断隔离，随后运行数据库与回归测试。
 3. 运行 `install_health_task.ps1 -StartNow`，检查 Windows 健康任务、`/healthz` 和 `/api/state`。
-4. 读取初始化配置，逐一检查 `routine`、`standard`、`advanced`、`deep`、`complex` 五条 Worker 自动化的 ID、模型、思考程度、20 分钟周期、错峰、`codex_automation` 路由和入口提示。
-5. 删除旧 Health Codex 自动化，确保健康检查只由 Windows 任务计划程序执行。
-6. 对缺失的普通 Worker 创建，对已有 Worker 更新；不得创建定时 `exceptional` 或重复项。
-7. 删除旧单 Worker 自动化，启用五条普通 Worker，并逐一复核状态。
+4. 运行 `check-initialization.ps1`，核对 Planner 提示词、Terra/high、5 分钟周期、read-only/禁网/默认拒绝边界、受控 preflight stdin 通道，以及五条 Worker 的模型、思考程度、20 分钟周期、错峰和入口参数。
+5. 由 Operator 创建或更新唯一 Planner 自动化；确认它不能写业务文件或直接写 SQLite，并分别验证有 DRAFT 时只预留一个、无 DRAFT 时返回 `NO_TASK`。
+6. 删除旧 Health Codex 自动化，确保健康检查只由 Windows 任务计划程序执行。
+7. 对缺失的普通 Worker 创建，对已有 Worker 更新；不得创建定时 `exceptional` 或重复项。
+8. 删除旧单 Worker 自动化，启用五条普通 Worker，逐条复核 READY 门禁、固定模型/思考档位和 `NO_TASK` 行为。
 
-如果数据库一致性、Dashboard 或并发测试失败，Worker 保持暂停。普通 Worker 返回 `NO_TASK` 或 `RECOVERY_REQUIRED` 时只结束当前轮次，不自动暂停；后者必须先由 Operator 完成人工安全恢复。不得同时维护 JSON 和 SQLite 两套任务真源。
+如果初始化检查、数据库一致性、Dashboard 或并发测试失败，Planner/Worker 保持暂停。Planner 和普通 Worker 返回 `NO_TASK` 时只结束当前轮次；Worker 的 `RECOVERY_REQUIRED` 必须先由 Operator 完成人工安全恢复。不得同时维护 JSON 和 SQLite 两套任务真源。

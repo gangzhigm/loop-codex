@@ -46,11 +46,13 @@ from loopdb import (
     LOCK_MODES,
     normalize_execution_target,
     normalize_result_diagnostic,
+    normalize_scope,
     normalize_split_suggestions,
     normalize_string_list,
     resolve_execution_profile,
     resolve_scope_key,
     rollback,
+    scope_conflicts_for_keys,
     set_task_dependencies,
     state_payload,
     task_dict,
@@ -70,6 +72,11 @@ LEGACY_STATUS_MAP = {
     "STALLED": "WAITING_HUMAN",
 }
 
+PLANNER_ESCALATION_MARKERS = {
+    "L5": "APPROVED_PLANNER_ESCALATION: L5",
+    "manual": "APPROVED_PLANNER_ESCALATION: manual",
+}
+
 
 def output(payload: dict[str, Any], exit_code: int = 0) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -85,6 +92,12 @@ def read_json_source(source: str) -> Any:
     if source == "-":
         return json.loads(sys.stdin.read())
     return read_json(Path(source).resolve())
+
+
+def read_preflight_report(source: str) -> Any:
+    if source != "-":
+        raise LoopError("Planner 预检结果只允许通过 UTF-8 stdin 提交")
+    return read_json_source(source)
 
 
 def require_expected_row_version(args: argparse.Namespace, actual: int) -> None:
@@ -541,7 +554,7 @@ def command_recover(args: argparse.Namespace) -> None:
             "VALUES(?, ?, 'WAITING_HUMAN', ?, ?, ?)",
             (execution["task_id"], stamp, new_status, actor, summary),
         )
-        requeued = requeue_resolved_conflicts(database)
+        requeued: list[str] = []
         revision = bump_revision(database, actor)
         commit(database)
         output(
@@ -568,23 +581,16 @@ def requeue_resolved_conflicts(database: sqlite3.Connection) -> list[str]:
     stamp = now_shanghai()
     requeued: list[str] = []
     for row in rows:
-        active = database.execute(
-            "SELECT 1 FROM task_conflicts c JOIN scope_locks l "
-            "ON l.execution_id=c.blocker_execution_id AND l.scope_key=c.scope_key "
-            "WHERE c.task_id=? LIMIT 1",
-            (row["id"],),
-        ).fetchone()
-        if active:
-            continue
-        database.execute("DELETE FROM task_conflicts WHERE task_id=?", (row["id"],))
         database.execute(
-            "UPDATE tasks SET status='PENDING', updated_at=?, progress_summary='scope 冲突已解除，任务重新排队。', "
-            "progress_next_step='等待并发 Worker 领取。', row_version=row_version+1 WHERE id=?",
+            "UPDATE tasks SET status='PENDING', updated_at=?, "
+            "progress_summary='旧 WAITING_CONFLICT 已转换为动态 scope 排队。', "
+            "progress_next_step='等待 scope 可用后由下一次 claim 自动领取。', row_version=row_version+1 WHERE id=?",
             (stamp, row["id"]),
         )
         database.execute(
             "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
-            "VALUES(?, ?, 'WAITING_CONFLICT', 'PENDING', 'conflict-recovery', '阻塞执行已结束，scope 冲突解除。')",
+            "VALUES(?, ?, 'WAITING_CONFLICT', 'PENDING', 'conflict-compatibility', "
+            "'旧冲突状态已恢复为 PENDING；原 blocker 记录保留用于审计，当前阻塞改为动态投影。')",
             (row["id"], stamp),
         )
         requeued.append(row["id"])
@@ -648,9 +654,43 @@ def recover_timed_out_preflights(database: sqlite3.Connection) -> list[str]:
     return recovered
 
 
+def planner_task_payload(database: sqlite3.Connection, task: sqlite3.Row) -> dict[str, Any]:
+    value = task_dict(database, task)
+    return {
+        "id": value["id"],
+        "title": value["title"],
+        "status": value["status"],
+        "preflight_status": value["preflight_status"],
+        "created_at": value["created_at"],
+        "updated_at": value["updated_at"],
+        "row_version": value["row_version"],
+        "operator_definition": value["operator_definition"],
+    }
+
+
+def planner_escalation_is_approved(
+    database: sqlite3.Connection, task: sqlite3.Row, escalation: str
+) -> bool:
+    marker = PLANNER_ESCALATION_MARKERS[escalation].casefold()
+    values = [task["description"] or ""]
+    values.extend(
+        row[0]
+        for row in database.execute(
+            "SELECT text FROM task_acceptance WHERE task_id=? ORDER BY ordinal", (task["id"],)
+        ).fetchall()
+    )
+    return any(marker == line.strip().casefold() for value in values for line in value.splitlines())
+
+
 def command_preflight_claim(args: argparse.Namespace) -> None:
     if not args.execution_id or len(args.execution_id) > 128:
         raise LoopError("Planner execution-id 无效")
+    config = load_initialization_config()
+    boundary = config["planner"]["client_boundary"]
+    if args.runtime_environment != config["planner"]["default_runtime_environment"]:
+        raise LoopError("Planner runtime_environment 与初始化配置不匹配")
+    if args.sandbox != boundary["sandbox"] or args.sandbox != "read-only":
+        raise LoopError("Planner 必须由 read-only sandbox 入口领取")
     database = connect(args.db)
     try:
         transaction(database)
@@ -663,7 +703,7 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
         ).fetchone():
             raise LoopError("execution-id 已存在")
         recovered = recover_timed_out_preflights(database)
-        settings = load_initialization_config()["planner"]
+        settings = config["planner"]
         active = int(database.execute(
             "SELECT count(*) FROM preflight_executions WHERE status='INSPECTING'"
         ).fetchone()[0])
@@ -713,14 +753,24 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
             (task["id"], stamp, args.execution_id),
         )
         claimed = database.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone()
-        payload = task_dict(database, claimed)
+        payload = planner_task_payload(database, claimed)
         revision = bump_revision(database, args.execution_id)
         commit(database)
         output({
             "outcome": "CLAIMED", "execution_kind": "PLANNER", "execution_id": args.execution_id,
             "task_id": task["id"], "lease_expires_at": lease, "attempt_deadline_at": deadline,
             "active": active + 1, "maximum": maximum, "recovered": recovered,
-            "revision": revision, "task": payload,
+            "revision": revision,
+            "client_boundary": {
+                "sandbox": boundary["sandbox"],
+                "approval_policy": boundary["approval_policy"],
+                "network_access": boundary["network_access"],
+                "default_tool_action": boundary["default_tool_action"],
+                "source_access": boundary["source_access"],
+                "writeback_transport": boundary["writeback"]["transport"],
+                "allowed_writeback_commands": boundary["writeback"]["allowed_commands"],
+            },
+            "task": payload,
         })
     except Exception:
         rollback(database)
@@ -795,7 +845,7 @@ def preflight_finish_context(
 
 
 def command_preflight_ready(args: argparse.Namespace) -> None:
-    report = read_json_source(args.report)
+    report = read_preflight_report(args.report)
     allowed = {"summary", "capability_level", "scope", "lock_mode", "technical_acceptance", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
         raise LoopError("READY 预检结果字段无效")
@@ -813,7 +863,10 @@ def command_preflight_ready(args: argparse.Namespace) -> None:
         report.get("technical_acceptance"), "technical_acceptance", allow_empty=False
     )
     evidence = normalize_string_list(report.get("evidence"), "evidence", allow_empty=False)
-    scope_keys = [resolve_scope_key(scope) for scope in scopes]
+    normalized_scopes = [normalize_scope(scope, lock_mode) for scope in scopes]
+    scope_keys = [item["scope_key"] for item in normalized_scopes]
+    if lock_mode != "project" and len(scope_keys) != len(set(scope_keys)):
+        raise LoopError("READY scope 规范化后不能重复")
     database = connect(args.db)
     try:
         transaction(database)
@@ -823,12 +876,25 @@ def command_preflight_ready(args: argparse.Namespace) -> None:
             output({"outcome": "ALREADY_FINISHED", "execution_kind": "PLANNER",
                     "task_id": args.task_id, "preflight_status": "READY"})
             return
+        if capability == "L5" and not planner_escalation_is_approved(database, task, "L5"):
+            raise LoopError(
+                "Planner 首次 L5 建议必须进入 NEEDS_REVIEW；缺少 Operator 记录的明确 L5 批准"
+            )
+        if task["execution_policy"] == "manual" and not planner_escalation_is_approved(
+            database, task, "manual"
+        ):
+            raise LoopError(
+                "Planner 首次 manual 建议必须进入 NEEDS_REVIEW；缺少 Operator 记录的明确 manual 批准"
+            )
         resolve_execution_profile(task["runtime_environment"], task["provider_id"], capability)
         stamp = now_shanghai()
         database.execute("DELETE FROM task_scopes WHERE task_id=?", (args.task_id,))
         database.executemany(
             "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) VALUES(?, ?, ?, ?)",
-            [(args.task_id, index, scope, scope_keys[index]) for index, scope in enumerate(scopes)],
+            [
+                (args.task_id, index, item["scope"], item["scope_key"])
+                for index, item in enumerate(normalized_scopes)
+            ],
         )
         replace_ordered_text(database, "task_technical_acceptance", args.task_id, technical)
         replace_ordered_text(database, "task_preflight_evidence", args.task_id, evidence)
@@ -863,7 +929,7 @@ def command_preflight_ready(args: argparse.Namespace) -> None:
 
 
 def command_preflight_needs_review(args: argparse.Namespace) -> None:
-    report = read_json_source(args.report)
+    report = read_preflight_report(args.report)
     allowed = {"summary", "question", "options", "split_suggestions", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
         raise LoopError("NEEDS_REVIEW 预检结果字段无效")
@@ -921,7 +987,7 @@ def command_preflight_needs_review(args: argparse.Namespace) -> None:
 
 
 def command_preflight_fail(args: argparse.Namespace) -> None:
-    report = read_json_source(args.report)
+    report = read_preflight_report(args.report)
     allowed = {"summary", "error", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
         raise LoopError("FAILED 预检结果字段无效")
@@ -976,46 +1042,45 @@ def command_preflight_fail(args: argparse.Namespace) -> None:
 
 def task_scopes_and_conflicts(
     database: sqlite3.Connection, task_id: str
-) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+) -> tuple[list[sqlite3.Row], list[dict[str, Any]]]:
     scopes = database.execute(
         "SELECT DISTINCT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key",
         (task_id,),
     ).fetchall()
-    conflicts = []
-    for scope in scopes:
-        lock = database.execute(
-            "SELECT scope_key, task_id, execution_id FROM scope_locks WHERE scope_key=?",
-            (scope["scope_key"],),
-        ).fetchone()
-        if lock:
-            conflicts.append(lock)
-    return scopes, conflicts
+    return scopes, scope_conflicts_for_keys(database, [scope["scope_key"] for scope in scopes])
 
 
-def defer_conflicting_task(
-    database: sqlite3.Connection,
+def describe_conflicting_task(
     task_id: str,
-    conflicts: list[sqlite3.Row],
-    stamp: str,
+    conflicts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    database.execute(
-        "UPDATE tasks SET status='WAITING_CONFLICT', updated_at=?, "
-        "progress_summary='检测到正在执行任务的 scope 冲突。', "
-        "progress_next_step='等待阻塞任务结束后自动重新排队。', row_version=row_version+1 WHERE id=?",
-        (stamp, task_id),
+    return {"task_id": task_id, "conflicts": conflicts}
+
+
+def scope_lock_credential(
+    database: sqlite3.Connection,
+    execution_id: str,
+    task_id: str,
+) -> dict[str, Any]:
+    task_columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)")}
+    task = (
+        database.execute("SELECT lock_mode FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if "lock_mode" in task_columns else None
     )
-    for lock in conflicts:
-        database.execute(
-            "INSERT OR REPLACE INTO task_conflicts(task_id, scope_key, blocker_task_id, blocker_execution_id, detected_at) "
-            "VALUES(?, ?, ?, ?, ?)",
-            (task_id, lock["scope_key"], lock["task_id"], lock["execution_id"], stamp),
-        )
-    database.execute(
-        "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
-        "VALUES(?, ?, 'PENDING', 'WAITING_CONFLICT', 'concurrent-claimer', '检测到 project scope 锁冲突。')",
-        (task_id, stamp),
-    )
-    return {"task_id": task_id, "conflicts": [dict(item) for item in conflicts]}
+    lock_columns = {row[1] for row in database.execute("PRAGMA table_info(scope_locks)")}
+    status_projection = "status" if "status" in lock_columns else "'ACTIVE' AS status"
+    locks = database.execute(
+        f"SELECT scope_key, {status_projection}, acquired_at, lease_expires_at FROM scope_locks "
+        "WHERE execution_id=? AND task_id=? ORDER BY scope_key",
+        (execution_id, task_id),
+    ).fetchall()
+    return {
+        "execution_id": execution_id,
+        "task_id": task_id,
+        "lock_mode": task["lock_mode"] if task is not None else "project",
+        "scope_keys": [row["scope_key"] for row in locks],
+        "locks": [dict(row) for row in locks],
+    }
 
 
 def claim_target(args: argparse.Namespace) -> dict[str, Any]:
@@ -1149,7 +1214,7 @@ def command_claim(args: argparse.Namespace) -> None:
             candidate_scopes, conflicts = task_scopes_and_conflicts(database, candidate["id"])
             if conflicts:
                 deferred_conflicts.append(
-                    defer_conflicting_task(database, candidate["id"], conflicts, stamp)
+                    describe_conflicting_task(candidate["id"], conflicts)
                 )
                 continue
             task_row = candidate
@@ -1243,6 +1308,7 @@ def command_claim(args: argparse.Namespace) -> None:
         revision = bump_revision(database, args.execution_id)
         claimed = database.execute("SELECT * FROM tasks WHERE id=?", (task_row["id"],)).fetchone()
         payload = task_dict(database, claimed)
+        lock_credential = scope_lock_credential(database, args.execution_id, task_row["id"])
         if target["requested_runtime_environment"] == "deepseek":
             payload["canonical_runtime_environment"] = payload["runtime_environment"]
             payload["runtime_environment"] = "deepseek"
@@ -1265,6 +1331,7 @@ def command_claim(args: argparse.Namespace) -> None:
                 "deferred_conflicts": deferred_conflicts,
                 "recovery_required": compatible_recoveries,
                 "requeued": requeued,
+                "scope_lock_credential": lock_credential,
                 "task": payload,
             }
         )
@@ -1300,8 +1367,129 @@ def command_heartbeat(args: argparse.Namespace) -> None:
             "UPDATE tasks SET heartbeat_at=?, updated_at=?, row_version=row_version+1 WHERE id=? AND status='RUNNING'",
             (stamp, stamp, args.task_id),
         )
+        credential = scope_lock_credential(database, args.execution_id, args.task_id)
         commit(database)
-        output({"outcome": "HEARTBEAT", "task_id": args.task_id, "lease_expires_at": expiry})
+        output({
+            "outcome": "HEARTBEAT",
+            "task_id": args.task_id,
+            "lease_expires_at": expiry,
+            "scope_lock_credential": credential,
+        })
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
+def command_extend_scope(args: argparse.Namespace) -> None:
+    report = read_json_source(args.report)
+    if not isinstance(report, dict) or set(report) != {"scope"}:
+        raise LoopError("scope 扩展结果必须只包含 scope")
+    requested_scopes = normalize_string_list(report.get("scope"), "scope", allow_empty=False)
+    database = connect(args.db)
+    try:
+        transaction(database)
+        execution = database.execute(
+            "SELECT * FROM executions WHERE execution_id=? AND status='RUNNING'",
+            (args.execution_id,),
+        ).fetchone()
+        if execution is None or execution["task_id"] != args.task_id:
+            raise LoopError("活动 execution 与 task-id 不匹配")
+        task = database.execute(
+            "SELECT status, assigned_agent, lock_mode, row_version FROM tasks WHERE id=?",
+            (args.task_id,),
+        ).fetchone()
+        if (
+            task is None
+            or task["status"] != "RUNNING"
+            or task["assigned_agent"] != args.execution_id
+            or task["lock_mode"] not in LOCK_MODES
+        ):
+            raise LoopError("任务不具备活动 scope 扩展资格")
+        require_expected_row_version(args, task["row_version"])
+        normalized = [normalize_scope(scope, task["lock_mode"]) for scope in requested_scopes]
+        canonical = [item["scope"].casefold() for item in normalized]
+        if len(canonical) != len(set(canonical)):
+            raise LoopError("scope 扩展项规范化后不能重复")
+        existing_rows = database.execute(
+            "SELECT scope, scope_key FROM task_scopes WHERE task_id=? ORDER BY ordinal",
+            (args.task_id,),
+        ).fetchall()
+        existing_scopes = {row["scope"].casefold() for row in existing_rows}
+        additions = [item for item in normalized if item["scope"].casefold() not in existing_scopes]
+        new_keys = sorted({item["scope_key"] for item in additions})
+        conflicts = scope_conflicts_for_keys(
+            database, new_keys, exclude_execution_id=args.execution_id
+        )
+        if conflicts:
+            credential = scope_lock_credential(database, args.execution_id, args.task_id)
+            commit(database)
+            output({
+                "outcome": "SCOPE_EXTENSION_CONFLICT",
+                "task_id": args.task_id,
+                "execution_id": args.execution_id,
+                "conflicts": conflicts,
+                "scope_lock_credential": credential,
+            })
+            return
+        if not additions:
+            credential = scope_lock_credential(database, args.execution_id, args.task_id)
+            commit(database)
+            output({
+                "outcome": "SCOPE_ALREADY_REGISTERED",
+                "task_id": args.task_id,
+                "execution_id": args.execution_id,
+                "scope_lock_credential": credential,
+            })
+            return
+        stamp = now_shanghai()
+        next_ordinal = int(database.execute(
+            "SELECT COALESCE(max(ordinal), -1) + 1 FROM task_scopes WHERE task_id=?",
+            (args.task_id,),
+        ).fetchone()[0])
+        database.executemany(
+            "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) VALUES(?, ?, ?, ?)",
+            [
+                (args.task_id, next_ordinal + index, item["scope"], item["scope_key"])
+                for index, item in enumerate(additions)
+            ],
+        )
+        held_keys = {
+            row[0] for row in database.execute(
+                "SELECT scope_key FROM scope_locks WHERE execution_id=?", (args.execution_id,)
+            ).fetchall()
+        }
+        expiry = execution["lease_expires_at"]
+        database.executemany(
+            "INSERT INTO scope_locks(scope_key, task_id, execution_id, acquired_at, lease_expires_at) "
+            "VALUES(?, ?, ?, ?, ?)",
+            [
+                (scope_key, args.task_id, args.execution_id, stamp, expiry)
+                for scope_key in new_keys if scope_key not in held_keys
+            ],
+        )
+        database.execute(
+            "UPDATE tasks SET updated_at=?, progress_summary='execution 已原子扩展 scope 锁。', "
+            "row_version=row_version+1 WHERE id=?",
+            (stamp, args.task_id),
+        )
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES(?, ?, 'RUNNING', 'RUNNING', ?, 'execution 在修改新范围前原子扩展 scope 锁。')",
+            (args.task_id, stamp, args.execution_id),
+        )
+        credential = scope_lock_credential(database, args.execution_id, args.task_id)
+        revision = bump_revision(database, args.execution_id)
+        commit(database)
+        output({
+            "outcome": "SCOPE_EXTENDED",
+            "task_id": args.task_id,
+            "execution_id": args.execution_id,
+            "added_scope": [item["scope"] for item in additions],
+            "scope_lock_credential": credential,
+            "revision": revision,
+        })
     except Exception:
         rollback(database)
         raise
@@ -1384,7 +1572,7 @@ def command_finish(args: argparse.Namespace) -> None:
             (stamp, status, args.execution_id),
         )
         database.execute("DELETE FROM scope_locks WHERE execution_id=?", (args.execution_id,))
-        requeued = requeue_resolved_conflicts(database)
+        requeued: list[str] = []
         revision = bump_revision(database, args.execution_id)
         commit(database)
         output(
@@ -1510,7 +1698,7 @@ def command_resolve_human(args: argparse.Namespace) -> None:
             "VALUES(?, ?, ?, 'SUCCEEDED', 'human-resolution', ?)",
             (args.task_id, stamp, previous_status, reason),
         )
-        requeued = requeue_resolved_conflicts(database)
+        requeued: list[str] = []
         revision = bump_revision(database, "human-resolution")
         commit(database)
         output(
@@ -1758,8 +1946,9 @@ def command_update(args: argparse.Namespace) -> None:
         scope_hint = normalize_string_list(
             patch.get("scope_hint", patch.get("scope", current_payload["scope_hint"])), "scope_hint"
         )
-        for scope in scope_hint:
-            resolve_scope_key(scope)
+        if "scope_hint" in patch or "scope" in patch:
+            for scope in scope_hint:
+                resolve_scope_key(scope)
         title = patch.get("title", task["title"])
         description = patch.get("description", task["description"])
         priority = patch.get("priority", task["priority"])
@@ -1953,6 +2142,10 @@ def parser() -> argparse.ArgumentParser:
     state.set_defaults(handler=command_state)
     preflight_claim = commands.add_parser("preflight-claim")
     preflight_claim.add_argument("execution_id")
+    preflight_claim.add_argument(
+        "--runtime-environment", required=True, choices=("codex_automation",)
+    )
+    preflight_claim.add_argument("--sandbox", required=True, choices=("read-only",))
     preflight_claim.set_defaults(handler=command_preflight_claim)
     preflight_heartbeat = commands.add_parser("preflight-heartbeat")
     preflight_heartbeat.add_argument("execution_id")
@@ -1985,6 +2178,14 @@ def parser() -> argparse.ArgumentParser:
     heartbeat.add_argument("execution_id")
     heartbeat.add_argument("task_id")
     heartbeat.set_defaults(handler=command_heartbeat)
+    extend_scope = commands.add_parser("extend-scope")
+    extend_scope.add_argument("execution_id")
+    extend_scope.add_argument("task_id")
+    extend_scope.add_argument(
+        "report", nargs="?", default="-", help="UTF-8 JSON 文件；省略或使用 - 时从 stdin 读取"
+    )
+    extend_scope.add_argument("--expected-row-version", type=int)
+    extend_scope.set_defaults(handler=command_extend_scope)
     recover = commands.add_parser("recover")
     recover.add_argument("execution_id")
     recover.add_argument("--action", choices=("requeue", "failed", "wait"))

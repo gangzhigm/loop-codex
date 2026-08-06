@@ -1,5 +1,5 @@
 {
-  "config_version": "4.1.0",
+  "config_version": "4.2.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -12,6 +12,7 @@
   },
   "prompts": {
     "operator": "prompts/operator.md",
+    "planner": "prompts/planner.md",
     "worker": "prompts/worker.md",
     "cli_worker": "prompts/cli-worker.md"
   },
@@ -100,7 +101,27 @@
     "heartbeat_interval_seconds": 30,
     "stalled_after_seconds": 300,
     "lease_seconds": 600,
-    "attempt_timeout_seconds": 1800
+    "attempt_timeout_seconds": 1800,
+    "client_boundary": {
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "network_access": false,
+      "default_tool_action": "deny",
+      "source_access": "read-only",
+      "writeback": {
+        "transport": "host_controlled_loopctl_stdin",
+        "controller": "E:\\code\\local-agent-loop\\scripts\\loopctl.py",
+        "allowed_commands": [
+          "preflight-claim",
+          "preflight-heartbeat",
+          "preflight-ready",
+          "preflight-needs-review",
+          "preflight-fail"
+        ],
+        "direct_sql": false,
+        "report_files": false
+      }
+    }
   },
   "self_hosted_agent": {
     "max_steps": 24,
@@ -184,6 +205,19 @@
     "worker_interval_minutes": 20,
     "runtime_environment": "codex_automation",
     "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；runtime_environment=codex_automation，capability_level={capability_level}，execution_policy=automatic；过渡期 legacy_profile={profile}。",
+    "planner": {
+      "automation_id": "loop-agent-planner",
+      "name": "Loop Agent Planner",
+      "scheduled": true,
+      "interval_minutes": 5,
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "high",
+      "runtime_environment": "codex_automation",
+      "execution_kind": "PLANNER",
+      "sandbox": "read-only",
+      "approval_policy": "never",
+      "entry_prompt": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\planner.md，并严格执行；runtime_environment=codex_automation，execution_kind=PLANNER，sandbox=read-only。"
+    },
     "capabilities": {
       "L1": { "name": "Loop Agent Worker · L1", "model": "gpt-5.6-luna", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-routine", "scheduled": true, "offset_minutes": 0, "legacy_profile": "routine" },
       "L2": { "name": "Loop Agent Worker · L2", "model": "gpt-5.6-terra", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-standard", "scheduled": true, "offset_minutes": 2, "legacy_profile": "standard" },

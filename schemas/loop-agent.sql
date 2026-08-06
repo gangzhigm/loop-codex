@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   preflight_completed_at TEXT,
   preflight_failure TEXT,
   scope_hint_json TEXT NOT NULL DEFAULT '[]',
-  lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('project')),
+  lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('file', 'module', 'project')),
   split_suggestions_json TEXT NOT NULL DEFAULT '[]',
   assigned_agent TEXT,
   created_at TEXT NOT NULL,

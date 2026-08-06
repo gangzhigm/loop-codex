@@ -29,7 +29,7 @@ PRIORITIES = ("blocker", "critical", "high", "medium", "low")
 EXECUTION_PROFILES = ("routine", "standard", "advanced", "deep", "complex", "exceptional")
 CAPABILITY_LEVELS = ("L1", "L2", "L3", "L4", "L5")
 PREFLIGHT_STATUSES = ("UNINSPECTED", "INSPECTING", "READY", "FAILED")
-LOCK_MODES = ("project",)
+LOCK_MODES = ("file", "module", "project")
 EXECUTION_POLICIES = ("automatic", "manual")
 CANONICAL_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "self_hosted_agent")
 LEGACY_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "deepseek")
@@ -109,7 +109,7 @@ CREATE TABLE tasks_new (
   preflight_completed_at TEXT,
   preflight_failure TEXT,
   scope_hint_json TEXT NOT NULL DEFAULT '[]',
-  lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('project')),
+  lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('file', 'module', 'project')),
   split_suggestions_json TEXT NOT NULL DEFAULT '[]',
   assigned_agent TEXT,
   created_at TEXT NOT NULL,
@@ -468,11 +468,14 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     prompts = config.get("prompts") or {}
     execution = config.get("task_execution") or {}
     planner = config.get("planner") or {}
+    planner_boundary = planner.get("client_boundary") or {}
+    planner_writeback = planner_boundary.get("writeback") or {}
     self_hosted_agent = config.get("self_hosted_agent") or {}
     deepseek = config.get("deepseek") or {}
     priority_policy = config.get("priority_policy") or {}
     dashboard = config.get("dashboard") or {}
     automations = config.get("automations") or {}
+    planner_automation = automations.get("planner") or {}
     health = config.get("health") or {}
     platform_limits = execution.get("platform_max_active_executions") or {}
     profiles = automations.get("profiles") or {}
@@ -531,7 +534,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
     )
     valid = (
-        config.get("config_version") == "4.1.0"
+        config.get("config_version") == "4.2.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -539,8 +542,10 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and database.get("path") == "data/loop-agent.sqlite3"
         and database.get("schema_version") == SCHEMA_VERSION
         and prompts.get("operator") == "prompts/operator.md"
+        and prompts.get("planner") == "prompts/planner.md"
         and prompts.get("worker") == "prompts/worker.md"
         and (BASE_DIR / prompts["operator"]).is_file()
+        and (BASE_DIR / prompts["planner"]).is_file()
         and (BASE_DIR / prompts["worker"]).is_file()
         and isinstance(execution.get("heartbeat_interval_seconds"), int)
         and execution["heartbeat_interval_seconds"] >= 1
@@ -571,6 +576,19 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner["lease_seconds"] >= 60
         and isinstance(planner.get("attempt_timeout_seconds"), int)
         and planner["attempt_timeout_seconds"] >= planner["lease_seconds"]
+        and planner_boundary.get("sandbox") == "read-only"
+        and planner_boundary.get("approval_policy") == "never"
+        and planner_boundary.get("network_access") is False
+        and planner_boundary.get("default_tool_action") == "deny"
+        and planner_boundary.get("source_access") == "read-only"
+        and planner_writeback.get("transport") == "host_controlled_loopctl_stdin"
+        and planner_writeback.get("controller") == str(BASE_DIR / "scripts" / "loopctl.py")
+        and planner_writeback.get("allowed_commands") == [
+            "preflight-claim", "preflight-heartbeat", "preflight-ready",
+            "preflight-needs-review", "preflight-fail",
+        ]
+        and planner_writeback.get("direct_sql") is False
+        and planner_writeback.get("report_files") is False
         and isinstance(self_hosted_agent.get("max_steps"), int)
         and 1 <= self_hosted_agent["max_steps"] <= 200
         and isinstance(self_hosted_agent.get("max_final_repairs"), int)
@@ -613,6 +631,21 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and "{profile}" in automations["entry_prompt_template"]
         and automations.get("runtime_environment") == "codex_automation"
         and "codex_automation" in automations["entry_prompt_template"]
+        and planner_automation.get("automation_id") == "loop-agent-planner"
+        and planner_automation.get("name") == "Loop Agent Planner"
+        and planner_automation.get("scheduled") is True
+        and planner_automation.get("interval_minutes") == 5
+        and planner_automation.get("model") == "gpt-5.6-terra"
+        and planner_automation.get("reasoning_effort") == "high"
+        and planner_automation.get("runtime_environment") == "codex_automation"
+        and planner_automation.get("execution_kind") == "PLANNER"
+        and planner_automation.get("sandbox") == "read-only"
+        and planner_automation.get("approval_policy") == "never"
+        and isinstance(planner_automation.get("entry_prompt"), str)
+        and "prompts\\planner.md" in planner_automation["entry_prompt"]
+        and "runtime_environment=codex_automation" in planner_automation["entry_prompt"]
+        and "execution_kind=PLANNER" in planner_automation["entry_prompt"]
+        and "sandbox=read-only" in planner_automation["entry_prompt"]
         and valid_profile_config
         and valid_runtime_environment_config
         and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
@@ -745,7 +778,7 @@ def _migrate_preflight_schema(database: sqlite3.Connection, source_version: str 
                 )
             )
             estimated = row.get("capability_level")
-            capability = row.get("capability_level") if preflight_ready else None
+            capability = None if was_draft else row.get("capability_level")
             scope_hint = json_dump(scopes.get(row["id"], []))
             values = (
                 row["id"], row["title"], row.get("description", ""), status, row["priority"],
@@ -812,10 +845,14 @@ def _migrate_preflight_schema(database: sqlite3.Connection, source_version: str 
                     "INSERT INTO task_preflight_evidence(task_id, ordinal, text) VALUES(?, 0, ?)",
                     (row["id"], "Schema 3.7.0 迁移：既有非 DRAFT 任务按 READY 保持队列连续性。"),
                 )
-        database.execute(
-            "ALTER TABLE executions ADD COLUMN execution_kind TEXT NOT NULL DEFAULT 'WORKER' "
-            "CHECK (execution_kind = 'WORKER')"
-        )
+        execution_columns = {
+            row[1] for row in database.execute("PRAGMA table_info(executions)").fetchall()
+        }
+        if "execution_kind" not in execution_columns:
+            database.execute(
+                "ALTER TABLE executions ADD COLUMN execution_kind TEXT NOT NULL DEFAULT 'WORKER' "
+                "CHECK (execution_kind = 'WORKER')"
+            )
         database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
         foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
         if foreign_key_errors:
@@ -927,9 +964,84 @@ def _migrate_diagnostic_schema(database: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def uses_hybrid_scope_schema(database: sqlite3.Connection) -> bool:
+    row = database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return False
+    match = re.search(
+        r"lock_mode\s+TEXT\s+CHECK\s*\(lock_mode\s+IS\s+NULL\s+OR\s+lock_mode\s+IN\s*\(([^)]*)\)",
+        row[0],
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if match is None:
+        return False
+    return set(re.findall(r"'([^']+)'", match.group(1))) == set(LOCK_MODES)
+
+
+def _migrate_hybrid_scope_schema(database: sqlite3.Connection) -> dict[str, Any]:
+    active = int(database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0])
+    old_conflicts = [
+        row[0] for row in database.execute(
+            "SELECT id FROM tasks WHERE status='WAITING_CONFLICT' ORDER BY id"
+        ).fetchall()
+    ]
+    stamp = now_shanghai()
+    database.execute("PRAGMA foreign_keys = OFF")
+    try:
+        transaction(database)
+        database.execute(TASKS_TABLE_SQL)
+        database.execute("INSERT INTO tasks_new SELECT * FROM tasks")
+        database.execute("DROP TABLE tasks")
+        database.execute("ALTER TABLE tasks_new RENAME TO tasks")
+        database.execute(
+            "CREATE INDEX idx_tasks_queue ON tasks(status, preflight_status, runtime_environment, provider_id, "
+            "capability_level, execution_policy, priority, created_at, id)"
+        )
+        database.execute(
+            "CREATE INDEX idx_tasks_preflight ON tasks(status, preflight_status, priority, created_at, id)"
+        )
+        database.execute("CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)")
+        for task_id in old_conflicts:
+            database.execute(
+                "UPDATE tasks SET status='PENDING', updated_at=?, "
+                "progress_summary='旧 WAITING_CONFLICT 已转换为动态 scope 排队。', "
+                "progress_next_step='等待 scope 可用后由下一次 claim 自动领取。', "
+                "row_version=row_version+1 WHERE id=?",
+                (stamp, task_id),
+            )
+            database.execute(
+                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+                "VALUES(?, ?, 'WAITING_CONFLICT', 'PENDING', 'schema-migration', "
+                "'混合 scope 锁迁移：保留原 blocker 记录，改用 PENDING 动态排队。')",
+                (task_id, stamp),
+            )
+        if database.execute("PRAGMA foreign_key_check").fetchall():
+            raise LoopError("混合 scope 锁迁移产生外键错误")
+        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise LoopError("混合 scope 锁迁移后 quick_check 失败")
+        commit(database)
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+    return {
+        "from": SCHEMA_VERSION,
+        "to": SCHEMA_VERSION,
+        "migrated": True,
+        "hybrid_scope_lock_migrated": True,
+        "waiting_conflicts_requeued": old_conflicts,
+        "active_executions_preserved": active,
+    }
+
+
 def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
     current = int(database.execute("PRAGMA user_version").fetchone()[0])
     if current == SCHEMA_USER_VERSION:
+        if not uses_hybrid_scope_schema(database):
+            return _migrate_hybrid_scope_schema(database)
         return {
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
             "archived": 0, "tasks_mapped": 0, "executions_snapshotted": 0,
@@ -1040,7 +1152,7 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row["id"], row["title"], row.get("description", ""), status, row["priority"],
-                    route["capability_level"], route["capability_level"] if preflight_ready else None,
+                    route["capability_level"], None if was_draft else route["capability_level"],
                     route["runtime_environment"], route["provider_id"], route["execution_policy"],
                     "READY" if preflight_ready else "FAILED", None, None,
                     now_shanghai() if preflight_ready else None, failure, json_dump(scope_hint),
@@ -1223,21 +1335,188 @@ def configured_projects(config: dict[str, Any] | None = None) -> list[dict[str, 
     return parse_project_registry(Path(value["workspace"]["project_registry"]).resolve())
 
 
-def resolve_scope_key(scope: str, project_paths: Iterable[str] | None = None) -> str:
-    normalized = scope.replace("\\", "/").strip()
-    if not normalized or ".." in normalized.split("/"):
-        raise LoopError(f"不安全的 scope: {scope}")
-    if normalized.upper().startswith("OSS:"):
-        return f"external:{normalized}"
-    normalized = normalized.strip("/")
-    if normalized.split("/", 1)[0] in FORBIDDEN_SCOPE_ROOTS:
-        raise LoopError(f"禁止的 scope: {scope}")
+def _normalized_path_parts(value: str, field: str) -> list[str]:
+    if not isinstance(value, str):
+        raise LoopError(f"{field} 必须是字符串")
+    normalized = value.replace("\\", "/").strip()
+    if (
+        not normalized
+        or "\x00" in normalized
+        or normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:", normalized)
+    ):
+        raise LoopError(f"不安全的 {field}: {value}")
+    parts: list[str] = []
+    for part in normalized.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise LoopError(f"不安全的 {field}: {value}")
+        parts.append(part)
+    if not parts:
+        raise LoopError(f"不安全的 {field}: {value}")
+    return parts
+
+
+def normalize_scope(
+    scope: str,
+    lock_mode: str,
+    project_paths: Iterable[str] | None = None,
+) -> dict[str, str]:
+    """Normalize a Planner scope and derive a case-insensitive hierarchical lock key."""
+    if lock_mode not in LOCK_MODES:
+        raise LoopError(f"lock_mode 无效: {lock_mode}")
+    parts = _normalized_path_parts(scope, "scope")
+    forbidden = {item.casefold() for item in FORBIDDEN_SCOPE_ROOTS}
+    if parts[0].casefold() in forbidden or parts[0].upper().startswith("OSS:"):
+        raise LoopError(f"scope 必须位于登记项目内: {scope}")
     paths = list(project_paths) if project_paths is not None else [item["path"] for item in configured_projects()]
-    for project in sorted(paths, key=len, reverse=True):
-        project = project.replace("\\", "/").strip("/")
-        if normalized == project or normalized.startswith(f"{project}/"):
-            return f"project:{project}"
-    raise LoopError(f"scope 未匹配项目清单: {scope}")
+    matches: list[tuple[list[str], list[str]]] = []
+    folded_parts = [part.casefold() for part in parts]
+    for raw_project in paths:
+        project_parts = _normalized_path_parts(str(raw_project), "项目路径")
+        folded_project = [part.casefold() for part in project_parts]
+        if folded_parts[:len(folded_project)] == folded_project:
+            matches.append((project_parts, folded_project))
+    if not matches:
+        raise LoopError(f"scope 未匹配项目清单: {scope}")
+    project_parts, folded_project = max(matches, key=lambda item: len(item[0]))
+    relative_parts = parts[len(project_parts):]
+    if lock_mode in {"file", "module"} and not relative_parts:
+        raise LoopError(f"{lock_mode} scope 必须指向项目内路径: {scope}")
+    project = "/".join(project_parts)
+    relative = "/".join(relative_parts)
+    canonical_scope = project + (f"/{relative}" if relative else "")
+    project_key = "/".join(folded_project)
+    relative_key = "/".join(part.casefold() for part in relative_parts)
+    if lock_mode == "project":
+        scope_key = f"project:{project_key}"
+    else:
+        scope_key = f"{lock_mode}:{project_key}::{relative_key}"
+    return {
+        "scope": canonical_scope,
+        "scope_key": scope_key,
+        "project": project,
+        "project_key": project_key,
+        "relative": relative,
+    }
+
+
+def resolve_scope_key(
+    scope: str,
+    project_paths: Iterable[str] | None = None,
+    lock_mode: str = "project",
+) -> str:
+    normalized = scope.replace("\\", "/").strip()
+    if lock_mode == "project" and normalized.upper().startswith("OSS:"):
+        if ".." in normalized.split("/"):
+            raise LoopError(f"不安全的 scope: {scope}")
+        return f"external:{normalized}"
+    return normalize_scope(scope, lock_mode, project_paths)["scope_key"]
+
+
+def parse_scope_key(scope_key: str) -> tuple[str, str, tuple[str, ...]]:
+    if scope_key.startswith("external:"):
+        return "external", scope_key.removeprefix("external:").casefold(), ()
+    match = re.fullmatch(r"(file|module):(.+?)::(.+)", scope_key)
+    if match:
+        return match.group(1), match.group(2).casefold(), tuple(match.group(3).casefold().split("/"))
+    if scope_key.startswith("project:"):
+        return "project", scope_key.removeprefix("project:").casefold(), ()
+    raise LoopError(f"scope_key 无效: {scope_key}")
+
+
+def scope_keys_conflict(left: str, right: str) -> bool:
+    left_mode, left_project, left_parts = parse_scope_key(left)
+    right_mode, right_project, right_parts = parse_scope_key(right)
+    if "external" in {left_mode, right_mode}:
+        return left.casefold() == right.casefold()
+    if left_project != right_project:
+        return False
+    if "project" in {left_mode, right_mode}:
+        return True
+    if left_mode == right_mode == "file":
+        return left_parts == right_parts
+    if left_mode == "module" and right_mode == "module":
+        shorter = min(len(left_parts), len(right_parts))
+        return left_parts[:shorter] == right_parts[:shorter]
+    if left_mode == "module":
+        return right_parts[:len(left_parts)] == left_parts
+    if right_mode == "module":
+        return left_parts[:len(right_parts)] == right_parts
+    return False
+
+
+def scope_conflicts_for_keys(
+    database: sqlite3.Connection,
+    scope_keys: Iterable[str],
+    *,
+    exclude_execution_id: str | None = None,
+    exclude_task_id: str | None = None,
+) -> list[dict[str, Any]]:
+    requested = sorted(set(scope_keys))
+    lock_columns = {row[1] for row in database.execute("PRAGMA table_info(scope_locks)")}
+    status_projection = "status" if "status" in lock_columns else "'ACTIVE' AS status"
+    locks = database.execute(
+        f"SELECT scope_key, task_id, execution_id, {status_projection} FROM scope_locks ORDER BY scope_key"
+    ).fetchall()
+    conflicts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for requested_key in requested:
+        for lock in locks:
+            if exclude_execution_id is not None and lock["execution_id"] == exclude_execution_id:
+                continue
+            if exclude_task_id is not None and lock["task_id"] == exclude_task_id:
+                continue
+            if not scope_keys_conflict(requested_key, lock["scope_key"]):
+                continue
+            identity = (requested_key, lock["scope_key"], lock["execution_id"])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            conflicts.append({
+                "requested_scope_key": requested_key,
+                "scope_key": lock["scope_key"],
+                "blocker_task_id": lock["task_id"],
+                "blocker_execution_id": lock["execution_id"],
+                "blocker_lock_status": lock["status"],
+            })
+    return conflicts
+
+
+def _dependencies_ready_for_projection(database: sqlite3.Connection, task_id: str) -> bool:
+    return database.execute(
+        "SELECT 1 FROM task_dependencies d JOIN tasks t ON t.id=d.dependency_id "
+        "WHERE d.task_id=? AND t.status NOT IN ('SUCCEEDED','CONFIRMED') LIMIT 1",
+        (task_id,),
+    ).fetchone() is None
+
+
+def scope_queue_position(
+    database: sqlite3.Connection,
+    task_id: str,
+    scope_keys: Iterable[str],
+) -> int | None:
+    target_keys = list(scope_keys)
+    if not target_keys or not _dependencies_ready_for_projection(database, task_id):
+        return None
+    candidates = database.execute(
+        "SELECT id FROM tasks WHERE status='PENDING' AND preflight_status='READY' ORDER BY "
+        "CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
+        "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id"
+    ).fetchall()
+    position = 0
+    for candidate in candidates:
+        candidate_id = candidate["id"]
+        if not _dependencies_ready_for_projection(database, candidate_id):
+            continue
+        candidate_keys = task_children(database, candidate_id, "task_scopes", "scope_key")
+        if not any(scope_keys_conflict(left, right) for left in target_keys for right in candidate_keys):
+            continue
+        position += 1
+        if candidate_id == task_id:
+            return position
+    return None
 
 
 def replace_ordered_text(
@@ -1503,10 +1782,17 @@ def insert_task(
         )
     set_task_dependencies(database, task_id, task.get("depends_on") or [])
     scopes_to_store = exact_scopes if preflight_schema else normalize_string_list(task.get("scope") or [], "scope")
-    for index, scope in enumerate(scopes_to_store):
+    stored_lock_mode = lock_mode if preflight_schema else "project"
+    normalized_scopes = [
+        normalize_scope(scope, stored_lock_mode, project_paths) for scope in scopes_to_store
+    ]
+    normalized_keys = [item["scope_key"] for item in normalized_scopes]
+    if len(normalized_keys) != len(set(normalized_keys)) and stored_lock_mode != "project":
+        raise LoopError("scope 规范化后不能重复")
+    for index, item in enumerate(normalized_scopes):
         database.execute(
             "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) VALUES(?, ?, ?, ?)",
-            (task_id, index, scope, resolve_scope_key(scope, project_paths)),
+            (task_id, index, item["scope"], item["scope_key"]),
         )
     replace_ordered_text(database, "task_acceptance", task_id, task.get("acceptance") or [])
     if preflight_schema:
@@ -1578,6 +1864,7 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         runtime_environment = "self_hosted_agent" if legacy_environment == "deepseek" else legacy_environment
         provider_id = "deepseek" if legacy_environment == "deepseek" else None
     scopes = task_children(database, task_id, "task_scopes", "scope")
+    scope_keys = task_children(database, task_id, "task_scopes", "scope_key")
     acceptance = task_children(database, task_id, "task_acceptance")
     dependencies = task_children(database, task_id, "task_dependencies", "dependency_id", "dependency_id")
     if "preflight_status" in columns:
@@ -1629,6 +1916,19 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         "evidence": evidence,
         "split_suggestions": split_suggestions,
     }
+    blocking_scopes = (
+        scope_conflicts_for_keys(database, scope_keys, exclude_task_id=task_id)
+        if row["status"] == "PENDING" else []
+    )
+    blocked_by_task_ids = sorted({item["blocker_task_id"] for item in blocking_scopes})
+    blocked_scope_keys = sorted({item["requested_scope_key"] for item in blocking_scopes})
+    blocked_key_set = set(blocked_scope_keys)
+    blocked_scopes = sorted({
+        scope for scope, scope_key in zip(scopes, scope_keys) if scope_key in blocked_key_set
+    })
+    queue_position = (
+        scope_queue_position(database, task_id, scope_keys) if row["status"] == "PENDING" else None
+    )
     return {
         "id": task_id, "title": row["title"], "description": row["description"],
         "status": row["status"], "priority": row["priority"],
@@ -1644,8 +1944,13 @@ def task_dict(database: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         "depends_on": dependencies,
         "scope_hint": scope_hint,
         "scope": scopes,
-        "scope_keys": task_children(database, task_id, "task_scopes", "scope_key"),
+        "scope_keys": scope_keys,
         "lock_mode": lock_mode,
+        "blocked_by_task_ids": blocked_by_task_ids,
+        "blocked_scopes": blocked_scopes,
+        "blocked_scope_keys": blocked_scope_keys,
+        "blocking_scopes": blocking_scopes,
+        "scope_queue_position": queue_position,
         "acceptance": acceptance,
         "technical_acceptance": technical_acceptance,
         "preflight_evidence": evidence,
@@ -1689,7 +1994,11 @@ def current_revision(database: sqlite3.Connection) -> int:
     task_versions = int(database.execute("SELECT COALESCE(sum(row_version), 0) FROM tasks").fetchone()[0])
     histories = int(database.execute("SELECT count(*) FROM task_history").fetchone()[0])
     executions = int(database.execute("SELECT count(*) FROM executions").fetchone()[0])
-    return task_versions + histories + executions
+    preflight_executions = (
+        int(database.execute("SELECT count(*) FROM preflight_executions").fetchone()[0])
+        if uses_preflight_schema(database) else 0
+    )
+    return task_versions + histories + executions + preflight_executions
 
 
 def state_payload(database: sqlite3.Connection, config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1838,6 +2147,8 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
                 invalid_diagnostics.append(row["id"])
         if invalid_diagnostics:
             errors.append("任务结果诊断无效: " + ",".join(invalid_diagnostics))
+    if uses_preflight_schema(database) and not uses_hybrid_scope_schema(database):
+        errors.append("当前 Schema 3.7.0 尚未迁移到混合 scope 锁结构")
     invalid_confirmed = database.execute(
         """SELECT t.id FROM tasks t WHERE t.status='CONFIRMED' AND NOT EXISTS (
           SELECT 1 FROM task_history h WHERE h.task_id=t.id AND h.to_status='CONFIRMED' AND h.from_status='SUCCEEDED'
@@ -1899,7 +2210,7 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
                     NOT EXISTS (SELECT 1 FROM task_scopes s WHERE s.task_id=tasks.id) OR
                     NOT EXISTS (SELECT 1 FROM task_technical_acceptance a WHERE a.task_id=tasks.id) OR
                     NOT EXISTS (SELECT 1 FROM task_preflight_evidence e WHERE e.task_id=tasks.id))) OR
-                  (preflight_status<>'READY' AND (capability_level IS NOT NULL OR lock_mode IS NOT NULL)) OR
+                  (status IN ('DRAFT','NEEDS_REVIEW') AND (capability_level IS NOT NULL OR lock_mode IS NOT NULL)) OR
                   (preflight_status='INSPECTING' AND (preflight_execution_id IS NULL OR NOT EXISTS (
                     SELECT 1 FROM preflight_executions p WHERE p.execution_id=tasks.preflight_execution_id
                     AND p.task_id=tasks.id AND p.status='INSPECTING'))) OR
@@ -1994,6 +2305,56 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
         ).fetchall()
     if mismatched_locks:
         errors.append("scope 锁与 execution 生命周期不一致: " + ",".join(row[0] for row in mismatched_locks))
+    invalid_scope_keys: list[str] = []
+    for row in database.execute("SELECT task_id, scope_key FROM task_scopes ORDER BY task_id, ordinal"):
+        try:
+            parse_scope_key(row["scope_key"])
+        except LoopError:
+            invalid_scope_keys.append(f"{row['task_id']}:{row['scope_key']}")
+    for row in database.execute("SELECT task_id, scope_key FROM scope_locks ORDER BY task_id, scope_key"):
+        try:
+            parse_scope_key(row["scope_key"])
+        except LoopError:
+            invalid_scope_keys.append(f"{row['task_id']}:{row['scope_key']}")
+    if invalid_scope_keys:
+        errors.append("scope_key 无效: " + ",".join(invalid_scope_keys))
+    invalid_scope_modes = database.execute(
+        "SELECT t.id, s.scope_key FROM tasks t JOIN task_scopes s ON s.task_id=t.id "
+        "WHERE t.preflight_status='READY' AND ("
+        "(t.lock_mode='project' AND s.scope_key NOT LIKE 'project:%') OR "
+        "(t.lock_mode='module' AND s.scope_key NOT LIKE 'module:%') OR "
+        "(t.lock_mode='file' AND s.scope_key NOT LIKE 'file:%')) "
+        "ORDER BY t.id, s.ordinal"
+    ).fetchall() if uses_preflight_schema(database) else []
+    if invalid_scope_modes:
+        errors.append(
+            "任务 lock_mode 与 scope_key 不一致: "
+            + ",".join(f"{row['id']}:{row['scope_key']}" for row in invalid_scope_modes)
+        )
+    locks_without_scope = database.execute(
+        "SELECT l.execution_id, l.scope_key FROM scope_locks l WHERE NOT EXISTS ("
+        "SELECT 1 FROM task_scopes s WHERE s.task_id=l.task_id AND s.scope_key=l.scope_key) "
+        "ORDER BY l.execution_id, l.scope_key"
+    ).fetchall()
+    if locks_without_scope:
+        errors.append(
+            "scope 锁缺少任务范围凭证: "
+            + ",".join(f"{row['execution_id']}:{row['scope_key']}" for row in locks_without_scope)
+        )
+    active_locks = [dict(row) for row in database.execute(
+        "SELECT scope_key, task_id, execution_id FROM scope_locks ORDER BY scope_key"
+    ).fetchall()]
+    overlapping_locks: list[str] = []
+    for index, left in enumerate(active_locks):
+        for right in active_locks[index + 1:]:
+            if left["execution_id"] == right["execution_id"]:
+                continue
+            if scope_keys_conflict(left["scope_key"], right["scope_key"]):
+                overlapping_locks.append(
+                    f"{left['execution_id']}:{left['scope_key']}<->{right['execution_id']}:{right['scope_key']}"
+                )
+    if overlapping_locks:
+        errors.append("活动 scope 锁互相冲突: " + ",".join(overlapping_locks))
     return {
         "ok": not errors, "schema_version": version,
         "tasks": database.execute("SELECT count(*) FROM tasks").fetchone()[0],

@@ -66,7 +66,15 @@ class AttachmentImageTests(unittest.TestCase):
         self.database.close()
         self.temporary.cleanup()
 
-    def add_task(self, task_id: str, attachment_path: str) -> None:
+    def add_task(
+        self,
+        task_id: str,
+        attachment_path: str,
+        *,
+        priority: str = "medium",
+        lock_mode: str = "project",
+        scope: list[str] | None = None,
+    ) -> None:
         insert_task(
             self.database,
             {
@@ -74,10 +82,11 @@ class AttachmentImageTests(unittest.TestCase):
                 "title": task_id,
                 "description": "attachment test",
                 "status": "PENDING",
-                "priority": "medium",
+                "priority": priority,
                 "runtime_environment": "codex_automation",
                 "created_at": now_shanghai(),
-                "scope": ["project/file.txt"],
+                "scope": scope or ["project/file.txt"],
+                "lock_mode": lock_mode,
                 "acceptance": ["test"],
                 "attachments": [{"path": attachment_path, "role": "source"}],
             },
@@ -147,6 +156,63 @@ class AttachmentImageTests(unittest.TestCase):
             payload["tasks"][0]["execution_policy"],
             "automatic",
         )
+
+    def test_dashboard_state_projects_dynamic_scope_blockers_and_queue_positions(self) -> None:
+        self.add_task(
+            "ACTIVE-FILE", "assets/ACTIVE-FILE/reference.png", priority="critical",
+            lock_mode="file", scope=["project/src/shared.py"],
+        )
+        self.add_task(
+            "PENDING-HIGH", "assets/PENDING-HIGH/reference.png", priority="high",
+            lock_mode="file", scope=["PROJECT\\src\\.\\SHARED.py"],
+        )
+        self.add_task(
+            "PENDING-LOW", "assets/PENDING-LOW/reference.png", priority="low",
+            lock_mode="file", scope=["project/src/shared.py"],
+        )
+        stamp = now_shanghai()
+        self.database.execute(
+            "UPDATE tasks SET status='RUNNING', assigned_agent='active-file-exec', started_at=?, "
+            "heartbeat_at=?, attempt=1 WHERE id='ACTIVE-FILE'",
+            (stamp, stamp),
+        )
+        self.database.execute(
+            "INSERT INTO executions(execution_id, task_id, status, started_at, heartbeat_at, "
+            "lease_expires_at, runtime_environment, provider_id, capability_level, execution_policy, "
+            "model, reasoning, attempt_timeout_seconds, max_retries) VALUES("
+            "'active-file-exec', 'ACTIVE-FILE', 'RUNNING', ?, ?, '2999-01-01T00:00:00+08:00', "
+            "'codex_automation', NULL, 'L2', 'automatic', 'gpt-5.6-terra', 'medium', 3600, 0)",
+            (stamp, stamp),
+        )
+        self.database.execute(
+            "INSERT INTO scope_locks(scope_key, task_id, execution_id, acquired_at, lease_expires_at) "
+            "VALUES('file:project::src/shared.py', 'ACTIVE-FILE', 'active-file-exec', ?, "
+            "'2999-01-01T00:00:00+08:00')",
+            (stamp,),
+        )
+
+        payload = state_payload(self.database, load_initialization_config())
+        tasks = {task["id"]: task for task in payload["tasks"]}
+
+        self.assertEqual(tasks["PENDING-HIGH"]["status"], "PENDING")
+        self.assertEqual(tasks["PENDING-HIGH"]["blocked_by_task_ids"], ["ACTIVE-FILE"])
+        self.assertEqual(tasks["PENDING-HIGH"]["blocked_scopes"], ["project/src/SHARED.py"])
+        self.assertEqual(
+            tasks["PENDING-HIGH"]["blocked_scope_keys"], ["file:project::src/shared.py"]
+        )
+        self.assertEqual(tasks["PENDING-HIGH"]["scope_queue_position"], 1)
+        self.assertEqual(tasks["PENDING-LOW"]["scope_queue_position"], 2)
+        self.assertEqual(
+            tasks["PENDING-HIGH"]["blocking_scopes"][0]["blocker_lock_status"], "ACTIVE"
+        )
+
+    def test_served_dashboard_accepts_schema_3_7(self) -> None:
+        html = (Path(__file__).resolve().parents[1] / "dashboard.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('const TASK_SCHEMA_VERSION = "3.7.0";', html)
+        self.assertNotIn('const TASK_SCHEMA_VERSION = "3.6.0";', html)
 
     def test_unregistered_path_is_rejected(self) -> None:
         self.add_task("IMAGE-TASK", "assets/IMAGE-TASK/reference.png")

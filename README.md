@@ -1,12 +1,13 @@
 # Local Agent Loop
 
-`E:\code\local-agent-loop` 是 `E:\code` 下跨项目任务的并发执行中心。Operator 管理任务，Codex Worker 执行任务，Windows 健康任务维护 Dashboard Server。
+`E:\code\local-agent-loop` 是 `E:\code` 下跨项目任务的并发执行中心。Operator 管理业务事实，Planner 做只读静态预检，Worker 执行 READY 任务，Windows 健康任务维护 Dashboard Server。
 
 ## 固定配置
 
-- 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.6.0）
+- 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.7.0）
 - 初始化配置：`config/initialization.json`
 - 项目清单：`E:\code\根目录清单.md`
+- Planner：独立 Terra/high 自动化每 5 分钟唤起一次，固定 read-only、禁网、默认拒绝，仅通过受控 `loopctl preflight-*` stdin 通道写回
 - Worker：L1 至 L5 五条 automatic 定时自动化各自每 20 分钟唤起一次；`L5/manual` 仅人工批准后一次性执行
 - 运行环境：`codex_automation`、`codex_cli`、`self_hosted_agent`；当前定时自动化固定为 `codex_automation`
 - Codex CLI Runner：`scripts/codex_cli_runner.py` 每次只领取并执行一个 `codex_cli` 任务，不包含调度循环或服务常驻
@@ -23,8 +24,9 @@ SQLite 只保存任务及其执行一致性数据：任务内容和历史、每�
 
 ## 角色
 
-- Operator：人工主对话，只添加、修改、取消、重排和确认任务。
-- Worker：L1、L2、L3、L4、L5 五条 automatic 自动化每次显式使用 `codex_automation`，按自身能力等级原子领取一个任务，在当前自动化任务中执行并回写结果。Codex CLI 和自建 Agent 分别只领取匹配的 `codex_cli` 与 `self_hosted_agent` 任务。
+- Operator：人工主对话，只保存原始业务事实并管理任务；新任务固定进入 `DRAFT/UNINSPECTED`。
+- Planner：通过独立自动化和 `preflight_executions` 对一个 DRAFT 做只读静态预检，补充最终 scope、能力等级、锁模式、技术验收和证据；不占 Worker 容量、不获取业务 scope 写锁，不实现任务。首次建议 L5、manual、拆分或边界不明确时进入 NEEDS_REVIEW。
+- Worker：L1、L2、L3、L4、L5 五条 automatic 自动化每次显式使用 `codex_automation`，按自身能力等级原子领取一个 `PENDING/READY` 任务，在当前自动化任务中执行并回写结果。Codex CLI 和自建 Agent 分别只领取匹配的 `codex_cli` 与 `self_hosted_agent` 任务。
 - Codex CLI Runner：显式接收能力等级并生成唯一 execution ID，只 claim 一次；领取后由单个 ephemeral `codex exec` 处理一个登记项目，Runner 管理 heartbeat、attempt timeout、进程树、结构化结果和 finish。
 - 自建 Agent Runtime：以显式运行环境、Provider、能力等级和执行策略启动，只领取一次并处理一个任务；Provider 负责把模型 API 标准化为中立响应，Runtime 负责队列协议、上下文、受限工具、心跳和结果校验。
 - Windows 健康任务：由任务计划程序直接运行 `health_run.py`，检查并按需恢复 Dashboard Server，不调用模型。
@@ -38,6 +40,11 @@ py -3 .\scripts\loopctl.py state
 py -3 .\scripts\loopctl.py migrate
 py -3 .\scripts\loopctl.py enqueue .\new-task.json
 py -3 .\scripts\loopctl.py update INIT-001 .\task-patch.json
+py -3 .\scripts\loopctl.py preflight-claim planner-<GUID> --runtime-environment codex_automation --sandbox read-only
+py -3 .\scripts\loopctl.py preflight-heartbeat planner-<GUID> TASK-ID
+$readyJson | py -3 .\scripts\loopctl.py preflight-ready planner-<GUID> TASK-ID -
+$reviewJson | py -3 .\scripts\loopctl.py preflight-needs-review planner-<GUID> TASK-ID -
+$failureJson | py -3 .\scripts\loopctl.py preflight-fail planner-<GUID> TASK-ID -
 py -3 .\scripts\loopctl.py requeue TASK-ID --reason "人工确认或重新打开后排队"
 py -3 .\scripts\loopctl.py cancel TASK-ID --reason "不再需要"
 py -3 .\scripts\loopctl.py confirm TASK-ID --reason "人工复核通过"
@@ -47,7 +54,7 @@ py -3 .\scripts\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action 
 py -3 .\scripts\loopctl.py resolve-human TASK-ID --response "人工确认内容"
 ```
 
-`cancel` 保留历史，不物理删除任务。`requeue` 可重新排队草稿、等待、失败或成功任务；当 Worker 已完成全部实现和验证、`WAITING_HUMAN` 只缺最后一个人工事实时，`resolve-human` 要求非空 Worker verification、无活动 execution 和明确人工答复，可直接形成 `WAITING_HUMAN -> SUCCEEDED`，避免无意义重跑。刚被误重排但尚未再次领取的任务也可受控纠正，并必须显式提供完成摘要。`confirm` 只接受 `SUCCEEDED`，形成 `SUCCEEDED -> CONFIRMED` 的人工复核链路。归档是独立的 nullable `archived_at` 属性，`archive/unarchive` 不改变状态、结果或尝试次数，且重复执行不会重复写历史。已归档任务需要先取消归档，才能修改、取消或重新排队。
+`cancel` 保留历史，不物理删除任务。新建任务和原始定义变更都进入 `DRAFT/UNINSPECTED`；`requeue` 处理 `DRAFT/NEEDS_REVIEW` 时仍回到预检阶段，不能直接生成 PENDING。Planner 提交 READY 才在一个事务中写入最终执行契约并形成 `DRAFT -> PENDING`。当 Worker 已完成全部实现和验证、`WAITING_HUMAN` 只缺最后一个人工事实时，`resolve-human` 要求非空 Worker verification、无活动 execution 和明确人工答复，可直接形成 `WAITING_HUMAN -> SUCCEEDED`。`confirm` 只接受 `SUCCEEDED`；归档仍是独立 nullable `archived_at` 属性。
 
 Dashboard 的“已结束”分段为未归档终态任务提供归档按钮；`WAITING_HUMAN` 隔离任务的详情提供重新排队、标记失败和继续等待入口。本地 `POST /api/task-action` 只接受固定的 `archive/recover` 结构并以固定参数调用 `loopctl.py`。归档与恢复都使用乐观 `row_version`；恢复还校验 execution ID、`STALLED/TIMED_OUT` 与 `QUARANTINED`，并要求明确确认旧 Codex 会话结束。
 
@@ -55,7 +62,7 @@ Dashboard 的“已结束”分段为未归档终态任务提供归档按钮；`
 
 Dashboard Server 固定绑定 `127.0.0.1`，命令行改为 `0.0.0.0` 或其他地址会拒绝启动。远程 Secret 管理必须等待服务器 Secret 后端同时提供 HTTPS、认证、授权和审计，不能通过修改 Dashboard 监听地址直接开放。
 
-Schema 3.0.0 至 3.5.0 数据库升级到 3.6.0 时运行 `loopctl.py migrate`。3.0.0 至 3.3.0 仍要求没有活动 execution，并完成 L1-L5、规范运行环境和执行配置快照迁移。3.4.0 会原样保留活动 execution 与 ACTIVE scope 锁并补齐恢复及安全诊断字段；3.5.0 只增加安全结果诊断字段，同样保留活动 execution。迁移不会根据时间自动猜测真实旧会话已结束，也不会创建隔离。迁移后由后续 `claim` 按独立计时条件推进状态。
+Schema 3.0.0 至 3.6.0 数据库升级到 3.7.0 时运行 `loopctl.py migrate`。3.0.0 至 3.3.0 仍要求没有活动 Worker execution；3.4.0 至 3.6.0 原样保留活动 Worker execution 与 ACTIVE scope 锁。旧 DRAFT 迁移为 `NEEDS_REVIEW/FAILED` 并记录原因；既有 PENDING 迁移为 READY，避免队列整体停摆；RUNNING、终态、归档、依赖、附件、结果和历史保持原状态与内容。迁移不会猜测旧会话已结束，也不会创建 Planner execution。
 
 Worker 协议：
 
@@ -65,7 +72,11 @@ py -3 .\scripts\loopctl.py heartbeat <execution-id> <task-id>
 $resultJson | py -3 .\scripts\loopctl.py finish <execution-id> <task-id> -
 ```
 
-`finish` 默认从 stdin 读取 UTF-8 JSON，也兼容显式 JSON 文件路径。正常流程不持久化中间 report。`claim` 强制显式提供 `runtime_environment`、`capability_level` 和 `execution_policy`，只扫描三个字段同时匹配的任务；它会把冲突候选转为 `WAITING_CONFLICT` 后继续寻找其他可运行 scope。全局 8、平台 5、依赖与 scope 锁跨运行环境共同生效。它可能返回 `CLAIMED`、`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED`；除 `CLAIMED` 外均立即结束。
+`finish` 默认从 stdin 读取 UTF-8 JSON，也兼容显式 JSON 文件路径。正常流程不持久化中间 report。`claim` 强制显式提供 `runtime_environment`、`capability_level` 和 `execution_policy`，只扫描三个字段同时匹配的 READY 任务；冲突候选保持 `PENDING` 并动态投影 blocker、blocked scope 和 queue position，claim 继续寻找其他可运行 scope。旧 `WAITING_CONFLICT` 仅作迁移审计兼容。全局 8、平台 5、依赖与 scope 锁跨运行环境共同生效。它可能返回 `CLAIMED`、`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED`；除 `CLAIMED` 外均立即结束。
+
+Planner 预检是与 Worker execution 分离的状态机：`UNINSPECTED -> INSPECTING -> READY|FAILED`。入口必须声明 `codex_automation/read-only`，claim 只返回 Operator 业务定义和只读边界；预检结果只接受 UTF-8 stdin。READY 原子写入最终能力等级、精确 scope、`file|module|project` 锁模式、技术验收和检查证据，并把 DRAFT 转为 PENDING；首次 L5/manual、信息不足、需求冲突或需要拆分决定时转为 NEEDS_REVIEW。用户明确批准 L5/manual 后，Operator 把对应 `APPROVED_PLANNER_ESCALATION` 标记写回业务定义，Planner 复检通过才可 READY。拆分建议不自动创建任务。
+
+Worker claim 同时返回 scope 锁凭证。Worker 必须在第一次编辑前核对 execution/task/lock 状态；新增范围只能先把 `{"scope":[...]}` 通过 stdin 提交给 `extend-scope`，并在返回更新后的锁凭证后写入。Codex CLI 子模型和 self-hosted 模型不直接管理队列；它们需要新范围时由持有 execution 的 Runner/宿主执行相同扩锁契约。
 
 Codex Worker 可自行清理当前 execution 在任务登记项目内明确新生成且仍未被 Git 跟踪的普通临时文件，不需要额外 `delete` 批准。自动清理要求执行前状态、生成命令与时间证据，只允许逐个精确文件路径，并禁止目录、符号链接/重解析点、源码、配置、凭据、用户数据、通配符、递归删除和跨项目操作。Git 已跟踪、execution 前已存在或归属不明的文件仍需人工授权；清理后必须复核 Git 状态并记录 verification。自建 Agent Runtime 当前没有删除工具，不适用该例外。
 
@@ -154,13 +165,15 @@ py -3 .\scripts\agent_runtime.py `
 ## 文件
 
 - `data/loop-agent.sqlite3`：唯一任务事实源。
-- `schemas/loop-agent.sql`：Schema 3.6.0。
+- `schemas/loop-agent.sql`：Schema 3.7.0，包含任务主状态、独立预检状态和 Planner execution。
 - `config/initialization.json`：执行、自动化与服务配置。
 - `prompts/operator.md`：任务管理主对话提示词和查重、状态、独立归档流程。
+- `prompts/planner.md`：Planner 自动化的单任务只读预检和结构化写回提示词。
 - `prompts/worker.md`：Codex Worker 自动化的权威提示词。
 - `prompts/cli-worker.md`：Codex CLI 子进程的单任务业务执行与结果契约提示词。
 - `scripts/loopdb.py`：任务库访问与状态投影。
 - `scripts/loopctl.py`：任务管理与 Worker 事务协议。
+- `scripts/check-initialization.ps1`：只读核对 Planner 边界、五条 Worker 与 Operator 切换清单。
 - `scripts/codex_cli_runner.py`：Codex CLI 单任务 claim、heartbeat、进程管理、结果校验和 finish 入口。
 - `scripts/agent_runtime.py`：通用自建 Agent 的单次运行入口、Provider 协议与受限工具层。
 - `scripts/deepseek_provider.py`：DeepSeek Chat Completions 到中立 Provider 协议的适配器。
@@ -177,4 +190,4 @@ py -3 .\scripts\agent_runtime.py `
 - `runtime/`：PID、日志、健康状态和短时锁；不是任务事实源。
 - `backups/`：迁移前快照和旧产物，仅用于审计恢复。
 
-详细规则见 `docs/architecture.md`；初始化、Worker 提示词和健康任务安装见 `docs/initialization.md`。
+详细规则见 `docs/architecture.md`；Planner/Worker 初始化检查和健康任务安装见 `docs/initialization.md`。

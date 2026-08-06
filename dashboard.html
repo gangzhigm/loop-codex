@@ -735,7 +735,8 @@
     .dependency-indicator.is-yellow { background: var(--warning); }
     .dependency-indicator.is-green { background: var(--success); }
 
-    .conflict-summary {
+    .conflict-summary,
+    .queue-summary {
       position: relative;
       width: min(180px, 100%);
       min-width: 0;
@@ -743,7 +744,8 @@
       font-size: 10px;
     }
 
-    .conflict-summary summary {
+    .conflict-summary summary,
+    .queue-summary summary {
       display: block;
       min-width: 0;
       overflow: hidden;
@@ -755,8 +757,10 @@
       white-space: nowrap;
     }
 
-    .conflict-summary summary::-webkit-details-marker { display: none; }
-    .conflict-summary summary:focus-visible { outline: 2px solid var(--warning); outline-offset: 2px; }
+    .conflict-summary summary::-webkit-details-marker,
+    .queue-summary summary::-webkit-details-marker { display: none; }
+    .conflict-summary summary:focus-visible,
+    .queue-summary summary:focus-visible { outline: 2px solid var(--warning); outline-offset: 2px; }
 
     .conflict-popover {
       position: absolute;
@@ -777,7 +781,10 @@
 
     .conflict-summary[open] .conflict-popover,
     .conflict-summary:hover .conflict-popover,
-    .conflict-summary:focus-within .conflict-popover { display: grid; gap: 10px; }
+    .conflict-summary:focus-within .conflict-popover,
+    .queue-summary[open] .conflict-popover,
+    .queue-summary:hover .conflict-popover,
+    .queue-summary:focus-within .conflict-popover { display: grid; gap: 10px; }
 
     .conflict-group {
       display: grid;
@@ -1353,6 +1360,16 @@
     .detail-block h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0; }
     .detail-block p { margin: 0; color: #44505c; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
     .detail-block ul { margin: 0; padding-left: 18px; color: #44505c; font-size: 12px; line-height: 1.7; }
+    .planner-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+    .planner-meta > div { min-width: 0; }
+    .planner-meta dt { color: var(--muted); font-size: 11px; }
+    .planner-meta dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 700; }
+    .scope-list { display: grid; gap: 4px; padding: 0; list-style: none; }
+    .scope-list code { overflow-wrap: anywhere; white-space: normal; }
+    .split-suggestion { border-left: 3px solid var(--warning); padding-left: 10px; }
+    .split-suggestion + .split-suggestion { margin-top: 12px; }
+    .split-task { margin-top: 8px; }
+    .split-task strong, .split-task span { display: block; }
 
     .attachment-gallery {
       display: grid;
@@ -1472,7 +1489,7 @@
       .task-title-line { width: 100%; align-items: start; }
       .status-cell { overflow: visible; }
       .status-stack { width: 100%; justify-items: start; }
-      .conflict-summary { width: min(240px, 100%); }
+      .conflict-summary, .queue-summary { width: min(240px, 100%); }
       .task-time-info { width: 100%; }
       .task-time-row { grid-template-columns: 30px minmax(0, 1fr); }
       .conflict-popover { right: auto; left: 0; }
@@ -1488,6 +1505,7 @@
       .side-block + .side-block { border-top: 1px solid var(--line); border-left: 0; }
       .profile-row { min-height: 44px; padding-block: 10px; }
       .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .planner-meta { grid-template-columns: minmax(0, 1fr); }
     }
 
     @media (max-width: 420px) {
@@ -1511,10 +1529,11 @@
     <div class="header-status">
       <section class="summary-band" aria-label="任务总览">
         <div class="metric"><div class="metric-label">当前任务</div><div id="metricTotal" class="metric-value">0</div></div>
+        <button class="metric metric-filter" type="button" data-filter="draft" aria-pressed="false"><span class="metric-label">草稿</span><span id="metricDraft" class="metric-value">0</span></button>
+        <button class="metric metric-filter" type="button" data-filter="review" aria-pressed="false"><span class="metric-label">需确认</span><span id="metricReview" class="metric-value warning">0</span></button>
         <button class="metric metric-filter" type="button" data-filter="pending" aria-pressed="false"><span class="metric-label">待执行</span><span id="metricPending" class="metric-value">0</span></button>
         <button class="metric metric-filter" type="button" data-filter="active" aria-pressed="false"><span class="metric-label">执行中</span><span id="metricRunning" class="metric-value">0</span></button>
-        <button class="metric metric-filter" type="button" data-filter="attention" aria-pressed="false"><span class="metric-label">需要关注</span><span id="metricAttention" class="metric-value warning">0</span></button>
-        <button class="metric metric-filter" type="button" data-filter="closed" aria-pressed="false"><span class="metric-label">待确认</span><span id="metricConfirmation" class="metric-value success">0</span></button>
+        <button class="metric metric-filter" type="button" data-filter="closed" aria-pressed="false"><span class="metric-label">已结束</span><span id="metricConfirmation" class="metric-value success">0</span></button>
         <button class="metric metric-filter" type="button" data-filter="archived" aria-pressed="false"><span class="metric-label">已归档</span><span id="metricArchived" class="metric-value success">0</span></button>
       </section>
       <div id="distribution" class="distribution" aria-label="任务状态分布">
@@ -1550,9 +1569,10 @@
           <div class="task-tools">
             <input id="search" class="search-input" type="search" placeholder="搜索 ID、标题或项目" aria-label="搜索任务">
             <div class="segments" aria-label="任务筛选">
+              <button type="button" data-filter="draft" aria-pressed="false">草稿</button>
+              <button type="button" data-filter="review" aria-pressed="false">需确认</button>
               <button type="button" data-filter="pending" aria-pressed="true">待执行</button>
               <button type="button" data-filter="active" aria-pressed="false">执行中</button>
-              <button type="button" data-filter="attention" aria-pressed="false">需关注</button>
               <button type="button" data-filter="closed" aria-pressed="false">已结束</button>
               <button type="button" data-filter="archived" aria-pressed="false">已归档</button>
             </div>
@@ -1621,6 +1641,7 @@
 
     const STATUS_LABELS = {
       DRAFT: "草稿",
+      NEEDS_REVIEW: "需确认",
       PENDING: "待执行",
       CLAIMED: "已领取",
       RUNNING: "执行中",
@@ -1636,14 +1657,16 @@
     const PRIORITY_LABELS = { blocker: "阻断", critical: "紧急", high: "高", medium: "中", low: "低" };
     const CAPABILITY_LEVELS = ["L1", "L2", "L3", "L4", "L5"];
     const CAPABILITY_LABELS = Object.fromEntries(CAPABILITY_LEVELS.map((level) => [level, level]));
-    const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"]);
-    const ATTENTION_STATUSES = new Set(["DRAFT", "WAITING_CONFLICT", "WAITING_HUMAN", "BLOCKED", "STALLED", "FAILED"]);
+    const PREFLIGHT_LABELS = { UNINSPECTED: "待静态检查", INSPECTING: "静态检查中", READY: "已就绪", FAILED: "预检未通过" };
+    const PREFLIGHT_STATUSES = new Set(Object.keys(PREFLIGHT_LABELS));
+    const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING", "WAITING_HUMAN", "STALLED"]);
     const CLOSED_STATUSES = new Set(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
+    const LEGACY_QUEUE_STATUSES = new Set(["WAITING_CONFLICT", "BLOCKED"]);
     const PRIORITY_ORDER = { blocker: 0, critical: 1, high: 2, medium: 3, low: 4 };
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
-    const HEADER_FILTER_STATUSES = ["DRAFT", "PENDING", "RUNNING", "WAITING_CONFLICT", "WAITING_HUMAN", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"];
+    const HEADER_FILTER_STATUSES = ["DRAFT", "NEEDS_REVIEW", "PENDING", "CLAIMED", "RUNNING", "WAITING_HUMAN", "STALLED", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED", "WAITING_CONFLICT", "BLOCKED"];
     const HEADER_FILTER_PRIORITIES = ["blocker", "critical", "high", "medium", "low"];
-    const TASK_SCHEMA_VERSION = "3.6.0";
+    const TASK_SCHEMA_VERSION = "3.7.0";
     const STATE_ENDPOINT = "/api/state";
     const TASK_ACTION_ENDPOINT = "/api/task-action";
     const SECRET_API_ENDPOINT = "/api/secrets";
@@ -1680,9 +1703,10 @@
       taskRows: document.querySelector("#taskRows"),
       taskViewCount: document.querySelector("#taskViewCount"),
       metricTotal: document.querySelector("#metricTotal"),
+      metricDraft: document.querySelector("#metricDraft"),
+      metricReview: document.querySelector("#metricReview"),
       metricPending: document.querySelector("#metricPending"),
       metricRunning: document.querySelector("#metricRunning"),
-      metricAttention: document.querySelector("#metricAttention"),
       metricConfirmation: document.querySelector("#metricConfirmation"),
       metricArchived: document.querySelector("#metricArchived"),
       distribution: document.querySelector("#distribution"),
@@ -2094,39 +2118,27 @@
       return `<span class="dependency-indicator is-${indicator.color}" role="img" aria-label="${escapeHtml(indicator.label)}" title="${escapeHtml(indicator.label)}"></span>`;
     }
 
-    function conflictGroups(task, tasks) {
-      if (task?.status !== "WAITING_CONFLICT" || !Array.isArray(task.conflicts) || task.conflicts.length === 0) return [];
+    function scopeBlockGroups(task, tasks) {
+      if (task?.status !== "PENDING" || !Array.isArray(task.blocked_by_task_ids) || task.blocked_by_task_ids.length === 0) return [];
       const tasksById = new Map((Array.isArray(tasks) ? tasks : [])
         .filter((candidate) => typeof candidate?.id === "string" && candidate.id)
         .map((candidate) => [candidate.id, candidate]));
-      const groups = new Map();
-
-      task.conflicts.forEach((candidate) => {
-        const conflict = candidate && typeof candidate === "object" ? candidate : {};
-        const blockerId = typeof conflict.blocker_task_id === "string" ? conflict.blocker_task_id.trim() : "";
-        const groupKey = blockerId || "__unknown_blocker__";
-        if (!groups.has(groupKey)) {
-          const blockerTask = blockerId ? tasksById.get(blockerId) : null;
-          const blockerTitle = typeof blockerTask?.title === "string" ? blockerTask.title.trim() : "";
-          groups.set(groupKey, { blockerId, blockerTitle, scopes: new Map() });
-        }
-
-        const group = groups.get(groupKey);
-        const scopeKey = typeof conflict.scope_key === "string" && conflict.scope_key.trim()
-          ? conflict.scope_key.trim()
-          : "冲突项目未记录";
-        if (!group.scopes.has(scopeKey)) group.scopes.set(scopeKey, new Set());
-        group.scopes.get(scopeKey).add(formatConflictDetectedAt(conflict.detected_at));
+      const scopeByKey = new Map((Array.isArray(task.scope_keys) ? task.scope_keys : []).map((key, index) => [key, task.scope?.[index] ?? key]));
+      const detailed = Array.isArray(task.blocking_scopes) ? task.blocking_scopes : [];
+      return task.blocked_by_task_ids.map((blockerId) => {
+        const blockerTask = tasksById.get(blockerId);
+        const keys = detailed
+          .filter((item) => item?.blocker_task_id === blockerId)
+          .map((item) => item.requested_scope_key)
+          .filter(Boolean);
+        const fallbackKeys = Array.isArray(task.blocked_scope_keys) ? task.blocked_scope_keys : [];
+        const scopeKeys = [...new Set(keys.length ? keys : fallbackKeys)];
+        return {
+          blockerId,
+          blockerTitle: typeof blockerTask?.title === "string" ? blockerTask.title.trim() : "",
+          scopes: scopeKeys.map((scopeKey) => ({ scopeKey, scope: scopeByKey.get(scopeKey) ?? scopeKey }))
+        };
       });
-
-      return [...groups.values()].map((group) => ({
-        blockerId: group.blockerId,
-        blockerTitle: group.blockerTitle,
-        scopes: [...group.scopes.entries()].map(([scopeKey, detectedAt]) => ({
-          scopeKey,
-          detectedAt: [...detectedAt]
-        }))
-      }));
     }
 
     function conflictGroupMarkup(group) {
@@ -2137,33 +2149,43 @@
         <code class="conflict-task-id" title="${escapeHtml(blockerId)}">${escapeHtml(blockerId)}</code>
         <ul class="conflict-scopes">${group.scopes.map((scope) => `
           <li>
-            <code class="conflict-scope" title="${escapeHtml(scope.scopeKey)}">${escapeHtml(scope.scopeKey)}</code>
-            <span class="conflict-detected">detected_at：${escapeHtml(scope.detectedAt.join("、"))}</span>
+            <code class="conflict-scope" title="${escapeHtml(scope.scopeKey)}">${escapeHtml(scope.scope)}</code>
+            <span class="conflict-detected">scope_key：${escapeHtml(scope.scopeKey)}</span>
           </li>`).join("")}
         </ul>
       </div>`;
     }
 
-    function renderConflictIndicator(task, tasks) {
-      const groups = conflictGroups(task, tasks);
+    function renderScopeBlockIndicator(task, tasks) {
+      const groups = scopeBlockGroups(task, tasks);
       if (!groups.length) return "";
       const first = groups[0];
       const firstLabel = first.blockerTitle || first.blockerId || "未知阻塞任务";
       const suffix = groups.length > 1 ? ` +${groups.length - 1}` : "";
-      const tooltip = groups.map((group) => {
-        const title = group.blockerTitle ? `${group.blockerTitle} · ` : "";
-        return `${title}${group.blockerId || "阻塞任务 ID 未记录"}`;
-      }).join("；");
-      return `<details class="conflict-summary">
-        <summary title="${escapeHtml(tooltip)}">等待：${escapeHtml(firstLabel)}${escapeHtml(suffix)}</summary>
+      const queuePosition = Number.isInteger(task.scope_queue_position) ? ` · 队列 ${task.scope_queue_position}` : "";
+      return `<details class="queue-summary">
+        <summary title="范围锁等待">范围等待：${escapeHtml(firstLabel)}${escapeHtml(suffix)}${escapeHtml(queuePosition)}</summary>
         <div class="conflict-popover" aria-label="阻塞任务详情">${groups.map(conflictGroupMarkup).join("")}</div>
       </details>`;
     }
 
-    function renderConflictDetails(task, tasks) {
-      const groups = conflictGroups(task, tasks);
-      if (!groups.length) return "";
-      return `<section class="detail-block"><h3>阻塞任务</h3><div class="conflict-detail-list">${groups.map(conflictGroupMarkup).join("")}</div></section>`;
+    function renderPendingBlockers(task, tasks) {
+      if (task.status !== "PENDING") return "";
+      const dependencyIds = Array.isArray(task.depends_on) ? task.depends_on : [];
+      const tasksById = new Map((Array.isArray(tasks) ? tasks : []).map((candidate) => [candidate.id, candidate]));
+      const dependencyItems = dependencyIds.length ? `<ul>${dependencyIds.map((id) => {
+        const dependency = tasksById.get(id);
+        return `<li><code>${escapeHtml(id)}</code> · ${escapeHtml(STATUS_LABELS[dependency?.status] ?? dependency?.status ?? "未找到")}</li>`;
+      }).join("")}</ul>` : '<p class="muted">无依赖等待</p>';
+      const scopeGroups = scopeBlockGroups(task, tasks);
+      const scopeItems = scopeGroups.length
+        ? `<div class="conflict-detail-list">${scopeGroups.map(conflictGroupMarkup).join("")}</div>`
+        : '<p class="muted">无范围锁等待</p>';
+      const affectedScopes = Array.isArray(task.blocked_scopes) && task.blocked_scopes.length
+        ? `<p>受影响范围：${task.blocked_scopes.map((scope) => `<code>${escapeHtml(scope)}</code>`).join("、")}</p>`
+        : "";
+      const position = Number.isInteger(task.scope_queue_position) ? `<p>当前范围队列位置：${escapeHtml(task.scope_queue_position)}</p>` : "";
+      return `<section class="detail-block"><h3>待执行阻塞</h3><h4>依赖等待</h4>${dependencyItems}<h4>范围锁等待</h4>${scopeItems}${affectedScopes}${position}</section>`;
     }
 
     function taskProjects(task) {
@@ -2211,6 +2233,7 @@
     }
 
     function profileCell(task) {
+      if (!task.capability_level) return '<span class="muted">待预检</span>';
       const config = executionConfig(task.runtime_environment, task.provider_id, task.capability_level);
       return `<span class="profile-badge profile-${escapeHtml(task.capability_level)}" title="${escapeHtml(executionConfigLabel(config))}">${escapeHtml(CAPABILITY_LABELS[task.capability_level] ?? task.capability_level)}</span>`;
     }
@@ -2361,8 +2384,10 @@
         ids.add(task?.id);
         if (!Number.isInteger(task?.row_version) || task.row_version < 1) errors.push(`任务 ${task?.id ?? index} row_version 无效`);
         if (!VALID_STATUSES.has(task?.status)) errors.push(`任务 ${task?.id ?? index} 状态无效`);
+        if (!PREFLIGHT_STATUSES.has(task?.preflight_status)) errors.push(`任务 ${task?.id ?? index} preflight_status 无效`);
         if (!Object.hasOwn(PRIORITY_ORDER, task?.priority)) errors.push(`任务 ${task?.id ?? index} 优先级无效`);
-        if (!CAPABILITY_LEVELS.includes(task?.capability_level)) errors.push(`任务 ${task?.id ?? index} 能力等级无效`);
+        if (task?.capability_level !== null && !CAPABILITY_LEVELS.includes(task?.capability_level)) errors.push(`任务 ${task?.id ?? index} 能力等级无效`);
+        if (!CAPABILITY_LEVELS.includes(task?.estimated_capability_level)) errors.push(`任务 ${task?.id ?? index} 预估能力等级无效`);
         if (!task?.runtime_environment || !validRuntimeEnvironments.has(task.runtime_environment)) {
           errors.push(`任务 ${task?.id ?? index} 运行环境缺失或未知`);
         }
@@ -2374,6 +2399,15 @@
         }
         if (task?.depends_on !== undefined && (!Array.isArray(task.depends_on) || task.depends_on.some((id) => typeof id !== "string"))) {
           errors.push(`任务 ${task?.id ?? index} depends_on 无效`);
+        }
+        if (!task?.operator_definition || typeof task.operator_definition !== "object" || Array.isArray(task.operator_definition)) {
+          errors.push(`任务 ${task?.id ?? index} operator_definition 无效`);
+        }
+        if (!task?.planner_supplement || typeof task.planner_supplement !== "object" || Array.isArray(task.planner_supplement)) {
+          errors.push(`任务 ${task?.id ?? index} planner_supplement 无效`);
+        }
+        if (!Array.isArray(task?.blocked_by_task_ids) || !Array.isArray(task?.blocked_scopes) || !Array.isArray(task?.blocked_scope_keys)) {
+          errors.push(`任务 ${task?.id ?? index} 待执行阻塞字段无效`);
         }
         if (!task?.result || typeof task.result !== "object" || Array.isArray(task.result)) {
           errors.push(`任务 ${task?.id ?? index} result 无效`);
@@ -2450,9 +2484,10 @@
       } else if (archived) {
         return false;
       }
-      if (currentFilter === "pending" && task.status !== "PENDING") return false;
+      if (currentFilter === "draft" && task.status !== "DRAFT") return false;
+      if (currentFilter === "review" && task.status !== "NEEDS_REVIEW") return false;
+      if (currentFilter === "pending" && task.status !== "PENDING" && !LEGACY_QUEUE_STATUSES.has(task.status)) return false;
       if (currentFilter === "active" && !ACTIVE_STATUSES.has(task.status)) return false;
-      if (currentFilter === "attention" && !needsAttention(task)) return false;
       if (currentFilter === "closed" && !CLOSED_STATUSES.has(task.status)) return false;
       if (ignoredHeaderFilter !== "status" && currentStatus !== "all" && task.status !== currentStatus) return false;
       if (ignoredHeaderFilter !== "priority" && currentPriority !== "all" && task.priority !== currentPriority) return false;
@@ -2564,10 +2599,6 @@
       return Date.now() - new Date(task.heartbeat_at).getTime() > threshold;
     }
 
-    function needsAttention(task) {
-      return ATTENTION_STATUSES.has(task.status) || isHeartbeatLate(task);
-    }
-
     function render() {
       const tasks = state?.tasks ?? [];
       const currentTasks = tasks.filter((task) => !isArchived(task));
@@ -2579,22 +2610,23 @@
       const succeeded = (counts.SUCCEEDED ?? 0) + (counts.CONFIRMED ?? 0);
       const running = (counts.RUNNING ?? 0) + (counts.CLAIMED ?? 0);
       const failed = counts.FAILED ?? 0;
-      const attentionTasks = currentTasks.filter(needsAttention);
-      const attention = attentionTasks.length;
+      const drafts = counts.DRAFT ?? 0;
+      const review = counts.NEEDS_REVIEW ?? 0;
       const pending = counts.PENDING ?? 0;
       const confirmation = (counts.SUCCEEDED ?? 0) + (counts.CONFIRMED ?? 0);
-      const queued = (counts.DRAFT ?? 0) + (counts.PENDING ?? 0) + (counts.CANCELLED ?? 0);
+      const queued = drafts + review + pending;
       const total = currentTasks.length;
 
       elements.metricTotal.textContent = total;
+      elements.metricDraft.textContent = drafts;
+      elements.metricReview.textContent = review;
       elements.metricPending.textContent = pending;
       elements.metricRunning.textContent = running;
-      elements.metricAttention.textContent = attention;
       elements.metricConfirmation.textContent = confirmation;
       elements.metricArchived.textContent = archived;
-      const widths = [succeeded, running, attention, failed, queued].map((value) => total ? `${(value / total) * 100}%` : "0%");
+      const widths = [succeeded, running, review, failed, queued].map((value) => total ? `${(value / total) * 100}%` : "0%");
       [...elements.distribution.children].forEach((child, index) => { child.style.width = widths[index]; });
-      elements.distribution.setAttribute("aria-label", `任务状态分布：完成 ${succeeded}，执行中 ${running}，需关注 ${attention}，失败 ${failed}，其他 ${queued}`);
+      elements.distribution.setAttribute("aria-label", `任务状态分布：完成 ${succeeded}，执行中 ${running}，需确认 ${review}，失败 ${failed}，待处理 ${queued}`);
 
       elements.workspaceUpdated.textContent = formatWorkspaceUpdated(state.workspace.updated_at);
 
@@ -2630,10 +2662,10 @@
             <span class="task-id">${escapeHtml(task.id)}</span>
           </td>
           <td class="status-cell" data-label="状态"><div class="status-stack">
-            <div class="status-badge-row"><span class="status-badge ${statusClass(task.status)}">${escapeHtml(STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span>${renderDependencyIndicator(task, tasks)}</div>
+            <div class="status-badge-row"><span class="status-badge ${statusClass(task.status)}">${escapeHtml(task.status === "DRAFT" ? `${STATUS_LABELS[task.status]} · ${PREFLIGHT_LABELS[task.preflight_status]}` : STATUS_LABELS[task.status])}${isHeartbeatLate(task) ? " · 心跳超时" : ""}</span>${renderDependencyIndicator(task, tasks)}</div>
             ${recoveryForTask(task) ? `<span class="recovery-state">${escapeHtml(recoveryForTask(task).execution_status)} · scope 隔离</span>` : ""}
             ${isArchived(task) ? `<span class="archive-time">归档于 ${escapeHtml(formatDate(task.archived_at, false))}</span>` : ""}
-            ${renderConflictIndicator(task, tasks)}
+            ${renderScopeBlockIndicator(task, tasks)}
           </div></td>
           <td data-label="优先级"><span class="priority-badge priority-${escapeHtml(task.priority)}">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></td>
           <td data-label="能力等级">${profileCell(task)}</td>
@@ -2689,6 +2721,43 @@
       return `<section class="detail-block"><h3>${escapeHtml(title)}</h3>${items.length
         ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
         : `<p class="muted">${escapeHtml(emptyText)}</p>`}</section>`;
+    }
+
+    function renderScopeList(values, emptyText = "无") {
+      const scopes = Array.isArray(values) ? values : [];
+      return scopes.length
+        ? `<ul class="scope-list">${scopes.map((scope) => `<li><code>${escapeHtml(scope)}</code></li>`).join("")}</ul>`
+        : `<p class="muted">${escapeHtml(emptyText)}</p>`;
+    }
+
+    function renderSplitSuggestions(suggestions) {
+      const groups = Array.isArray(suggestions) ? suggestions : [];
+      if (!groups.length) return "";
+      return `<section class="detail-block"><h3>Planner 拆分建议</h3><p>等待 Operator 或用户决定；此处不会自动创建子任务。</p>${groups.map((group) => `
+        <div class="split-suggestion"><strong>${escapeHtml(group.reason)}</strong>${(group.tasks ?? []).map((proposed) => `
+          <div class="split-task"><strong>${escapeHtml(proposed.id)} · ${escapeHtml(proposed.title)} · ${escapeHtml(proposed.capability_level)}</strong>
+            <span>${escapeHtml(proposed.description)}</span>
+            ${renderScopeList(proposed.scope)}
+            <span>依赖：${escapeHtml((proposed.depends_on ?? []).join("、") || "无")}；可并行：${escapeHtml((proposed.parallel_with ?? []).join("、") || "无")}</span>
+          </div>`).join("")}</div>`).join("")}</section>`;
+    }
+
+    function renderPlannerSupplement(task) {
+      const planner = task.planner_supplement ?? {};
+      return `<section class="detail-block"><h3>Planner 预检</h3>
+        <dl class="planner-meta">
+          <div><dt>预检状态</dt><dd>${escapeHtml(PREFLIGHT_LABELS[planner.preflight_status] ?? planner.preflight_status ?? "--")}</dd></div>
+          <div><dt>预估能力等级</dt><dd>${escapeHtml(task.estimated_capability_level ?? "--")}</dd></div>
+          <div><dt>最终能力等级</dt><dd>${escapeHtml(planner.capability_level ?? "待定")}</dd></div>
+          <div><dt>锁模式</dt><dd>${escapeHtml(planner.lock_mode ?? "待定")}</dd></div>
+          <div><dt>预检开始</dt><dd>${escapeHtml(formatDate(planner.started_at))}</dd></div>
+          <div><dt>预检完成</dt><dd>${escapeHtml(formatDate(planner.completed_at))}</dd></div>
+        </dl>
+        ${planner.failure ? `<p>原因：${escapeHtml(planner.failure)}</p>` : ""}
+        <h4>精确 scope</h4>${renderScopeList(planner.scope, "尚未形成精确 scope")}
+        <h4>技术验收补充</h4>${renderScopeList(planner.technical_acceptance, "尚无")}
+        <h4>预检证据</h4>${renderScopeList(planner.evidence, "尚无")}
+      </section>${renderSplitSuggestions(planner.split_suggestions)}`;
     }
 
     function attachmentImageUrl(taskId, path) {
@@ -2756,6 +2825,7 @@
       const task = state?.tasks?.find((candidate) => candidate.id === taskId);
       if (!task) return;
       const projects = taskProjects(task);
+      const operator = task.operator_definition ?? {};
       elements.dialogTitle.textContent = task.title;
       elements.dialogSubtitle.textContent = `${task.id} · ${STATUS_LABELS[task.status]} · revision ${state.workspace.revision}`;
       const intervention = task.human_intervention?.required
@@ -2772,8 +2842,10 @@
       elements.dialogBody.innerHTML = `
         <div class="detail-grid">
           <div class="detail-field"><span class="detail-label">状态</span><span class="detail-value">${escapeHtml(STATUS_LABELS[task.status])}</span></div>
+          <div class="detail-field"><span class="detail-label">预检状态</span><span class="detail-value">${escapeHtml(PREFLIGHT_LABELS[task.preflight_status] ?? task.preflight_status)}</span></div>
           <div class="detail-field"><span class="detail-label">优先级</span><span class="detail-value">${escapeHtml(PRIORITY_LABELS[task.priority] ?? task.priority)}</span></div>
-          <div class="detail-field"><span class="detail-label">能力等级</span><span class="detail-value">${escapeHtml(CAPABILITY_LABELS[task.capability_level] ?? task.capability_level)}</span></div>
+          <div class="detail-field"><span class="detail-label">预估能力等级</span><span class="detail-value">${escapeHtml(task.estimated_capability_level ?? "--")}</span></div>
+          <div class="detail-field"><span class="detail-label">最终能力等级</span><span class="detail-value">${escapeHtml(CAPABILITY_LABELS[task.capability_level] ?? task.capability_level ?? "待定")}</span></div>
           <div class="detail-field"><span class="detail-label">运行环境</span><span class="detail-value">${escapeHtml(runtimeEnvironmentName(task.runtime_environment))} (${escapeHtml(task.runtime_environment)})</span></div>
           <div class="detail-field"><span class="detail-label">Provider</span><span class="detail-value">${escapeHtml(task.provider_id ?? "无")}</span></div>
           <div class="detail-field"><span class="detail-label">执行配置</span><span class="detail-value">${escapeHtml(executionConfigLabel(executionConfig(task.runtime_environment, task.provider_id, task.capability_level)))}</span></div>
@@ -2784,16 +2856,17 @@
           <div class="detail-field"><span class="detail-label">最后心跳</span><span class="detail-value">${escapeHtml(formatDate(task.heartbeat_at))}</span></div>
           <div class="detail-field"><span class="detail-label">执行耗时</span><span class="detail-value">${escapeHtml(formatDuration(task.started_at, task.completed_at))}</span></div>
         </div>
-        <section class="detail-block"><h3>任务描述</h3><p>${escapeHtml(task.description || "无")}</p></section>
+        <section class="detail-block"><h3>Operator 原始定义</h3><p>${escapeHtml(operator.description ?? task.description ?? "无")}</p></section>
+        ${listBlock("Operator 业务验收", operator.acceptance ?? task.acceptance)}
+        ${renderPlannerSupplement(task)}
         <section class="detail-block"><h3>当前进展 · ${escapeHtml(task.progress.percent)}%</h3><p>${escapeHtml(task.progress.summary || "暂无进展摘要")}</p></section>
         ${task.assigned_agent ? `<section class="detail-block"><h3>技术信息</h3><p>执行实例：${escapeHtml(task.assigned_agent)}</p></section>` : ""}
         ${listBlock("已完成", task.progress.completed)}
-        ${listBlock("验收条件", task.acceptance)}
         ${intervention}
         ${recoveryPanel}
         ${result}
         ${renderResultDiagnostic(task)}
-        ${renderConflictDetails(task, state.tasks)}
+        ${renderPendingBlockers(task, state.tasks)}
         ${listBlock("验证记录", task.result?.verification)}
         ${renderAttachments(task)}
         <section class="detail-block"><h3>状态历史</h3><ul class="timeline">${timeline}</ul></section>
@@ -2881,7 +2954,7 @@
     }
 
     function setTaskFilter(filter) {
-      const nextFilter = ["pending", "active", "attention", "closed", "archived"].includes(filter) ? filter : "pending";
+      const nextFilter = ["draft", "review", "pending", "active", "closed", "archived"].includes(filter) ? filter : "pending";
       if (nextFilter !== currentFilter) resetHeaderFilters();
       currentFilter = nextFilter;
       document.querySelectorAll("[data-filter]").forEach((button) => {
@@ -2916,13 +2989,13 @@
         openTask(recoveryButton.dataset.openRecoveryTask);
         return;
       }
-      if (event.target.closest(".conflict-summary")) return;
+      if (event.target.closest(".conflict-summary, .queue-summary")) return;
       const row = event.target.closest("tr[data-task-id]");
       if (row) openTask(row.dataset.taskId);
     });
     elements.taskRows.addEventListener("keydown", (event) => {
       if (event.target.closest(".task-copy-button, .archive-button, .recovery-button")) return;
-      if (event.target.closest(".conflict-summary")) return;
+      if (event.target.closest(".conflict-summary, .queue-summary")) return;
       if (!["Enter", " "].includes(event.key)) return;
       const row = event.target.closest("tr[data-task-id]");
       if (!row) return;

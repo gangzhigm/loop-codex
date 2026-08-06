@@ -768,3 +768,90 @@ ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
 2026-08-05T14:35:52.681+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
 2026-08-05T14:36:56.176+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 503 -
 2026-08-05T14:37:21.020+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T15:38:36.536+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-06T15:38:36.816+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-06T15:48:13.983+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T15:49:20.382+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-06T15:49:42.010+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T15:59:10.095+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T16:00:46.806+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T16:08:32.555+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-06T16:15:51.224+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-06T16:18:51.022+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T16:38:32.380+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-06T16:56:07.456+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T17:16:51.923+08:00 127.0.0.1 "GET /api/secrets" 200
+2026-08-06T17:38:32.703+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-06T17:57:05.821+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T17:57:05.852+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 64823)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 712, in do_GET
+    self.send_json(HTTPStatus.OK, payload)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 511, in send_json
+    self.send_bytes(
+    ~~~~~~~~~~~~~~~^
+        status,
+        ^^^^^^^
+    ...<2 lines>...
+        headers=headers,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 502, in send_bytes
+    self.wfile.write(body)
+    ~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] 你的主机中的软件中止了一个已建立的连接。
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 496, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 484, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 716, in do_GET
+    self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 511, in send_json
+    self.send_bytes(
+    ~~~~~~~~~~~~~~~^
+        status,
+        ^^^^^^^
+    ...<2 lines>...
+        headers=headers,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 501, in send_bytes
+    self.end_headers()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 598, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 602, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] 你的主机中的软件中止了一个已建立的连接。
+----------------------------------------
+2026-08-06T17:57:07.666+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T17:57:56.996+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -

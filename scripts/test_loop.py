@@ -29,7 +29,9 @@ from loopdb import (
     insert_task,
     load_initialization_config,
     now_shanghai,
+    normalize_scope,
     resolve_execution_profile,
+    scope_keys_conflict,
     validate_database,
 )
 
@@ -41,8 +43,10 @@ LOOPCTL = BASE_DIR / "scripts" / "loopctl.py"
 class LoopConcurrencyTests(unittest.TestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
+        self.assertEqual(config["config_version"], "4.2.0")
         self.assertEqual(config["automations"]["worker_interval_minutes"], 20)
         self.assertEqual(config["prompts"]["operator"], "prompts/operator.md")
+        self.assertEqual(config["prompts"]["planner"], "prompts/planner.md")
         self.assertEqual(config["prompts"]["worker"], "prompts/worker.md")
         self.assertNotIn("health_interval_minutes", config["automations"])
         self.assertEqual(config["health"]["scheduler"], "windows_task_scheduler")
@@ -63,6 +67,38 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(config["planner"]["execution_kind"], "PLANNER")
         self.assertEqual(config["planner"]["default_runtime_environment"], "codex_automation")
         self.assertGreaterEqual(config["planner"]["attempt_timeout_seconds"], config["planner"]["lease_seconds"])
+        self.assertEqual(
+            config["planner"]["client_boundary"],
+            {
+                "sandbox": "read-only",
+                "approval_policy": "never",
+                "network_access": False,
+                "default_tool_action": "deny",
+                "source_access": "read-only",
+                "writeback": {
+                    "transport": "host_controlled_loopctl_stdin",
+                    "controller": str(LOOPCTL),
+                    "allowed_commands": [
+                        "preflight-claim", "preflight-heartbeat", "preflight-ready",
+                        "preflight-needs-review", "preflight-fail",
+                    ],
+                    "direct_sql": False,
+                    "report_files": False,
+                },
+            },
+        )
+        self.assertEqual(
+            {
+                key: config["automations"]["planner"][key]
+                for key in ("interval_minutes", "model", "reasoning_effort", "sandbox")
+            },
+            {
+                "interval_minutes": 5,
+                "model": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+                "sandbox": "read-only",
+            },
+        )
         self.assertEqual(set(config["execution_profiles"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
         for environment in ("codex_automation", "codex_cli"):
             self.assertEqual(
@@ -88,13 +124,34 @@ class LoopConcurrencyTests(unittest.TestCase):
             {"deepseek-v4-flash", "deepseek-v4-pro"},
         )
 
+    @unittest.skipUnless(os.name == "nt", "PowerShell initialization check is Windows-specific")
+    def test_initialization_check_validates_planner_and_workers(self) -> None:
+        completed = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(BASE_DIR / "scripts" / "check-initialization.ps1"), "-SkipCodexCliCheck",
+            ],
+            cwd=BASE_DIR,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout.lstrip("\ufeff"))
+        self.assertEqual(result["outcome"], "VALID")
+        self.assertGreaterEqual(result["checks"], 60)
+        self.assertEqual(len(result["operator_actions"]), 4)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temporary.name) / "test.sqlite3"
         database = connect(self.db_path)
         initialize_schema(database)
         database.close()
-        self.project_paths = [f"project-{index}" for index in range(1, 13)]
+        self.project_paths = [f"project-{index}" for index in range(1, 13)] + ["local-agent-loop"]
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -106,6 +163,9 @@ class LoopConcurrencyTests(unittest.TestCase):
         priority: str = "medium",
         execution_profile: str = "standard",
         runtime_environment: str = "codex_automation",
+        *,
+        lock_mode: str = "project",
+        scope: list[str] | None = None,
     ) -> None:
         database = connect(self.db_path)
         insert_task(
@@ -119,7 +179,8 @@ class LoopConcurrencyTests(unittest.TestCase):
                 "execution_profile": execution_profile,
                 "runtime_environment": runtime_environment,
                 "created_at": now_shanghai(),
-                "scope": [f"{project}/file.txt"],
+                "scope": scope or [f"{project}/file.txt"],
+                "lock_mode": lock_mode,
                 "acceptance": ["test"],
             },
             actor="test",
@@ -275,7 +336,13 @@ class LoopConcurrencyTests(unittest.TestCase):
         )
         self.assertEqual(version, SCHEMA_USER_VERSION)
 
-    def enqueue_draft(self, task_id: str, *, capability: str = "L3") -> dict[str, object]:
+    def enqueue_draft(
+        self,
+        task_id: str,
+        *,
+        capability: str = "L3",
+        execution_policy: str = "automatic",
+    ) -> dict[str, object]:
         path = Path(self.temporary.name) / f"{task_id}.json"
         path.write_text(
             json.dumps(
@@ -286,7 +353,7 @@ class LoopConcurrencyTests(unittest.TestCase):
                     "priority": "critical",
                     "runtime_environment": "codex_automation",
                     "estimated_capability_level": capability,
-                    "execution_policy": "automatic",
+                    "execution_policy": execution_policy,
                     "scope_hint": ["local-agent-loop/scripts/loopctl.py"],
                     "acceptance": ["business acceptance"],
                 },
@@ -296,14 +363,26 @@ class LoopConcurrencyTests(unittest.TestCase):
         )
         return self.run_ctl("enqueue", str(path))
 
+    def planner_claim(self, execution_id: str) -> dict[str, object]:
+        return self.run_ctl(
+            "preflight-claim", execution_id,
+            "--runtime-environment", "codex_automation",
+            "--sandbox", "read-only",
+        )
+
     @staticmethod
-    def ready_report(capability: str = "L3") -> str:
+    def ready_report(
+        capability: str = "L3",
+        *,
+        lock_mode: str = "project",
+        scope: list[str] | None = None,
+    ) -> str:
         return json.dumps(
             {
                 "summary": "static checks passed",
                 "capability_level": capability,
-                "scope": ["local-agent-loop/scripts/loopctl.py"],
-                "lock_mode": "project",
+                "scope": scope or ["local-agent-loop/scripts/loopctl.py"],
+                "lock_mode": lock_mode,
                 "technical_acceptance": ["run focused regression tests"],
                 "evidence": ["scope and dependency graph checked"],
             },
@@ -315,15 +394,27 @@ class LoopConcurrencyTests(unittest.TestCase):
         before = self.claim("worker-before-ready", "advanced")
         self.assertEqual(before["outcome"], "NO_TASK")
 
-        claimed = self.run_ctl("preflight-claim", "planner-ready")
+        claimed = self.planner_claim("planner-ready")
         self.assertEqual(claimed["outcome"], "CLAIMED")
         self.assertEqual(claimed["execution_kind"], "PLANNER")
-        self.assertEqual(claimed["task"]["capability_level"], None)
+        self.assertEqual(
+            set(claimed["task"]),
+            {
+                "id", "title", "status", "preflight_status", "created_at", "updated_at",
+                "row_version", "operator_definition",
+            },
+        )
+        self.assertEqual(claimed["client_boundary"]["sandbox"], "read-only")
+        self.assertEqual(claimed["client_boundary"]["default_tool_action"], "deny")
+        self.assertEqual(
+            claimed["client_boundary"]["writeback_transport"],
+            "host_controlled_loopctl_stdin",
+        )
         self.assertEqual(
             claimed["task"]["operator_definition"]["scope_hint"],
             ["local-agent-loop/scripts/loopctl.py"],
         )
-        self.assertEqual(self.run_ctl("preflight-claim", "planner-second")["outcome"], "NO_TASK")
+        self.assertEqual(self.planner_claim("planner-second")["outcome"], "NO_TASK")
         heartbeat = self.run_ctl("preflight-heartbeat", "planner-ready", "PREFLIGHT-READY")
         self.assertGreater(heartbeat["row_version"], claimed["task"]["row_version"])
 
@@ -347,9 +438,128 @@ class LoopConcurrencyTests(unittest.TestCase):
         worker = self.claim("worker-after-ready", "advanced")
         self.assertEqual(worker["task"]["id"], "PREFLIGHT-READY")
 
+    def test_planner_escalation_requires_operator_approval_and_stdin(self) -> None:
+        def approve(task_id: str, *markers: str) -> None:
+            patch_path = Path(self.temporary.name) / f"{task_id}-approval.json"
+            patch_path.write_text(
+                json.dumps(
+                    {"description": "Operator business description\n" + "\n".join(markers)},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.run_ctl("update", task_id, str(patch_path))
+
+        self.enqueue_draft("PREFLIGHT-L5", capability="L5")
+        self.planner_claim("planner-l5")
+        rejected = self.run_ctl_error(
+            "preflight-ready", "planner-l5", "PREFLIGHT-L5",
+            input_text=self.ready_report(capability="L5"),
+        )
+        self.assertIn("L5", rejected["message"])
+        database = connect(self.db_path)
+        state = database.execute(
+            "SELECT status, preflight_status FROM tasks WHERE id='PREFLIGHT-L5'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(state), ("DRAFT", "INSPECTING"))
+
+        report_path = Path(self.temporary.name) / "planner-result.json"
+        report_path.write_text(self.ready_report(), encoding="utf-8")
+        rejected_file = self.run_ctl_error(
+            "preflight-ready", "planner-l5", "PREFLIGHT-L5", str(report_path)
+        )
+        self.assertIn("stdin", rejected_file["message"])
+
+        review_report = json.dumps(
+            {
+                "summary": "operator approval required",
+                "question": "Approve the Planner escalation?",
+                "options": ["approve", "revise"],
+                "split_suggestions": [],
+                "evidence": ["static scope inspection completed"],
+            }
+        )
+        self.run_ctl(
+            "preflight-needs-review", "planner-l5", "PREFLIGHT-L5",
+            input_text=review_report,
+        )
+        approve("PREFLIGHT-L5", "APPROVED_PLANNER_ESCALATION: L5")
+        reclaimed_l5 = self.planner_claim("planner-l5-approved")
+        self.assertIn(
+            "APPROVED_PLANNER_ESCALATION: L5",
+            reclaimed_l5["task"]["operator_definition"]["description"],
+        )
+        approved_l5 = self.run_ctl(
+            "preflight-ready", "planner-l5-approved", "PREFLIGHT-L5",
+            input_text=self.ready_report(capability="L5"),
+        )
+        self.assertEqual(approved_l5["outcome"], "READY")
+
+        self.enqueue_draft("PREFLIGHT-MANUAL", capability="L5", execution_policy="manual")
+        self.planner_claim("planner-manual")
+        rejected_manual = self.run_ctl_error(
+            "preflight-ready", "planner-manual", "PREFLIGHT-MANUAL",
+            input_text=self.ready_report(capability="L4"),
+        )
+        self.assertIn("manual", rejected_manual["message"])
+        self.run_ctl(
+            "preflight-needs-review", "planner-manual", "PREFLIGHT-MANUAL",
+            input_text=review_report,
+        )
+        approve(
+            "PREFLIGHT-MANUAL",
+            "APPROVED_PLANNER_ESCALATION: L5",
+            "APPROVED_PLANNER_ESCALATION: manual",
+        )
+        self.planner_claim("planner-manual-approved")
+        approved_manual = self.run_ctl(
+            "preflight-ready", "planner-manual-approved", "PREFLIGHT-MANUAL",
+            input_text=self.ready_report(capability="L5"),
+        )
+        self.assertEqual(approved_manual["outcome"], "READY")
+
+    def test_planner_ready_normalizes_file_scope_and_rejects_unsafe_scope(self) -> None:
+        self.enqueue_draft("PREFLIGHT-FILE")
+        self.planner_claim("planner-file")
+        ready = self.run_ctl(
+            "preflight-ready", "planner-file", "PREFLIGHT-FILE",
+            input_text=self.ready_report(
+                lock_mode="file",
+                scope=["LOCAL-AGENT-LOOP\\scripts\\.\\LoopCtl.py"],
+            ),
+        )
+        self.assertEqual(ready["outcome"], "READY")
+        database = connect(self.db_path)
+        stored = database.execute(
+            "SELECT scope, scope_key FROM task_scopes WHERE task_id='PREFLIGHT-FILE'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(
+            tuple(stored),
+            ("local-agent-loop/scripts/LoopCtl.py", "file:local-agent-loop::scripts/loopctl.py"),
+        )
+
+        self.enqueue_draft("PREFLIGHT-UNSAFE")
+        self.planner_claim("planner-unsafe")
+        rejected = self.run_ctl_error(
+            "preflight-ready", "planner-unsafe", "PREFLIGHT-UNSAFE",
+            input_text=self.ready_report(
+                lock_mode="file",
+                scope=["local-agent-loop/scripts/../outside.py"],
+            ),
+        )
+        self.assertIn("不安全的 scope", rejected["message"])
+        database = connect(self.db_path)
+        state = database.execute(
+            "SELECT status, preflight_status FROM tasks WHERE id='PREFLIGHT-UNSAFE'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(tuple(state), ("DRAFT", "INSPECTING"))
+
     def test_planner_needs_review_saves_split_suggestion_without_creating_tasks(self) -> None:
         self.enqueue_draft("PREFLIGHT-REVIEW", capability="L5")
-        self.run_ctl("preflight-claim", "planner-review")
+        self.planner_claim("planner-review")
         suggestion = [{
             "reason": "two independently deliverable modules",
             "tasks": [
@@ -386,12 +596,12 @@ class LoopConcurrencyTests(unittest.TestCase):
 
         requeued = self.run_ctl("requeue", "PREFLIGHT-REVIEW", "--reason", "keep atomic")
         self.assertEqual((requeued["status"], requeued["preflight_status"]), ("DRAFT", "UNINSPECTED"))
-        reclaimed = self.run_ctl("preflight-claim", "planner-review-second")
+        reclaimed = self.planner_claim("planner-review-second")
         self.assertEqual(reclaimed["task_id"], "PREFLIGHT-REVIEW")
 
     def test_planner_timeout_requeues_read_only_preflight_and_fences_late_result(self) -> None:
         self.enqueue_draft("PREFLIGHT-TIMEOUT")
-        self.run_ctl("preflight-claim", "planner-old")
+        self.planner_claim("planner-old")
         database = connect(self.db_path)
         database.execute(
             "UPDATE preflight_executions SET heartbeat_at='2000-01-01T00:00:00.000+08:00', "
@@ -399,7 +609,7 @@ class LoopConcurrencyTests(unittest.TestCase):
             "attempt_deadline_at='2000-01-01T00:00:00.000+08:00' WHERE execution_id='planner-old'"
         )
         database.close()
-        reclaimed = self.run_ctl("preflight-claim", "planner-new")
+        reclaimed = self.planner_claim("planner-new")
         self.assertEqual(reclaimed["task_id"], "PREFLIGHT-TIMEOUT")
         self.assertEqual(reclaimed["recovered"], ["planner-old"])
         late = self.run_ctl_error(
@@ -415,7 +625,7 @@ class LoopConcurrencyTests(unittest.TestCase):
 
     def test_preflight_failed_requires_operator_recheck(self) -> None:
         self.enqueue_draft("PREFLIGHT-FAILED")
-        self.run_ctl("preflight-claim", "planner-failed")
+        self.planner_claim("planner-failed")
         result = self.run_ctl(
             "preflight-fail", "planner-failed", "PREFLIGHT-FAILED",
             input_text=json.dumps(
@@ -708,11 +918,39 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(second["outcome"], "CONFLICT")
         self.assertEqual(second["task_id"], "CONFLICT")
         finished = self.finish("exec-blocker", "BLOCKER")
-        self.assertIn("CONFLICT", finished["requeued_conflicts"])
+        self.assertEqual(finished["requeued_conflicts"], [])
         database = connect(self.db_path)
         status = database.execute("SELECT status FROM tasks WHERE id='CONFLICT'").fetchone()[0]
         database.close()
         self.assertEqual(status, "PENDING")
+
+    def test_claim_compatibly_converts_legacy_waiting_conflict_without_losing_audit(self) -> None:
+        self.add_task("LEGACY-CONFLICT", "project-1", "high")
+        self.add_task("LEGACY-BLOCKER", "project-2", "low")
+        database = connect(self.db_path)
+        database.execute("UPDATE tasks SET status='WAITING_CONFLICT' WHERE id='LEGACY-CONFLICT'")
+        database.execute(
+            "INSERT INTO task_conflicts(task_id, scope_key, blocker_task_id, blocker_execution_id, detected_at) "
+            "VALUES('LEGACY-CONFLICT', 'project:project-1', 'LEGACY-BLOCKER', 'old-execution', ?)",
+            (now_shanghai(),),
+        )
+        database.close()
+
+        claimed = self.claim("exec-legacy-conflict")
+
+        self.assertEqual(claimed["task"]["id"], "LEGACY-CONFLICT")
+        self.assertEqual(claimed["requeued"], ["LEGACY-CONFLICT"])
+        database = connect(self.db_path)
+        audit_count = database.execute(
+            "SELECT count(*) FROM task_conflicts WHERE task_id='LEGACY-CONFLICT'"
+        ).fetchone()[0]
+        transition = database.execute(
+            "SELECT from_status, to_status, actor FROM task_history "
+            "WHERE task_id='LEGACY-CONFLICT' AND actor='conflict-compatibility'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(audit_count, 1)
+        self.assertEqual(tuple(transition), ("WAITING_CONFLICT", "PENDING", "conflict-compatibility"))
 
     def test_conflicting_candidate_does_not_hide_runnable_task(self) -> None:
         self.add_task("BLOCKER", "project-1", "critical")
@@ -730,7 +968,7 @@ class LoopConcurrencyTests(unittest.TestCase):
             "SELECT status FROM tasks WHERE id='CONFLICT'"
         ).fetchone()[0]
         database.close()
-        self.assertEqual(conflict_status, "WAITING_CONFLICT")
+        self.assertEqual(conflict_status, "PENDING")
 
     def test_multiple_files_in_one_project_acquire_one_project_lock(self) -> None:
         database = connect(self.db_path)
@@ -759,6 +997,162 @@ class LoopConcurrencyTests(unittest.TestCase):
         ).fetchone()[0]
         database.close()
         self.assertEqual(lock_count, 1)
+
+    def test_windows_scope_normalization_and_hierarchical_conflicts(self) -> None:
+        normalized = normalize_scope(
+            "PROJECT-1\\src\\.\\Feature.py", "file", self.project_paths
+        )
+        self.assertEqual(normalized["scope"], "project-1/src/Feature.py")
+        self.assertEqual(normalized["scope_key"], "file:project-1::src/feature.py")
+        self.assertTrue(scope_keys_conflict(
+            "module:project-1::src", "file:project-1::src/feature.py"
+        ))
+        self.assertTrue(scope_keys_conflict(
+            "module:project-1::src", "module:project-1::src/components"
+        ))
+        self.assertFalse(scope_keys_conflict(
+            "file:project-1::src/a.py", "file:project-1::src/b.py"
+        ))
+        for unsafe in (
+            "project-1/src/../outside.py",
+            "C:\\project-1\\file.py",
+            "missing-project/file.py",
+            "$CODEX_HOME/file.py",
+        ):
+            with self.subTest(scope=unsafe), self.assertRaises(LoopError):
+                normalize_scope(unsafe, "file", self.project_paths)
+
+    def test_file_locks_allow_parallel_files_and_block_case_equivalent_file(self) -> None:
+        self.add_task(
+            "FILE-A", "project-1", "critical", lock_mode="file",
+            scope=["project-1/src/A.py"],
+        )
+        self.add_task(
+            "FILE-B", "project-1", "high", lock_mode="file",
+            scope=["project-1/src/B.py"],
+        )
+        self.add_task(
+            "FILE-A-CASE", "project-1", "medium", lock_mode="file",
+            scope=["PROJECT-1\\src\\.\\a.PY"],
+        )
+        first = self.claim("exec-file-a")
+        second = self.claim("exec-file-b")
+        conflict = self.claim("exec-file-case")
+        self.assertEqual(first["task"]["id"], "FILE-A")
+        self.assertEqual(second["task"]["id"], "FILE-B")
+        self.assertEqual(conflict["outcome"], "CONFLICT")
+        self.assertEqual(conflict["task_id"], "FILE-A-CASE")
+        database = connect(self.db_path)
+        self.assertEqual(
+            database.execute("SELECT status FROM tasks WHERE id='FILE-A-CASE'").fetchone()[0],
+            "PENDING",
+        )
+        database.close()
+
+    def test_module_project_and_file_cross_conflicts_skip_to_other_scope(self) -> None:
+        self.add_task(
+            "MODULE-SRC", "project-1", "critical", lock_mode="module",
+            scope=["project-1/src"],
+        )
+        self.add_task(
+            "FILE-IN-SRC", "project-1", "high", lock_mode="file",
+            scope=["project-1/src/inside.py"],
+        )
+        self.add_task(
+            "FILE-IN-DOCS", "project-1", "medium", lock_mode="file",
+            scope=["project-1/docs/other.py"],
+        )
+        self.assertEqual(self.claim("exec-module")["task"]["id"], "MODULE-SRC")
+        result = self.claim("exec-docs")
+        self.assertEqual(result["task"]["id"], "FILE-IN-DOCS")
+        self.assertEqual(result["deferred_conflicts"][0]["task_id"], "FILE-IN-SRC")
+        self.assertEqual(
+            result["deferred_conflicts"][0]["conflicts"][0]["requested_scope_key"],
+            "file:project-1::src/inside.py",
+        )
+        self.add_task(
+            "PROJECT-LOCK", "project-2", "critical", lock_mode="project",
+            scope=["project-2/any/file.py"],
+        )
+        self.add_task(
+            "PROJECT-FILE", "project-2", "high", lock_mode="file",
+            scope=["project-2/other.py"],
+        )
+        self.assertEqual(self.claim("exec-project")["task"]["id"], "PROJECT-LOCK")
+        self.assertEqual(self.claim("exec-project-file")["outcome"], "CONFLICT")
+
+    def test_multi_lock_conflict_leaves_no_partial_lock(self) -> None:
+        self.add_task(
+            "LOCK-B", "project-1", "critical", lock_mode="file",
+            scope=["project-1/b.py"],
+        )
+        self.add_task(
+            "LOCK-A-B", "project-1", "high", lock_mode="file",
+            scope=["project-1/a.py", "project-1/b.py"],
+        )
+        self.claim("exec-lock-b")
+        result = self.claim("exec-lock-a-b")
+        self.assertEqual(result["outcome"], "CONFLICT")
+        database = connect(self.db_path)
+        lock_keys = [row[0] for row in database.execute(
+            "SELECT scope_key FROM scope_locks ORDER BY scope_key"
+        ).fetchall()]
+        database.close()
+        self.assertEqual(lock_keys, ["file:project-1::b.py"])
+
+    def test_later_high_priority_task_passes_unclaimed_low_priority_same_scope(self) -> None:
+        self.add_task(
+            "OLDER-LOW-FILE", "project-1", "low", lock_mode="file",
+            scope=["project-1/shared.py"],
+        )
+        self.add_task(
+            "NEWER-HIGH-FILE", "project-1", "high", lock_mode="file",
+            scope=["project-1/shared.py"],
+        )
+        claimed = self.claim("exec-priority-file")
+        self.assertEqual(claimed["task"]["id"], "NEWER-HIGH-FILE")
+
+    def test_scope_extension_is_atomic_on_conflict_and_returns_updated_credential(self) -> None:
+        self.add_task(
+            "EXTEND-A", "local-agent-loop", "critical", lock_mode="file",
+            scope=["local-agent-loop/scripts/a.py"],
+        )
+        self.add_task(
+            "EXTEND-B", "local-agent-loop", "high", lock_mode="file",
+            scope=["local-agent-loop/scripts/b.py"],
+        )
+        first = self.claim("exec-extend-a")
+        self.claim("exec-extend-b")
+        report = json.dumps({"scope": ["LOCAL-AGENT-LOOP\\scripts\\.\\b.py"]})
+        refused = self.run_ctl(
+            "extend-scope", "exec-extend-a", "EXTEND-A", input_text=report
+        )
+        self.assertEqual(refused["outcome"], "SCOPE_EXTENSION_CONFLICT")
+        self.assertEqual(
+            refused["scope_lock_credential"]["scope_keys"],
+            ["file:local-agent-loop::scripts/a.py"],
+        )
+        database = connect(self.db_path)
+        self.assertEqual(
+            database.execute("SELECT count(*) FROM task_scopes WHERE task_id='EXTEND-A'").fetchone()[0],
+            1,
+        )
+        database.close()
+        self.finish("exec-extend-b", "EXTEND-B")
+        extended = self.run_ctl(
+            "extend-scope", "exec-extend-a", "EXTEND-A", input_text=report
+        )
+        self.assertEqual(extended["outcome"], "SCOPE_EXTENDED")
+        self.assertEqual(
+            extended["scope_lock_credential"]["scope_keys"],
+            [
+                "file:local-agent-loop::scripts/a.py",
+                "file:local-agent-loop::scripts/b.py",
+            ],
+        )
+        self.assertEqual(
+            first["scope_lock_credential"]["execution_id"], "exec-extend-a"
+        )
 
     def test_runner_confirmed_recovery_releases_capacity_and_scope(self) -> None:
         self.add_task("LEASE", "project-1", runtime_environment="codex_cli")
@@ -883,6 +1277,52 @@ class LoopConcurrencyTests(unittest.TestCase):
         )
         database.close()
 
+    def test_quarantined_module_blocks_descendant_file_without_consuming_capacity(self) -> None:
+        self.add_task(
+            "QUARANTINED-MODULE", "project-1", "critical", lock_mode="module",
+            scope=["project-1/src"],
+        )
+        self.add_task(
+            "DESCENDANT-FILE", "project-1", "high", lock_mode="file",
+            scope=["project-1/src/child.py"],
+        )
+        self.add_task(
+            "OTHER-FILE", "project-2", "medium", lock_mode="file",
+            scope=["project-2/other.py"],
+        )
+        self.claim("exec-quarantined-module")
+        database = connect(self.db_path)
+        database.execute(
+            "UPDATE executions SET heartbeat_at='2000-01-01T00:00:00+08:00', "
+            "lease_expires_at='2999-01-01T00:00:00+08:00' "
+            "WHERE execution_id='exec-quarantined-module'"
+        )
+        database.close()
+
+        claimed = self.claim("exec-other-after-quarantine")
+
+        self.assertEqual(claimed["task"]["id"], "OTHER-FILE")
+        conflict = claimed["deferred_conflicts"][0]["conflicts"][0]
+        self.assertEqual(conflict["blocker_lock_status"], "QUARANTINED")
+        database = connect(self.db_path)
+        descendant_status = database.execute(
+            "SELECT status FROM tasks WHERE id='DESCENDANT-FILE'"
+        ).fetchone()[0]
+        execution_status = database.execute(
+            "SELECT status FROM executions WHERE execution_id='exec-quarantined-module'"
+        ).fetchone()[0]
+        lock_status = database.execute(
+            "SELECT status FROM scope_locks WHERE execution_id='exec-quarantined-module'"
+        ).fetchone()[0]
+        active = database.execute(
+            "SELECT count(*) FROM executions WHERE status='RUNNING'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(descendant_status, "PENDING")
+        self.assertEqual(execution_status, "STALLED")
+        self.assertEqual(lock_status, "QUARANTINED")
+        self.assertEqual(active, 1)
+
     def test_lease_expiry_is_independent_from_healthy_heartbeat(self) -> None:
         self.add_task("LEASE-FIRST", "project-1")
         self.claim("exec-lease-first")
@@ -977,10 +1417,10 @@ class LoopConcurrencyTests(unittest.TestCase):
         )
         database.close()
         self.assertEqual(statuses["NEW-RUNNABLE"], "RUNNING")
-        self.assertEqual(statuses["CONFLICT-1"], "WAITING_CONFLICT")
-        self.assertEqual(statuses["CONFLICT-2"], "WAITING_CONFLICT")
+        self.assertEqual(statuses["CONFLICT-1"], "PENDING")
+        self.assertEqual(statuses["CONFLICT-2"], "PENDING")
         recovered = self.run_ctl("recover", "exec-blocker", "--human-confirmed-safe")
-        self.assertEqual(set(recovered["requeued_conflicts"]), {"CONFLICT-1", "CONFLICT-2"})
+        self.assertEqual(recovered["requeued_conflicts"], [])
 
     def test_recovery_failed_and_wait_actions_are_idempotent(self) -> None:
         self.add_task("RECOVERY-ACTIONS", "project-1")
@@ -1662,10 +2102,25 @@ class LoopConcurrencyTests(unittest.TestCase):
             legacy_profile = before.pop("execution_profile")
             expected_level = {"advanced": "L3", "deep": "L4"}[legacy_profile]
             self.assertEqual(after.pop("capability_level"), expected_level)
+            self.assertEqual(after.pop("estimated_capability_level"), expected_level)
             self.assertEqual(after.pop("runtime_environment"), "codex_automation")
             self.assertIsNone(after.pop("provider_id"))
             self.assertEqual(after.pop("execution_policy"), "automatic")
             self.assertIsNone(after.pop("result_diagnostic_json"))
+            has_scope = task_id == "SCHEMA-32-ROUTED"
+            self.assertEqual(after.pop("preflight_status"), "READY" if has_scope else "FAILED")
+            self.assertIsNone(after.pop("preflight_execution_id"))
+            self.assertIsNone(after.pop("preflight_started_at"))
+            completed_at = after.pop("preflight_completed_at")
+            failure = after.pop("preflight_failure")
+            self.assertEqual(completed_at is not None, has_scope)
+            self.assertEqual(failure is None, has_scope)
+            self.assertEqual(
+                json.loads(after.pop("scope_hint_json")),
+                ["local-agent-loop/scripts/loopdb.py"] if has_scope else [],
+            )
+            self.assertEqual(after.pop("lock_mode"), "project" if has_scope else None)
+            self.assertEqual(after.pop("split_suggestions_json"), "[]")
             self.assertEqual(after, before)
         children_after = {
             table: [tuple(row) for row in database.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()]
@@ -1754,6 +2209,63 @@ class LoopConcurrencyTests(unittest.TestCase):
         database.close()
         self.assertEqual(tuple(status), ("DRAFT", "UNINSPECTED"))
 
+    def test_same_version_hybrid_lock_migration_requeues_legacy_conflict_and_preserves_audit(self) -> None:
+        legacy_path = Path(self.temporary.name) / "schema-37-project-lock.sqlite3"
+        legacy_schema = SCHEMA_PATH.read_text(encoding="utf-8").replace(
+            "lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('file', 'module', 'project'))",
+            "lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('project'))",
+        )
+        database = connect(legacy_path)
+        database.executescript(legacy_schema)
+        for task_id, priority in (("LEGACY-BLOCKER", "critical"), ("LEGACY-WAIT", "high")):
+            insert_task(
+                database,
+                {
+                    "id": task_id,
+                    "title": task_id,
+                    "status": "PENDING",
+                    "priority": priority,
+                    "runtime_environment": "codex_automation",
+                    "scope": ["local-agent-loop/scripts/loopctl.py"],
+                    "acceptance": ["test"],
+                },
+                project_paths=["local-agent-loop"],
+            )
+        database.execute("UPDATE tasks SET status='WAITING_CONFLICT' WHERE id='LEGACY-WAIT'")
+        database.execute(
+            "INSERT INTO task_conflicts(task_id, scope_key, blocker_task_id, blocker_execution_id, detected_at) "
+            "VALUES('LEGACY-WAIT', 'project:local-agent-loop', 'LEGACY-BLOCKER', 'legacy-exec', ?)",
+            (now_shanghai(),),
+        )
+        database.close()
+
+        migrated = self.run_ctl("migrate", db_path=legacy_path)
+
+        self.assertTrue(migrated["hybrid_scope_lock_migrated"])
+        self.assertEqual(migrated["waiting_conflicts_requeued"], ["LEGACY-WAIT"])
+        database = connect(legacy_path)
+        status = database.execute(
+            "SELECT status FROM tasks WHERE id='LEGACY-WAIT'"
+        ).fetchone()[0]
+        audit_count = database.execute(
+            "SELECT count(*) FROM task_conflicts WHERE task_id='LEGACY-WAIT'"
+        ).fetchone()[0]
+        history = database.execute(
+            "SELECT from_status, to_status, actor FROM task_history "
+            "WHERE task_id='LEGACY-WAIT' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        database.execute("UPDATE tasks SET lock_mode='file' WHERE id='LEGACY-WAIT'")
+        database.execute(
+            "UPDATE task_scopes SET scope_key='file:local-agent-loop::scripts/loopctl.py' "
+            "WHERE task_id='LEGACY-WAIT'"
+        )
+        validation = validate_database(database)
+        database.close()
+        self.assertEqual(status, "PENDING")
+        self.assertEqual(audit_count, 1)
+        self.assertEqual(tuple(history), ("WAITING_CONFLICT", "PENDING", "schema-migration"))
+        self.assertTrue(validation["ok"], validation["errors"])
+
     @staticmethod
     def schema_36() -> str:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
@@ -1779,7 +2291,7 @@ class LoopConcurrencyTests(unittest.TestCase):
             "  preflight_completed_at TEXT,\n"
             "  preflight_failure TEXT,\n"
             "  scope_hint_json TEXT NOT NULL DEFAULT '[]',\n"
-            "  lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('project')),\n"
+            "  lock_mode TEXT CHECK (lock_mode IS NULL OR lock_mode IN ('file', 'module', 'project')),\n"
             "  split_suggestions_json TEXT NOT NULL DEFAULT '[]',\n",
             "",
         )

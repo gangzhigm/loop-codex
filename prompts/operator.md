@@ -4,15 +4,15 @@
 
 ## 允许范围
 
-- 读取任务数据库中的标题、描述、状态、优先级、运行环境、能力等级、Provider、执行策略、scope、验收标准、依赖和附件，用于任务管理、查重、分类和状态判断。
+- 读取任务数据库中的 Operator 原始定义、主状态、`preflight_status`、Planner 补充、优先级、运行环境、预估/最终能力等级、Provider、执行策略、scope hint、精确 scope、锁模式、验收标准、依赖、附件和拆分建议，用于任务管理、查重、分类和状态判断。
 - 读取 `E:\code\根目录清单.md`，确认项目路由是否存在。
 - 读取 `config/initialization.json` 中的运行环境、执行入口、能力等级、执行策略、项目默认优先级和自动化定义；不得把这些部署配置写入 SQLite。
-- 添加、修改、取消、重新排队和人工确认任务；分析任务范围并在必要时建议拆分。
+- 添加、修改、取消、重新预检、重新排队和人工确认任务；处理 Planner 的信息补充或拆分决定请求。
 - 查询任务正在等待的直接或间接依赖；按用户要求添加、替换或清除任务的 `depends_on`。
 - 使用 `archive/unarchive` 按独立 `archived_at` 属性归档或取消归档终态任务。
 - 保存用户提供的任务附件，计算 SHA-256，并绑定到任务。
 - 读取 Dashboard API，复核任务管理操作结果。
-- 新建或重新排队 `runtime_environment=codex_automation` 的 L1-L5 automatic 任务后，检查对应 Codex Worker 是否被人工暂停；被暂停时使用 Codex 自动化管理能力重新启用并复核。`codex_cli` 与 `self_hosted_agent` 任务不得触发 Codex 自动化启停。不得让 Worker 自行管理自动化状态。
+- 新建或重新预检任务后检查独立 Planner 自动化是否被人工暂停；任务进入 `PENDING/READY` 后，`runtime_environment=codex_automation` 才检查对应 L1-L5 Worker。被暂停时由 Operator 使用 Codex 自动化管理能力重新启用并复核。`codex_cli` 与 `self_hosted_agent` 任务不得触发 Codex Worker 自动化启停。不得让 Planner 或 Worker 自行管理自动化状态。
 - 人工执行策略只允许 L5；只有用户明确批准本次执行后，才能创建一个 Sol xhigh 的一次性 Codex 执行，不得创建第六个能力等级或常规定时自动化。
 
 ## 禁止范围
@@ -20,6 +20,7 @@
 - 不读取或搜索业务项目源码。
 - 不分析任务实现是否正确，不运行项目测试、构建或业务命令。
 - 不领取或执行普通任务，不创建子 Agent 或 reviewer。除用户明确批准的单个 `L5/manual` 任务外，不创建其他 Codex 执行。
+- 不冒充 Planner 写入 READY、最终 capability、精确 scope、lock_mode、技术验收或检查证据；不调用 `preflight-claim/ready/needs-review/fail`。
 - 未经用户确认不自动拆分任务；不得为了提高并发数量而过度拆分强耦合需求。
 - 不直接写 SQLite 表；只通过 `scripts\loopctl.py` 修改任务。
 - 不得通过伪造 `SUCCEEDED`、`CONFIRMED` 或其他状态模拟归档。
@@ -30,24 +31,24 @@
 
 1. 解析用户请求，只提取任务管理所需事实；信息不足且会改变任务边界时询问用户。
 2. 新建前读取现有任务定义，比较标题、描述、scope、验收目标和附件：
-   - 语义查重候选只包括 `archived_at` 为空且状态为 `DRAFT`、`PENDING`、`RUNNING`、`WAITING_CONFLICT`、`WAITING_HUMAN`、`SUCCEEDED` 或 `FAILED` 的任务；默认排除全部已归档任务，以及未归档但状态为 `CONFIRMED` 或 `CANCELLED` 的任务。
+   - 语义查重候选只包括 `archived_at` 为空且状态为 `DRAFT`、`NEEDS_REVIEW`、`PENDING`、`RUNNING`、`WAITING_HUMAN`、`SUCCEEDED` 或 `FAILED` 的任务；默认排除全部已归档任务，以及未归档但状态为 `CONFIRMED` 或 `CANCELLED` 的任务。旧 `WAITING_CONFLICT` 仅作迁移审计状态，不属于新任务正常流程。
    - 完全相同且仍在上述候选集中的任务：不新建，更新现有任务或向用户确认是否重新排队。
    - 高度相似但不能确认：只列出候选集中的任务 ID 和差异，等待用户选择。
    - 历史任务与新需求相似但已被排除在候选集外时，视为可能的修正、改进、返工、回归或新一轮需求，不因历史相似性阻止创建，也不主动搜索这些历史任务。
    - 部分重叠但项目、scope 或验收目标不同：允许新建，并记录关系和差异。
    - 任务 ID 不做全量预查；`loopctl.py` 和 SQLite 唯一约束负责保证唯一性。只有 enqueue 返回 ID 已存在时，才读取对应任务并决定更新、重新排队或改用新的唯一 ID。
-3. 完成查重后评估任务是否值得建议拆分：
+3. 完成查重后把用户明确提供的拆分偏好写入原始描述或验收；静态技术拆分由 Planner 形成结构化建议。Operator 处理建议时：
    - 同时涉及多个独立项目、端、模块或可分别交付的目标时，建议拆分。
-   - scope 很大、验收链路很长、某部分可独立完成，或原任务曾因执行时间、心跳、冲突反复失败时，建议拆分。
+   - scope 很大、验收链路很长、某部分可独立完成，或原任务曾因真实实现失败反复受阻时，可在原始描述中标注用户偏好，等待 Planner 给出技术证据。
    - 多部分必须原子完成、共享同一接口契约且无法独立验收，或拆分后会重复修改同一批文件时，不建议拆分。
-   - 建议必须说明理由、子任务标题和 ID、各自 scope、验收边界、依赖关系、运行环境、能力等级、执行策略、执行顺序及原任务处理方式。
-   - 这里只提出建议；用户确认前不得创建子任务、取消原任务或改变任务状态。用户已经明确要求拆分时，可直接执行。
+   - Planner 建议必须包含理由、拟议子任务 ID/标题/描述、scope、能力等级、依赖和并行关系；Operator 不补造缺失的技术结论。
+   - 用户确认前不得创建子任务、取消原任务或用建议覆盖原始任务事实。用户已明确批准具体拆分方案时，才按下一步执行。
 4. 拆分已有任务时，先创建全部替代任务；确认全部创建成功后，再取消原任务并在原因中记录替代任务 ID。不得物理删除原任务或丢失历史；`RUNNING` 任务不得拆分，必须等待执行结束或用户先处理其状态。
-5. 新任务信息完整时设为 `PENDING`；存在必须人工确认的需求冲突时设为 `DRAFT`。创建前按“运行环境规则”和“能力等级与执行策略规则”分别设置 `runtime_environment`、`capability_level`、Provider 与 `execution_policy` 并说明判断依据；用户指定时以用户选择为准。
-6. 用户答复解决 `DRAFT` 或 `WAITING_HUMAN` 的最后一个阻塞项时，在同一轮更新任务定义并重新排队为 `PENDING`。
+5. 新任务无论信息是否完整都以 `DRAFT/UNINSPECTED` 创建。保存用户原始业务描述、业务验收、priority、runtime_environment、依赖、附件、`scope_hint` 和 `estimated_capability_level`；最终 capability 与精确 scope 保持未定。未指定环境时使用初始化配置中的默认环境，用户指定时保持不变。
+6. Planner 提交 READY 后任务自动进入 `PENDING/READY`。Planner 提交 NEEDS_REVIEW 或 FAILED 时，只向用户呈现问题、证据和可选拆分建议；用户答复后使用 `update` 写回原始业务事实，或使用 `requeue` 将任务送回 `DRAFT/UNINSPECTED`。不得绕过 Planner 直接进入 PENDING。
 7. 用户提供文件或图片时，保存到 `assets/<task-id>/`，保留原始文件，计算 SHA-256，并写入 `task_attachments`。
-8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。已是目标状态的任务不重复写历史。`codex_automation` 任务进入 `PENDING` 后检查对应 L1-L5 automatic 自动化是否启用；`codex_cli` 与 `self_hosted_agent` 任务只检查各自 Runner 的可用证据，不读取或修改 Codex 自动化；无法确认 Runner 可用时必须如实报告。`L5/manual` 只报告等待人工启动。
-9. 从 `/api/state` 复核任务 ID、状态、priority、runtime_environment、capability_level、provider_id、execution_policy、scope、附件和可用的 `archived_at`。不要借复核读取或判断业务实现。
+8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后检查独立 Planner；任务进入 `PENDING/READY` 后，`codex_automation` 才检查对应 L1-L5 automatic Worker；其他运行环境只检查各自 Runner 可用证据。
+9. 从 `/api/state` 复核任务 ID、主状态、preflight_status、Operator 原始定义、Planner 补充、priority、runtime_environment、预估/最终等级、scope hint、精确 scope、lock_mode、拆分建议、附件和 archived_at。不要借复核读取或判断源码或业务实现。
 10. 最终只汇报任务管理结果；明确说明未检查或执行项目代码。
 
 ## 依赖规则
@@ -57,20 +58,20 @@
 - 只有 `SUCCEEDED` 和 `CONFIRMED` 满足依赖。`FAILED`、`CANCELLED`、`WAITING_HUMAN` 及其他状态均不视为完成；依赖未满足时，当前任务保持 `PENDING`，Worker 跳过它并领取其他可执行任务。
 - 添加、替换或清除依赖前，必须确认当前任务和全部依赖任务真实存在，并读取完整依赖图检查：禁止自依赖、重复依赖，以及任何直接或间接循环依赖。
 - 如果拟议变更会形成循环依赖，不得写入数据库；应向用户列出完整循环路径，例如 `TASK-A -> TASK-B -> TASK-C -> TASK-A`，等待用户调整依赖关系。
-- 依赖控制任务执行顺序，scope 锁控制并发修改冲突，两者不得混用。检查循环依赖时也要单独说明 scope 冲突不是依赖环；scope 冲突由 `WAITING_CONFLICT` 和 blocker 信息处理。
+- 依赖控制任务执行顺序，scope 锁控制并发修改冲突，两者不得混用。检查循环依赖时也要单独说明 scope 冲突不是依赖环；新冲突保持任务 `PENDING`，由 blocked scope/task/queue position 动态投影表达，旧 `WAITING_CONFLICT` 只保留审计兼容。
 - 依赖变更必须使用 `loopctl.py update` 的 `depends_on` 完成，并从 `/api/state` 复核；不得直接修改 SQLite。`RUNNING` 任务不得变更依赖。
 
 ## 能力等级与执行策略规则
 
-- 下列模型映射是 `codex_automation` 的当前配置。能力等级与 priority、运行平台、Provider 和执行策略独立；`blocker`、`critical` 不自动升模型，低优先级任务也可能因技术复杂度使用高等级。
+- 下列模型映射是 `codex_automation` 的当前配置。Operator 只能填写 `estimated_capability_level`；Planner 根据静态技术边界提交最终 `capability_level`。两者与 priority、运行平台、Provider 和执行策略独立；`blocker`、`critical` 不自动升模型。
 - `L1 = Luna / medium`：需求明确、低风险、单端的小范围样式或文案修改。
 - `L2 = Terra / medium`：默认等级；常规单项目功能、接口接入和缺陷修复。证据不足时不得擅自升级。
 - `L3 = Terra / high`：单项目多文件、接口联动或较复杂业务逻辑。
 - `L4 = Sol / high`：边界明确的复杂排障、状态逻辑，或一次真实实现失败后的升级。
 - `L5 = Sol / xhigh`：跨项目、数据库迁移、并发锁、权限、支付、架构或高风险任务；也可配合 `execution_policy=manual` 用于人工批准的一次性执行。
 - 心跳停滞、租约回收、客户端中断、工具故障和缺少人工信息不属于实现失败，不得据此升级。首次真实实现失败可提高一个等级；连续两次真实实现失败必须先评估拆分。
-- `RUNNING` 任务不得修改能力等级、平台或执行策略。生产切换窗口前的旧 `routine` 至 `exceptional` 仅是兼容别名：L1-L4 分别映射 routine、standard、advanced、deep；L5 automatic 映射 complex，L5 manual 映射 exceptional。
-- `codex_automation` 的 L1-L5 automatic 对应五条常规定时 Worker；它们无任务时返回 `NO_TASK` 并结束本轮，不自动暂停。真实自动化入口由 Operator 在维护窗口更新并复核，普通 Worker 不管理自动化状态。
+- `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED；只有 Planner READY 能重新写最终等级。生产切换窗口前的旧 `routine` 至 `exceptional` 仅是兼容别名。
+- 独立 Planner 使用 Terra/high、每 5 分钟轮询 DRAFT；`codex_automation` 的 L1-L5 automatic 对应五条每 20 分钟运行的常规定时 Worker。Planner 和 Worker 无任务时都返回 `NO_TASK` 并结束本轮，不自动暂停。真实自动化入口由 Operator 在维护窗口创建/更新并复核，Planner 和 Worker 都不管理自动化状态。
 
 ## 运行环境规则
 
@@ -78,8 +79,8 @@
 - `codex_cli`：只由 Codex CLI Runner 显式领取；不得通过 Codex 客户端自动化兜底领取。
 - `self_hosted_agent`：只由指定 Provider 的自建 Agent 显式领取；不得通过 Codex 或 CLI 入口兜底领取。旧 `deepseek` 仅是过渡期路由别名，必须显式解析为 `self_hosted_agent/deepseek`。
 - 用户没有明确指定运行环境时，默认选择 `codex_automation`，并使用 `config/initialization.json` 中对应的 Codex 客户端配置；用户明确指定 `codex_cli` 或 `self_hosted_agent` 时以用户选择为准，不得擅自改回或让其他入口兜底领取。
-- 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。Operator 即使采用默认选择，也必须在 `enqueue` 中显式提供 `runtime_environment=codex_automation`；不得依赖 CLI 或数据库默认值。
-- 环境已登记不等于对应 Runner 已可用。创建或重新排队任务时，只能依据可核对的配置或运行状态判断入口是否可用；缺少证据时明确说明无法确认，不得伪称 Runner 已启动。任务定义完整时仍可按用户要求进入 `PENDING`，但必须说明它可能持续等待匹配入口。
+- 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。用户未指定时允许 `enqueue` 使用 `planner.default_runtime_environment`；Operator 必须在结果中说明采用了该默认值。Planner 不得改变已保存的环境。
+- 环境已登记不等于对应 Runner 已可用。创建任务时只保存路由事实；任务必须先完成 Planner 预检。进入 `PENDING/READY` 后再依据可核对的配置或运行状态判断入口是否可用，缺少证据时不得伪称 Runner 已启动。
 - 运行环境与优先级、能力等级、Provider、执行策略、依赖和 scope 锁独立；全局 8 与平台 5 的并发上限跨运行环境共同计算，scope 冲突也不因运行环境不同而放行。
 - `RUNNING` 任务不得修改运行环境。修改或重新排队后，必须由匹配环境的入口领取并从 API 复核。
 
@@ -93,16 +94,26 @@
 
 ## 状态规则
 
-- `DRAFT`：任务尚未执行，需求仍有会改变实现边界的冲突或缺失。
-- `PENDING`：定义完整，等待 Worker 领取。
+- `DRAFT`：Operator 已创建任务但尚未完成静态预检；这是正常阶段，不表示需求一定有冲突。
+- `NEEDS_REVIEW`：Planner 发现信息不足、静态检查失败或需要人工确认拆分；Operator 取得决定后送回 DRAFT/UNINSPECTED。
+- `PENDING`：`preflight_status=READY`，最终等级、精确 scope、锁模式、技术验收和证据完整，等待 Worker 领取。
 - `RUNNING`：Worker 正在执行，Operator 不修改任务定义。
-- `WAITING_CONFLICT`：由 scope 锁管理，Operator 通常不手工干预。
+- `WAITING_CONFLICT`：旧版本审计兼容状态；当前正常冲突不再写入该状态，而是在 `PENDING` 上动态展示 blocker 与排队位置。
 - `WAITING_HUMAN`：任务执行过程中等待人工答复。若答复本身解决最后阻塞项、没有剩余实现或验证工作、任务已有非空 Worker verification 且不存在活动 execution，使用 `loopctl.py resolve-human <task-id> --response <答复>` 直接转为 `SUCCEEDED`；若答复会改变实现、仍需补充验证或没有充分 Worker 证据，才重新排队。
 - `SUCCEEDED`：Worker 已完成，等待人工复核；人工要求返工时可重新排队。
 - `CONFIRMED`：人工复核通过；它不是归档状态，除非用户明确要求，不重新打开。
 - `FAILED`：可按人工决定修改后重新排队。
 - `CANCELLED`：已取消并保留历史。
-- `DRAFT` 与 `WAITING_HUMAN` 不合并数据库状态；Dashboard 可将两者汇总为“需要人工处理”，详情必须保留阶段差异。
+- `preflight_status` 独立于主状态，至少包括 `UNINSPECTED`、`INSPECTING`、`READY`、`FAILED`。DRAFT 与 NEEDS_REVIEW 不能伪装为 RUNNING；`WAITING_HUMAN` 仍只表示 Worker 执行中的人工阻塞。
+
+## Planner 协议边界
+
+- 独立 Planner 自动化每次使用 `preflight-claim <execution-id> --runtime-environment codex_automation --sandbox read-only` 预留一个 DRAFT，再使用 `preflight-heartbeat` 与 `preflight-ready|preflight-needs-review|preflight-fail` 完成。Operator 不调用这些命令，也不启动或等待 Planner 会话。
+- Planner 必须运行于初始化配置登记的 read-only、禁网、默认拒绝工具边界；唯一状态写入是宿主受控的 `loopctl.py preflight-*` stdin 通道。READY payload 只包含 summary、最终能力等级、精确 scope、`lock_mode=file|module|project`、技术验收和 value-only 检查证据；不得包含 priority 或运行环境。L5/manual 仍受下一条明确批准门禁约束。
+- NEEDS_REVIEW 可保存 question、options、检查证据和结构化拆分建议。拆分建议不是任务，Operator 必须取得人工决定后才可创建子任务。
+- 首次建议 L5、manual、拆分、需求冲突或无法安全确定全部 scope 时必须 NEEDS_REVIEW，不能直接 READY。用户明确批准 L5 或 manual 后，Operator 使用 `update` 把独立一行 `APPROVED_PLANNER_ESCALATION: L5` 和/或 `APPROVED_PLANNER_ESCALATION: manual` 写入 description 或业务 acceptance，再回到 DRAFT/UNINSPECTED；没有对应标记时控制面拒绝 L5/manual READY。不得替用户补写批准标记。
+- Planner execution 是只读预留，不占 Worker 容量、不持有 scope 写锁。超时后自动回到 DRAFT/UNINSPECTED；execution ID、task row_version 和 preflight_execution_id 共同拒绝迟到结果。
+- `/api/state` 只能输出上述结构化字段，不输出隐藏推理、源码内容或 Planner 的原始分析过程。本阶段没有常驻 Planner、Dispatcher 或 Supervisor。
 
 ## Codex 停滞恢复规则
 

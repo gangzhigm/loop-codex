@@ -3,10 +3,10 @@
 ## 数据边界
 
 ```text
-Operator / Worker / Self-hosted Agent ---> data/loop-agent.sqlite3 <--- Dashboard Server ---> dashboard.html
-                              ^                         ^
-                              |                         |
-                 config/initialization.json    runtime/health-state.json
+Operator / Worker / Runner --------------------> data/loop-agent.sqlite3 <--- Dashboard Server ---> dashboard.html
+Planner(read-only source sandbox) --受控 preflight stdin--^                         ^
+                              |                                                   |
+                 config/initialization.json                              runtime/health-state.json
                               ^                         ^
                               |                         |
                  Worker / 健康任务配置       Windows 任务计划程序
@@ -17,7 +17,17 @@ config/initialization.json --backend/service/secret_ref--> SecretStore ---> OS k
                                                                `-------> explicit process environment
 ```
 
-SQLite 只包含任务及其执行一致性表：`tasks`（包括任务所选的 `runtime_environment`、`capability_level`、`provider_id`、`execution_policy`、独立的 nullable `archived_at`，以及不含响应原文和字段值的 nullable `result_diagnostic_json`）、7 张任务子表、`executions`、`scope_locks` 和 `task_conflicts`。Schema 3.6.0 中 execution 可记录 `STALLED/TIMED_OUT`、终止原因和恢复处置，scope lock 独立记录 `ACTIVE/QUARANTINED`。它不保存密钥、Authorization、可逆密文、密钥片段、运行环境目录及入口配置、模型映射、自动化周期、metadata、settings、projects、change requests、health events 或 service state。旧 `execution_profile` 只在过渡期输入与展示兼容层中推导，不是队列键。
+SQLite 只包含任务、预检与执行一致性表。`tasks` 分开保存 Operator 原始业务事实和 Planner 补充：原始描述、业务验收、priority、环境、依赖、附件、scope hint 与预估等级不会被 Planner 覆盖；最终能力等级、精确 scope、锁模式、技术验收、证据和拆分建议属于预检结果。Schema 3.7.0 增加独立 `preflight_status`、`preflight_executions`、技术验收与证据子表；Worker `executions` 显式使用 `execution_kind=WORKER`，Planner 使用 `execution_kind=PLANNER`。Worker 的 `STALLED/TIMED_OUT` 与 scope `ACTIVE/QUARANTINED` 恢复语义保持不变。数据库不保存密钥、Authorization、源码内容、隐藏推理、运行环境部署配置、模型映射、自动化周期或 service state。
+
+## Planner 预检边界
+
+新任务固定以 `DRAFT/UNINSPECTED` 创建。独立 Planner 自动化默认每 5 分钟以 Terra/high 唤起，必须运行在 `read-only`、禁网、`approval_policy=never` 和默认拒绝工具边界中。它通过 `preflight-claim ... --runtime-environment codex_automation --sandbox read-only` 原子预留一个 DRAFT，在独立表中形成唯一活动 execution；不计入全局 8/平台 5 的 Worker 容量，也不获取业务 scope 写锁。claim 只返回 Operator 业务定义和公开客户端边界，不把队列历史或其他任务状态交给 Planner。
+
+业务项目文件、配置、Git 状态和用户文件只允许静态读取。唯一状态写入是宿主按初始化配置精确允许的 `loopctl.py preflight-claim|heartbeat|ready|needs-review|fail`，结果必须经 UTF-8 stdin 提交；Planner 不能直接写 SQLite、报告文件或业务文件。`config/initialization.json`、`prompts/planner.md`、配置加载校验、回归测试与 `check-initialization.ps1` 共同验证该部署契约。真实 Codex 自动化的创建/切换仍由 Operator 完成，普通 Planner/Worker 无权修改自动化。
+
+Planner READY 在一个事务中写入最终能力等级、精确 scope、`file|module|project` 锁模式、技术验收补充和检查证据，并形成 `DRAFT -> PENDING`。首次 L5/manual、信息不足、需求冲突、无法安全确定 scope 或需要人工拆分决定时，任务进入 `NEEDS_REVIEW`。用户明确批准 L5/manual 后，Operator 把对应 `APPROVED_PLANNER_ESCALATION` 标记写回业务定义；Planner 复检和控制面门禁同时通过才可 READY。结构化拆分建议不创建、取消或替换任何任务。
+
+Planner heartbeat、lease 与 attempt deadline 独立。heartbeat stalled、lease expiry 或 attempt timeout 会把只读 execution 标为 `TIMED_OUT` 并自动释放预留，使任务回到 `DRAFT/UNINSPECTED`；这不需要 Worker 那种人工 scope 解隔离，因为 Planner 没有写锁。execution ID、task `row_version` 与任务上的 `preflight_execution_id` 共同 fencing，迟到结果不能覆盖新预检。Planner 是定时唤起、每轮一次预检的 Codex 自动化，不是常驻进程、Dispatcher 或 Supervisor。
 
 ## SecretStore 边界
 
@@ -91,16 +101,18 @@ holding/frontend/src/App.tsx               -> project:holding
 OSS:bucket/path/file.xlsx                  -> external:OSS:bucket/path/file.xlsx
 ```
 
-同一项目任务默认互斥，运行环境不同也不会绕过 scope 锁。`claim` 在当前环境、Provider、能力等级和执行策略内按队列顺序扫描依赖就绪任务；`ACTIVE` 与 `QUARANTINED` 锁都构成冲突，冲突任务保存 blocker 信息并进入 `WAITING_CONFLICT`，随后继续寻找其他 scope。只有所有依赖就绪候选都冲突时返回 `CONFLICT`；没有可运行候选但存在同路由隔离任务时返回最小化的 `RECOVERY_REQUIRED`，而不是 `NO_TASK`。
+同一项目任务默认互斥，运行环境不同也不会绕过 scope 锁。`claim` 在当前环境、Provider、能力等级和执行策略内按队列顺序扫描依赖就绪任务；`ACTIVE` 与 `QUARANTINED` 锁都构成冲突。冲突任务保持 `PENDING`，blocker、blocked scope 与 queue position 由读取时动态投影，claim 随后继续寻找其他 scope。只有所有依赖就绪候选都冲突时返回 `CONFLICT`；旧 `WAITING_CONFLICT` 仅在迁移时恢复为 PENDING 并保留审计历史。
 
 ## 状态机
 
 ```text
-DRAFT --人工重排--> PENDING --领取--> RUNNING --> SUCCEEDED --人工复核--> CONFIRMED
-                       |                  |  |
-                       |                  |  +--> FAILED
-                       |                  +-----> WAITING_HUMAN --人工重排--> PENDING
-                       +--冲突--> WAITING_CONFLICT --冲突解除--> PENDING
+DRAFT/UNINSPECTED --Planner 预留--> DRAFT/INSPECTING
+DRAFT/INSPECTING --READY--> PENDING/READY --Worker 领取--> RUNNING --> SUCCEEDED --人工复核--> CONFIRMED
+        |                    |                                      |  |
+        |                    +--需决定/失败--> NEEDS_REVIEW/FAILED  |  +--> FAILED
+        |                                      |                    +-----> WAITING_HUMAN --人工重排--> PENDING
+        +--Planner 超时恢复--> DRAFT/UNINSPECTED                    +--scope 冲突--> PENDING（动态 blocker）
+NEEDS_REVIEW --Operator 补充/重排--> DRAFT/UNINSPECTED
 
 RUNNING --受控 Runner 确认终止并选择重试--> PENDING
 RUNNING --受控 Runner 确认终止并选择失败--> FAILED
@@ -117,15 +129,15 @@ STALLED -- 后续 attempt timeout --------> TIMED_OUT（容量保持释放，sco
 人工确认旧会话结束 -- requeue/failed --> 释放旧隔离；wait --> 保持隔离
 ```
 
-依赖只有在上游为 `SUCCEEDED` 或 `CONFIRMED` 时满足。自动执行结果只允许 `SUCCEEDED`、`FAILED`、`WAITING_HUMAN`；`CONFIRMED` 只能人工产生。
+依赖只有在上游为 `SUCCEEDED` 或 `CONFIRMED` 时满足。普通 Worker claim 只接受 `PENDING/READY` 且最终等级、scope、锁模式、技术验收和证据完整的任务。自动执行结果只允许 `SUCCEEDED`、`FAILED`、`WAITING_HUMAN`；`CONFIRMED` 只能人工产生。
 
 归档不属于状态机。`archived_at IS NULL` 表示未归档，带 Asia/Shanghai 时区的 ISO 8601 时间表示已归档。`CONFIRMED` 只表示人工复核通过，不会隐式写入 `archived_at`。人工 `archive/unarchive` 只修改该属性，并以原状态到同一原状态的管理事件记录 actor、时间和 reason；允许归档的终态为 `CONFIRMED`、`FAILED` 和 `CANCELLED`。
 
 ## 顺序与租约
 
-候选在各自运行环境、Provider、能力等级和执行策略内按 `blocker`、`critical`、`high`、`medium`、`low`，再按 `created_at` 和 id 排序。仅 `PENDING` 且依赖完成的任务可领取。运行环境、优先级、能力等级、Provider 和执行策略相互独立，高优先级不会自动升高能力等级。`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED` 都应立即结束。
+候选在各自运行环境、Provider、能力等级和执行策略内按 `blocker`、`critical`、`high`、`medium`、`low`，再按 `created_at` 和 id 排序。仅 `PENDING/READY`、最终执行契约完整且依赖完成的任务可领取。DRAFT、INSPECTING、FAILED preflight 与 NEEDS_REVIEW 均不会进入 Worker 候选。运行环境、优先级、能力等级、Provider 和执行策略相互独立，高优先级不会自动升高能力等级。`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED` 都应立即结束。
 
-五个 L1-L5 automatic 能力等级各由一条 `codex_automation` Codex 定时自动化驱动，默认每 20 分钟按 0、2、4、6、8 分钟错峰运行；`L5/manual` 没有定时自动化，只能由 Operator 在人工明确批准后创建一次性执行。`codex_cli` 与 `self_hosted_agent` 由各自 Runner 显式领取，不由这些自动化兜底。AI 客户端会话会在 claim 前启动，但仍遵循统一逻辑队列的主动拉取语义。五条真实自动化的 L1-L5 入口只能在生产维护窗口由 Operator 逐条切换与复核；Worker 不读取或修改自动化状态。
+独立 Planner 由一条 `codex_automation` 定时自动化每 5 分钟唤起，只扫描 DRAFT；五个 L1-L5 automatic Worker 默认每 20 分钟按 0、2、4、6、8 分钟错峰运行，只扫描 PENDING/READY。`L5/manual` 没有定时自动化，只能由 Operator 人工批准一次性执行。`codex_cli` 与 `self_hosted_agent` 由各自 Runner 显式领取，不由客户端自动化兜底。真实 Planner 的创建和五条 Worker 的切换只能由 Operator 在维护窗口完成并复核；Planner/Worker 不读取或修改自动化状态。
 
 默认 heartbeat stalled 阈值为 300 秒、可续租 lease 为 3600 秒；attempt timeout 由 execution 快照独立定义，续心跳不会重置 attempt 计时。每次 `claim` 在容量判断前推进三项计时状态：Codex execution 停滞或超时后转为非活动 `STALLED/TIMED_OUT`，任务转为 `WAITING_HUMAN`，活动容量立即释放；scope lock 则转为 `QUARANTINED`，租约到期也不自动删除。heartbeat stalled 只表示旧客户端会话存活性未知，不能归类为实现/模型失败或能力等级不足。
 
@@ -135,11 +147,11 @@ STALLED -- 后续 attempt timeout --------> TIMED_OUT（容量保持释放，sco
 
 Codex CLI Runner 同样只有在 `finish` 返回 `FINISHED` 后才视为任务状态已更新；它不轮询或领取第二项，也不创建持久化 report、`CONFIRMED` 或 `archived_at`。正常退出后不保留 CLI 会话，超时和中断路径会回收进程树；若操作系统拒绝终止或 `finish` 自身不可用，Runner 只能报告真实运行错误，后续领取仍由既有心跳/租约机制回收 execution 与 scope 锁。
 
-Schema 3.0.0 至 3.5.0 到 3.6.0 的迁移使用受控的 `loopctl.py migrate`。3.0.0 至 3.3.0 要求没有活动 execution，并完成规范路由与执行快照迁移；3.4.0/3.5.0 迁移允许活动 execution，原样保留其 `RUNNING` 状态与 ACTIVE scope lock，并扩展恢复字段及不含模型原文的安全结果诊断字段。迁移本身不根据旧时间戳创建 `STALLED/TIMED_OUT/QUARANTINED`，因此不会自动解除或误判真实旧会话；迁移后的下一次 `claim` 才按当前时钟推进状态。所有路径保留任务、execution、历史、结果、依赖、scope、归档和 row version，并执行外键与 quick check。
+Schema 3.0.0 至 3.6.0 到 3.7.0 的迁移使用受控的 `loopctl.py migrate`。3.0.0 至 3.3.0 要求没有活动 Worker execution；3.4.0 至 3.6.0 允许原样保留活动 Worker execution 与 ACTIVE scope lock。旧 DRAFT 转为 NEEDS_REVIEW 并记录迁移原因；旧 PENDING 及具备 scope 的既有任务标记为 READY，历史终态缺少 scope 时保留终态但不伪称 READY。迁移保留任务事实、execution、历史、结果、依赖、scope、附件、归档和 row version，并执行外键与 quick check；不会自动创建 Planner execution、隔离或未来调度服务。
 
 ## 安全边界
 
-scope 必须相对 `E:\code` 并匹配项目清单中最长的项目路径。绝对路径、`..`、`$CODEX_HOME`、`.reasonix`、`.env` 和未登记项目会被拒绝。Worker 还必须读取目标项目适用的 `AGENTS.md`、检查 Git 工作树、保留既有改动并只处理已领取 scope。
+scope 必须相对 `E:\code` 并匹配项目清单中最长的项目路径。绝对路径、`..`、`$CODEX_HOME`、`.reasonix`、`.env` 和未登记项目会被拒绝。Planner 只能静态读取项目并通过受控 preflight 通道提交范围；Worker 还必须读取目标项目适用的 `AGENTS.md`、检查 Git 工作树、核对 claim 返回的锁凭证，并只处理已领取 scope。需要新增范围时，当前 execution 必须先原子 `extend-scope`，冲突或拒绝时不得写入。
 
 删除 Git 已跟踪、execution 前已存在或归属不明的文件，以及发布、Git 提交、外部消息和凭据访问，需要明确人工授权；授权应体现在当前任务内容或 Operator 的明确指令中。Codex 自动化与 Codex CLI 可自行清理本次 execution 在任务登记项目内新生成且仍未被 Git 跟踪的普通临时文件，但必须有执行前状态、具体生成命令和时间证据，只能逐个使用精确路径，且不得删除目录、符号链接/重解析点、源码、配置、凭据或用户数据。通配符、递归删除、跨项目清理和归属不明的文件仍必须进入 `WAITING_HUMAN`。自建 Agent Runtime 未实现删除工具，即使满足条件也不会获得隐式删除能力。
 
