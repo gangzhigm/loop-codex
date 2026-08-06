@@ -130,7 +130,7 @@ class AttachmentImageTests(unittest.TestCase):
             for task in payload["tasks"]
         }
 
-        self.assertEqual(payload["schema_version"], "3.6.0")
+        self.assertEqual(payload["schema_version"], "3.7.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
             {"codex_automation": 5, "codex_cli": 5, "self_hosted_agent": 5},
@@ -138,6 +138,11 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(payload["settings"]["global_max_active_executions"], 8)
         self.assertEqual(routes["DASHBOARD-CODEX"], ("L2", "codex_automation", None))
         self.assertEqual(routes["DASHBOARD-DEEPSEEK"], ("L5", "self_hosted_agent", "deepseek"))
+        self.assertEqual(payload["planners"], [])
+        self.assertEqual(payload["planner_settings"]["execution_kind"], "PLANNER")
+        self.assertEqual(payload["tasks"][0]["preflight_status"], "READY")
+        self.assertIn("operator_definition", payload["tasks"][0])
+        self.assertIn("planner_supplement", payload["tasks"][0])
         self.assertEqual(
             payload["tasks"][0]["execution_policy"],
             "automatic",
