@@ -1,12 +1,32 @@
 {
   "component": "dashboard-server",
-  "status": "HEALTHY",
-  "pid": 40692,
-  "checked_at": "2026-08-06T17:38:35.546+08:00",
-  "last_checked_at": "2026-08-06T17:38:35.546+08:00",
+  "status": "RESTARTED",
+  "pid": 20172,
+  "checked_at": "2026-08-06T18:23:42.027+08:00",
+  "last_checked_at": "2026-08-06T18:23:42.027+08:00",
   "consecutive_failures": 0,
-  "message": "Dashboard Server 正常。",
+  "message": "Dashboard Server 已启动或恢复。",
   "events": [
+    {
+      "at": "2026-08-06T18:23:42.027+08:00",
+      "component": "dashboard-server",
+      "status": "RESTARTED",
+      "message": "Dashboard Server 已启动或恢复。",
+      "details": {
+        "pid": 20172,
+        "failures": 0
+      }
+    },
+    {
+      "at": "2026-08-06T18:08:35.035+08:00",
+      "component": "dashboard-server",
+      "status": "HEALTHY",
+      "message": "Dashboard Server 正常。",
+      "details": {
+        "pid": 40692,
+        "failures": 0
+      }
+    },
     {
       "at": "2026-08-06T17:38:35.546+08:00",
       "component": "dashboard-server",
@@ -987,26 +1007,6 @@
       "message": "Dashboard Server 已启动或恢复。",
       "details": {
         "pid": 36216,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-04T17:38:37.112+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 10688,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-04T17:08:37.368+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 10688,
         "failures": 0
       }
     }

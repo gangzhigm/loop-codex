@@ -2380,6 +2380,13 @@
       }
       const ids = new Set();
       for (const [index, task] of (candidate?.tasks ?? []).entries()) {
+        if (task && typeof task === "object") {
+          task.blocked_by_task_ids ??= [];
+          task.blocked_scopes ??= [];
+          task.blocked_scope_keys ??= [];
+          task.blocking_scopes ??= [];
+          task.scope_queue_position ??= null;
+        }
         if (!task?.id || ids.has(task.id)) errors.push(`tasks[${index}].id 缺失或重复`);
         ids.add(task?.id);
         if (!Number.isInteger(task?.row_version) || task.row_version < 1) errors.push(`任务 ${task?.id ?? index} row_version 无效`);

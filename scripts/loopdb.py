@@ -2321,7 +2321,8 @@ def validate_database(database: sqlite3.Connection, config: dict[str, Any] | Non
     invalid_scope_modes = database.execute(
         "SELECT t.id, s.scope_key FROM tasks t JOIN task_scopes s ON s.task_id=t.id "
         "WHERE t.preflight_status='READY' AND ("
-        "(t.lock_mode='project' AND s.scope_key NOT LIKE 'project:%') OR "
+        "(t.lock_mode='project' AND s.scope_key NOT LIKE 'project:%' "
+        "AND s.scope_key NOT LIKE 'external:%') OR "
         "(t.lock_mode='module' AND s.scope_key NOT LIKE 'module:%') OR "
         "(t.lock_mode='file' AND s.scope_key NOT LIKE 'file:%')) "
         "ORDER BY t.id, s.ordinal"

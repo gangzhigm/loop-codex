@@ -2231,6 +2231,24 @@ class LoopConcurrencyTests(unittest.TestCase):
                 },
                 project_paths=["local-agent-loop"],
             )
+        insert_task(
+            database,
+            {
+                "id": "LEGACY-EXTERNAL",
+                "title": "legacy external scope",
+                "status": "PENDING",
+                "priority": "medium",
+                "runtime_environment": "codex_automation",
+                "scope": ["local-agent-loop/scripts/loopctl.py"],
+                "acceptance": ["test"],
+            },
+            project_paths=["local-agent-loop"],
+        )
+        database.execute(
+            "UPDATE task_scopes SET scope='OSS:Zaun_01/path/template.xlsx', "
+            "scope_key='external:OSS:Zaun_01/path/template.xlsx' "
+            "WHERE task_id='LEGACY-EXTERNAL'"
+        )
         database.execute("UPDATE tasks SET status='WAITING_CONFLICT' WHERE id='LEGACY-WAIT'")
         database.execute(
             "INSERT INTO task_conflicts(task_id, scope_key, blocker_task_id, blocker_execution_id, detected_at) "
@@ -2254,6 +2272,9 @@ class LoopConcurrencyTests(unittest.TestCase):
             "SELECT from_status, to_status, actor FROM task_history "
             "WHERE task_id='LEGACY-WAIT' ORDER BY id DESC LIMIT 1"
         ).fetchone()
+        external_scope = database.execute(
+            "SELECT scope_key FROM task_scopes WHERE task_id='LEGACY-EXTERNAL'"
+        ).fetchone()[0]
         database.execute("UPDATE tasks SET lock_mode='file' WHERE id='LEGACY-WAIT'")
         database.execute(
             "UPDATE task_scopes SET scope_key='file:local-agent-loop::scripts/loopctl.py' "
@@ -2264,6 +2285,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(status, "PENDING")
         self.assertEqual(audit_count, 1)
         self.assertEqual(tuple(history), ("WAITING_CONFLICT", "PENDING", "schema-migration"))
+        self.assertEqual(external_scope, "external:OSS:Zaun_01/path/template.xlsx")
         self.assertTrue(validation["ok"], validation["errors"])
 
     @staticmethod

@@ -50,6 +50,11 @@ assert(html.includes('task?.status !== "PENDING"'), "范围锁展示未限定 PE
 assert(html.includes('task.blocked_by_task_ids'), "未使用 API 的 blocked_by_task_ids");
 assert(html.includes('task.blocked_scopes'), "未使用 API 的 blocked_scopes");
 assert(html.includes('task.scope_queue_position'), "未使用 API 的 scope_queue_position");
+assert(html.includes('task.blocked_by_task_ids ??= []'), "缺少旧 API 阻塞任务字段兼容");
+assert(html.includes('task.blocked_scopes ??= []'), "缺少旧 API 阻塞范围字段兼容");
+assert(html.includes('task.blocked_scope_keys ??= []'), "缺少旧 API scope key 字段兼容");
+assert(html.includes('task.blocking_scopes ??= []'), "缺少旧 API 阻塞详情字段兼容");
+assert(html.includes('task.scope_queue_position ??= null'), "缺少旧 API 队列位置字段兼容");
 assert(html.includes('function renderPendingBlockers(task, tasks)'), "缺少依赖和范围锁分离的详情展示");
 assert(html.includes('<h4>依赖等待</h4>'), "详情未单独展示依赖等待");
 assert(html.includes('<h4>范围锁等待</h4>'), "详情未单独展示范围锁等待");
