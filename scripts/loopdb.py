@@ -534,7 +534,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
     )
     valid = (
-        config.get("config_version") == "4.2.0"
+        config.get("config_version") == "4.3.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -582,6 +582,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner_boundary.get("default_tool_action") == "deny"
         and planner_boundary.get("source_access") == "read-only"
         and planner_writeback.get("transport") == "host_controlled_loopctl_stdin"
+        and planner_writeback.get("payload_encoding") == "utf-8"
+        and planner_writeback.get("integrity_policy") == "reject_suspicious_question_mark_corruption"
         and planner_writeback.get("controller") == str(BASE_DIR / "scripts" / "loopctl.py")
         and planner_writeback.get("allowed_commands") == [
             "preflight-claim", "preflight-heartbeat", "preflight-ready",

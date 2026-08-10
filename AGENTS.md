@@ -19,3 +19,4 @@
 17. Codex 客户端 execution 的 heartbeat stalled、租约过期和 attempt timeout 独立判定；停滞或超时后 execution 必须离开活动容量，任务进入 `WAITING_HUMAN`，scope 进入 `QUARANTINED`。只有人工确认旧会话已结束后才能用 `recover` 释放隔离；迟到 heartbeat/finish 必须拒绝。
 18. Planner 使用独立 `preflight_executions`，不占 Worker 容量、不获取业务 scope 写锁。Planner 只能读取并提交预检补充，不得覆盖 Operator 的 priority、业务描述、业务验收、运行环境、依赖或附件；超时预留自动回到 `DRAFT/UNINSPECTED`，迟到结果必须拒绝。
 19. Planner 的拆分结果只是结构化建议；未经 Operator 取得人工决定，不得自动创建子任务、取消原任务或绕过预检进入 `PENDING`。本阶段不实现常驻 Dispatcher 或 Supervisor。
+20. Codex 自动化与 Codex CLI 只有在执行前完整 Git 基线证明精确路径无工作区或暂存改动、索引未变化，且当前 execution 的具体 Python/测试命令和时间可证明归属时，才能自动恢复同一登记项目 `__pycache__` 中已跟踪的 `.pyc` 工作区文件。只能逐个精确路径恢复到索引内容，不得删除文件、修改索引、使用通配符或递归操作；恢复后必须验证路径干净并记录 verification。该例外不扩展到任何其他已跟踪文件，证据不足仍进入 `WAITING_HUMAN`。

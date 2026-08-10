@@ -43,7 +43,7 @@ LOOPCTL = BASE_DIR / "scripts" / "loopctl.py"
 class LoopConcurrencyTests(unittest.TestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "4.2.0")
+        self.assertEqual(config["config_version"], "4.3.0")
         self.assertEqual(config["automations"]["worker_interval_minutes"], 20)
         self.assertEqual(config["prompts"]["operator"], "prompts/operator.md")
         self.assertEqual(config["prompts"]["planner"], "prompts/planner.md")
@@ -77,6 +77,8 @@ class LoopConcurrencyTests(unittest.TestCase):
                 "source_access": "read-only",
                 "writeback": {
                     "transport": "host_controlled_loopctl_stdin",
+                    "payload_encoding": "utf-8",
+                    "integrity_policy": "reject_suspicious_question_mark_corruption",
                     "controller": str(LOOPCTL),
                     "allowed_commands": [
                         "preflight-claim", "preflight-heartbeat", "preflight-ready",
@@ -144,6 +146,24 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "VALID")
         self.assertGreaterEqual(result["checks"], 60)
         self.assertEqual(len(result["operator_actions"]), 4)
+
+    def test_legacy_json_import_uses_explicit_migration_command(self) -> None:
+        environment = os.environ.copy()
+        environment["PYTHONUTF8"] = "1"
+        completed = subprocess.run(
+            [sys.executable, str(LOOPCTL), "--help"],
+            cwd=BASE_DIR,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            capture_output=True,
+            check=False,
+            timeout=30,
+            env=environment,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("migrate-legacy", completed.stdout)
+        self.assertNotIn("{init,", completed.stdout)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -379,12 +399,12 @@ class LoopConcurrencyTests(unittest.TestCase):
     ) -> str:
         return json.dumps(
             {
-                "summary": "static checks passed",
+                "summary": "静态检查通过",
                 "capability_level": capability,
                 "scope": scope or ["local-agent-loop/scripts/loopctl.py"],
                 "lock_mode": lock_mode,
-                "technical_acceptance": ["run focused regression tests"],
-                "evidence": ["scope and dependency graph checked"],
+                "technical_acceptance": ["运行聚焦回归测试"],
+                "evidence": ["已核对范围和依赖关系"],
             },
             ensure_ascii=False,
         )
@@ -433,10 +453,33 @@ class LoopConcurrencyTests(unittest.TestCase):
         self.assertEqual(task["priority"], "critical")
         self.assertEqual(task["runtime_environment"], "codex_automation")
         self.assertEqual(task["capability_level"], "L3")
-        self.assertEqual(task["technical_acceptance"], ["run focused regression tests"])
-        self.assertEqual(task["preflight_evidence"], ["scope and dependency graph checked"])
+        self.assertEqual(task["technical_acceptance"], ["运行聚焦回归测试"])
+        self.assertEqual(task["preflight_evidence"], ["已核对范围和依赖关系"])
         worker = self.claim("worker-after-ready", "advanced")
         self.assertEqual(worker["task"]["id"], "PREFLIGHT-READY")
+
+    def test_planner_ready_rejects_suspicious_question_mark_corruption(self) -> None:
+        self.enqueue_draft("PREFLIGHT-UTF8-CORRUPTION")
+        self.planner_claim("planner-utf8-corruption")
+        report = json.loads(self.ready_report())
+        report["technical_acceptance"] = ["???????? metricTotal ????????"]
+
+        rejected = self.run_ctl_error(
+            "preflight-ready", "planner-utf8-corruption", "PREFLIGHT-UTF8-CORRUPTION",
+            input_text=json.dumps(report, ensure_ascii=False),
+        )
+        self.assertIn("UTF-8", rejected["message"])
+
+        database = connect(self.db_path)
+        task = database.execute(
+            "SELECT status, preflight_status FROM tasks WHERE id='PREFLIGHT-UTF8-CORRUPTION'"
+        ).fetchone()
+        acceptance_count = database.execute(
+            "SELECT COUNT(*) FROM task_technical_acceptance WHERE task_id='PREFLIGHT-UTF8-CORRUPTION'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(tuple(task), ("DRAFT", "INSPECTING"))
+        self.assertEqual(acceptance_count, 0)
 
     def test_planner_escalation_requires_operator_approval_and_stdin(self) -> None:
         def approve(task_id: str, *markers: str) -> None:

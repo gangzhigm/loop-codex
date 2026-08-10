@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hmac
 import json
 import os
@@ -30,6 +31,7 @@ from loopdb import (
     connect,
     load_initialization_config,
     now_shanghai,
+    parse_project_registry,
     schema_version,
     state_payload,
 )
@@ -49,6 +51,13 @@ from secret_store import (
 HEALTH_STATE = BASE_DIR / "runtime" / "health-state.json"
 TASK_ACTION_PATH = "/api/task-action"
 SECRET_API_PATH = "/api/secrets"
+OPERATIONS_API_PATH = "/api/operations-config"
+OPERATIONS_ACTION_PATH = "/api/operations-config/action"
+OPERATIONS_ASSETS = {
+    "/operations.html": ("operations.html", "text/html; charset=utf-8"),
+    "/operations.js": ("operations.js", "application/javascript; charset=utf-8"),
+    "/operations.css": ("operations.css", "text/css; charset=utf-8"),
+}
 TASK_ID_PATTERN = re.compile(r"[A-Z][A-Z0-9_-]*\Z")
 EXECUTION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 PROVIDER_ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
@@ -82,6 +91,89 @@ class SecretApiError(Exception):
     def __init__(self, status: HTTPStatus, message: str):
         super().__init__(message)
         self.status = status
+
+
+class OperationsApiError(Exception):
+    def __init__(self, status: HTTPStatus, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def choose_task_root(initial_directory: Path) -> Path | None:
+    """Open the local native directory picker without accepting a browser path."""
+    try:
+        import tkinter
+        from tkinter import filedialog
+    except ImportError as error:
+        raise OSError("当前系统没有可用的本机文件夹选择器") from error
+    try:
+        picker = tkinter.Tk()
+        picker.withdraw()
+        picker.attributes("-topmost", True)
+        selected = filedialog.askdirectory(
+            parent=picker,
+            initialdir=str(initial_directory),
+            title="选择全局任务工作区",
+            mustexist=True,
+        )
+    except tkinter.TclError as error:
+        raise OSError("当前 Dashboard Server 无法打开本机文件夹选择器") from error
+    finally:
+        if "picker" in locals():
+            picker.destroy()
+    return Path(selected).resolve() if selected else None
+
+
+def validate_task_root(candidate: Path, config: Mapping[str, Any]) -> tuple[Path, Path]:
+    root = candidate.resolve()
+    if root == Path(root.anchor):
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "全局任务工作区不能是磁盘根目录")
+    if not root.is_dir():
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "所选全局任务工作区不存在")
+    workspace = config.get("workspace")
+    registry_value = workspace.get("project_registry") if isinstance(workspace, Mapping) else None
+    if not isinstance(registry_value, str) or not registry_value:
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "项目清单配置无效")
+    registry = root / Path(registry_value).name
+    if not registry.is_file():
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "所选工作区缺少同名项目清单")
+    try:
+        projects = parse_project_registry(registry)
+    except (OSError, ValueError) as error:
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "项目清单无法读取") from error
+    missing = [project["path"] for project in projects if not (root / project["path"]).is_dir()]
+    if missing:
+        raise OperationsApiError(
+            HTTPStatus.BAD_REQUEST,
+            "所选工作区缺少已登记项目: " + ", ".join(missing),
+        )
+    return root, registry
+
+
+def write_task_root_config(
+    config_path: Path,
+    config: Mapping[str, Any],
+    root: Path,
+    registry: Path,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(dict(config))
+    workspace = updated.get("workspace")
+    if not isinstance(workspace, dict):
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "工作区配置无效")
+    workspace["task_root"] = str(root)
+    workspace["project_registry"] = str(registry)
+    temporary = config_path.with_name(f"{config_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(updated, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        temporary.replace(config_path)
+        return load_initialization_config(config_path)
+    except (OSError, ValueError) as error:
+        temporary.unlink(missing_ok=True)
+        raise OperationsApiError(HTTPStatus.SERVICE_UNAVAILABLE, "全局任务工作区保存失败") from error
 
 
 def provider_secret_refs(config: Mapping[str, Any]) -> dict[str, str]:
@@ -214,6 +306,206 @@ def provider_secret_status(
         "persistent": status.persistent,
         "mutable": status.mutable,
         "repair": repair,
+    }
+
+
+def _config_value(config: Mapping[str, Any], *path: str, fallback: object = "未配置") -> object:
+    current: object = config
+    for key in path:
+        if not isinstance(current, Mapping) or key not in current:
+            return fallback
+        current = current[key]
+    return current if isinstance(current, (str, int, float, bool)) or current is None else fallback
+
+
+def operations_config_payload(
+    config: Mapping[str, Any],
+    secret_store: SecretStore,
+    provider_secret_refs_by_id: Mapping[str, str],
+    health_state_path: Path,
+) -> dict[str, object]:
+    """Return an explicit public catalog; never forward the runtime configuration."""
+
+    def item(
+        key: str,
+        label: str,
+        value: object,
+        source: str,
+        description: str,
+        activation: str,
+        validation: str,
+        state: str = "current",
+        editable: bool = False,
+    ) -> dict[str, object]:
+        return {
+            "key": key,
+            "label": label,
+            "value": value,
+            "source": source,
+            "description": description,
+            "activation": activation,
+            "validation": validation,
+            "state": state,
+            "editable": editable,
+        }
+
+    capabilities: list[dict[str, object]] = []
+    profiles = config.get("execution_profiles")
+    if isinstance(profiles, Mapping):
+        for environment, profile in sorted(profiles.items()):
+            if not isinstance(profile, Mapping):
+                continue
+            if environment == "self_hosted_agent":
+                providers = profile.get("providers")
+                if isinstance(providers, Mapping):
+                    for provider_id, provider in sorted(providers.items()):
+                        levels = provider.get("capabilities") if isinstance(provider, Mapping) else None
+                        if isinstance(levels, Mapping):
+                            for level, details in sorted(levels.items()):
+                                if isinstance(details, Mapping):
+                                    capabilities.append({
+                                        "environment": environment,
+                                        "provider": provider_id,
+                                        "level": level,
+                                        "model": details.get("model", "未配置"),
+                                        "reasoning": details.get("reasoning", "未配置"),
+                                        "attempt_timeout_seconds": details.get("attempt_timeout_seconds", "未配置"),
+                                    })
+                continue
+            levels = profile.get("capabilities")
+            if isinstance(levels, Mapping):
+                for level, details in sorted(levels.items()):
+                    if isinstance(details, Mapping):
+                        capabilities.append({
+                            "environment": environment,
+                            "provider": None,
+                            "level": level,
+                            "model": details.get("model", "未配置"),
+                            "reasoning": details.get("reasoning", "未配置"),
+                            "attempt_timeout_seconds": details.get("attempt_timeout_seconds", "未配置"),
+                        })
+
+    environments: list[dict[str, object]] = []
+    configured_environments = config.get("runtime_environments")
+    if isinstance(configured_environments, Mapping):
+        for environment, details in sorted(configured_environments.items()):
+            if isinstance(details, Mapping):
+                environments.append({"id": environment, "name": details.get("name", environment)})
+
+    secret_statuses = [
+        provider_secret_status(secret_store, provider_id, secret_ref, health_state_path)
+        for provider_id, secret_ref in sorted(provider_secret_refs_by_id.items())
+    ]
+    task_execution = config.get("task_execution")
+    automation = config.get("automations")
+    planner = config.get("planner")
+    dashboard = config.get("dashboard")
+    cli = config.get("codex_cli")
+    self_hosted_agent = config.get("self_hosted_agent")
+    health = config.get("health")
+    priority_policy = config.get("priority_policy")
+    prompts = config.get("prompts")
+    workspace = config.get("workspace")
+    platform_limits = (
+        task_execution.get("platform_max_active_executions", {})
+        if isinstance(task_execution, Mapping) else {}
+    )
+    platform_capacities = [
+        {"environment": environment, "max_active_executions": limit}
+        for environment, limit in sorted(platform_limits.items())
+    ] if isinstance(platform_limits, Mapping) else []
+    approval_actions = [
+        {"action": action}
+        for action in (task_execution.get("require_human_approval_for", []) if isinstance(task_execution, Mapping) else [])
+        if isinstance(action, str)
+    ]
+    self_hosted_limits = [
+        {"name": key, "value": value}
+        for key, value in (self_hosted_agent.items() if isinstance(self_hosted_agent, Mapping) else [])
+        if key in {"max_steps", "max_final_repairs", "model_timeout_seconds", "tool_timeout_seconds"}
+    ]
+    planner_automation = automation.get("planner") if isinstance(automation, Mapping) else {}
+    return {
+        "ok": True,
+        "generated_at": now_shanghai(),
+        "sections": [
+            {
+                "id": "system",
+                "title": "系统管理",
+                "items": [
+                    item("task-root", "全局任务工作区", _config_value(workspace if isinstance(workspace, Mapping) else {}, "task_root"), "config/initialization.json", "所有任务可修改范围的全局上界；每个任务仍受自身 scope 和 scope lock 约束。", "保存后对新任务生效", "目录、项目清单和活动 execution 校验", editable=True),
+                    item("project-registry", "项目清单", _config_value(workspace if isinstance(workspace, Mapping) else {}, "project_registry"), "config/initialization.json", "项目路由实时读取的初始化登记清单。", "受保护", "配置加载时校验"),
+                    item("dashboard-listener", "Dashboard 监听地址", f"{_config_value(dashboard if isinstance(dashboard, Mapping) else {}, 'host')}:{_config_value(dashboard if isinstance(dashboard, Mapping) else {}, 'port')}", "config/initialization.json", "本机任务面板和运维配置页面的服务地址。", "需重启", "启动时绑定校验"),
+                    item("health-schedule", "Dashboard 健康检查", f"每 {_config_value(health if isinstance(health, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "Windows 计划任务检查 Dashboard，并在服务不可用时执行恢复。", "计划任务生效", "健康任务运行结果"),
+                    item("schema", "任务库 Schema", _config_value(config, "database", "schema_version"), "config/initialization.json", "任务数据库的兼容性目标版本。", "受保护", "loopctl validate"),
+                ],
+            },
+            {
+                "id": "ai-configuration",
+                "title": "AI 配置",
+                "items": [
+                    item("provider-status", "Provider 密钥状态", secret_statuses, "SecretStore", "仅显示公开状态；不含密钥值或引用。", "受保护", "SecretStore 状态检查"),
+                    item("environments", "已登记运行环境", environments, "config/initialization.json", "任务领取时必须显式声明的执行环境。", "需重启", "配置加载时校验"),
+                    item("capability-routes", "能力等级路由", capabilities, "config/initialization.json", "按运行环境、Provider 和等级声明的模型与推理参数。", "需重启", "配置加载时校验"),
+                ],
+            },
+            {
+                "id": "operator",
+                "title": "Operator 管理",
+                "items": [
+                    item("operator-prompt", "Operator 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "operator"), "config/initialization.json", "人工任务管理对话的任务创建、更新、状态和归档约束。", "读取时生效", "文件存在性检查"),
+                    item("priority-policy", "任务优先级策略", priority_policy.get("levels", "未配置") if isinstance(priority_policy, Mapping) else "未配置", "config/initialization.json", "任务优先级层级和项目默认优先级策略。", "新建或更新任务时生效", "配置加载时校验"),
+                ],
+            },
+            {
+                "id": "planner",
+                "title": "Planner 管理",
+                "items": [
+                    item("planner-prompt", "Planner 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "草稿任务的只读预检与结构化写回约束。", "读取时生效", "文件存在性检查"),
+                    item("planner-runtime", "运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "Planner 固定使用的只读预检环境。", "需重启", "配置加载时校验"),
+                    item("planner-cadence", "自动化周期", f"每 {_config_value(planner_automation if isinstance(planner_automation, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "Planner 自动化的预检轮询周期。", "需重启", "配置加载时校验"),
+                    item("planner-boundary", "安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "Planner 只能静态读取，不能直接修改任务库或业务文件。", "受保护", "配置加载时校验"),
+                ],
+            },
+            {
+                "id": "supervisor",
+                "title": "Supervisor 管理",
+                "items": [
+                    item("supervisor-service", "常驻 Supervisor", "尚未部署", "部署设计", "负责跨平台唤起、守护和管理 Planner、Worker 与 Runner。", "受保护", "尚未实现", "planned"),
+                    item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "当前仅恢复 Dashboard；不承担 Supervisor 职责。", "当前生效", "健康任务运行结果"),
+                ],
+            },
+            {
+                "id": "dispatcher",
+                "title": "Dispatcher 管理",
+                "items": [
+                    item("dispatcher-service", "常驻 Dispatcher", "尚未部署", "部署设计", "负责生成可执行队列并按容量、依赖与锁状态路由任务。", "受保护", "尚未实现", "planned"),
+                    item("cli-dispatcher", "Codex CLI 单次调度", f"每 {_config_value(cli if isinstance(cli, Mapping) else {}, 'dispatcher', 'interval_minutes')} 分钟", "config/initialization.json", "当前仅提供 Codex CLI 的单次 Dispatcher 入口，不是常驻跨平台 Dispatcher。", "需计划任务部署", "配置加载时校验"),
+                ],
+            },
+            {
+                "id": "worker",
+                "title": "Worker 管理",
+                "items": [
+                    item("worker-prompt", "Worker 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "worker"), "config/initialization.json", "L1-L5 Codex 自动化执行任务时必须遵循的单任务协议。", "读取时生效", "文件存在性检查"),
+                    item("worker-runtime", "默认运行环境", _config_value(automation if isinstance(automation, Mapping) else {}, "runtime_environment"), "config/initialization.json", "定时 Worker 的默认运行环境。", "需重启", "配置加载时校验"),
+                    item("worker-cadence", "自动化周期", f"每 {_config_value(automation if isinstance(automation, Mapping) else {}, 'worker_interval_minutes')} 分钟", "config/initialization.json", "L1-L5 自动 Worker 的轮询周期。", "需重启", "配置加载时校验"),
+                    item("global-capacity", "全局并发上限", _config_value(task_execution if isinstance(task_execution, Mapping) else {}, "global_max_active_executions"), "config/initialization.json", "所有运行环境共享的活动 execution 上限。", "需重启", "领取事务校验"),
+                    item("platform-capacity", "平台并发上限", platform_capacities, "config/initialization.json", "每个运行环境的活动 execution 上限。", "需重启", "领取事务校验"),
+                    item("human-approvals", "人工批准动作", approval_actions, "config/initialization.json", "Worker 必须由人工明确批准的高风险动作。", "受保护", "领取与 finish 事务校验"),
+                ],
+            },
+            {
+                "id": "runner",
+                "title": "Runner 管理",
+                "items": [
+                    item("cli-worker-prompt", "Codex CLI Worker 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "cli_worker"), "config/initialization.json", "Codex CLI 单次 Runner 的任务边界和结果协议。", "读取时生效", "文件存在性检查"),
+                    item("cli-sandbox", "Codex CLI 沙箱", _config_value(cli if isinstance(cli, Mapping) else {}, "sandbox"), "config/initialization.json", "CLI Runner 的固定文件系统沙箱边界。", "需重启", "配置加载时校验"),
+                    item("self-hosted-limits", "自建 Agent 运行上限", self_hosted_limits or "未配置", "config/initialization.json", "自建 Agent 的步骤、模型、工具和输出边界。", "需重启", "配置加载时校验"),
+                    item("runner-service", "独立 Runner 服务", "尚未部署", "部署设计", "当前仅提供单次 Runner 入口，尚未安装常驻 Runner 服务。", "受保护", "尚未实现", "planned"),
+                ],
+            },
+        ],
     }
 
 
@@ -410,6 +702,7 @@ class DashboardServer(ThreadingHTTPServer):
         dashboard_path: Path,
         runtime_config: dict[str, object],
         *,
+        runtime_config_path: Path = CONFIG_PATH,
         secret_store: SecretStore | None = None,
         health_state_path: Path = HEALTH_STATE,
         provider_verifiers: Mapping[str, Callable[[str], bool | None]] | None = None,
@@ -429,6 +722,11 @@ class DashboardServer(ThreadingHTTPServer):
         super().__init__(address, DashboardHandler)
         self.database_path = database_path
         self.dashboard_path = dashboard_path
+        self.runtime_config_path = runtime_config_path.resolve()
+        self.operations_paths = {
+            route: dashboard_path.with_name(filename)
+            for route, (filename, _content_type) in OPERATIONS_ASSETS.items()
+        }
         self.runtime_config = runtime_config
         self.secret_store = secret_store or create_secret_store(runtime_config)
         self.provider_secret_refs = provider_secret_refs(runtime_config)
@@ -444,6 +742,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.expected_host = f"127.0.0.1:{self.server_address[1]}"
         self.expected_origin = f"http://{self.expected_host}"
         self.replay_cache_size = replay_cache_size
+        self._operations_config_lock = threading.RLock()
 
     def reserve_request_id(self, value: object) -> str:
         if not isinstance(value, str):
@@ -571,6 +870,86 @@ class DashboardHandler(BaseHTTPRequestHandler):
         ]
         return {"ok": True, "providers": providers}
 
+    def _operations_config_payload(self) -> dict[str, object]:
+        return operations_config_payload(
+            self.server.runtime_config,
+            self.server.secret_store,
+            self.server.provider_secret_refs,
+            self.server.health_state_path,
+        )
+
+    def _read_operations_json(self) -> dict[str, object]:
+        if self.headers.get("Transfer-Encoding") is not None:
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "不支持 Transfer-Encoding")
+        try:
+            content_length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "Content-Length 无效") from None
+        if content_length < 1 or content_length > self.server.secret_api_max_body_bytes:
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "请求体无效")
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self.rfile.read(content_length)
+            raise OperationsApiError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Content-Type 必须为 application/json")
+        try:
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8", errors="strict"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "请求 JSON 无效") from None
+        if not isinstance(payload, dict):
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "请求 JSON 必须为对象")
+        return payload
+
+    def _active_execution_count(self) -> int:
+        database = connect(self.server.database_path)
+        try:
+            return int(database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0])
+        finally:
+            database.close()
+
+    def _handle_operations_action(self, request: object) -> None:
+        if getattr(request, "query", ""):
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "运维操作接口不接受查询参数")
+        self._require_secret_host()
+        self._require_secret_origin()
+        self._require_csrf_token()
+        payload = self._read_operations_json()
+        action = payload.get("action")
+        if action == "select_task_root":
+            if set(payload) != {"action", "request_id"}:
+                raise OperationsApiError(HTTPStatus.BAD_REQUEST, "选择工作区请求字段无效")
+            self.server.reserve_request_id(payload["request_id"])
+            current = Path(str(self.server.runtime_config["workspace"]["task_root"]))
+            with self.server._operations_config_lock:
+                selected = choose_task_root(current)
+            self.send_json(
+                HTTPStatus.OK,
+                {"ok": True, "outcome": "CANCELLED" if selected is None else "SELECTED", "task_root": str(selected) if selected else None},
+            )
+            return
+        if action != "set_task_root" or set(payload) != {"action", "request_id", "task_root", "confirmation"}:
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "运维操作无效")
+        if payload.get("confirmation") != "SET_TASK_ROOT":
+            raise OperationsApiError(HTTPStatus.FORBIDDEN, "修改全局任务工作区未获得明确确认")
+        candidate = payload.get("task_root")
+        if not isinstance(candidate, str) or not candidate.strip():
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "全局任务工作区无效")
+        self.server.reserve_request_id(payload["request_id"])
+        with self.server._operations_config_lock:
+            if self._active_execution_count():
+                raise OperationsApiError(HTTPStatus.CONFLICT, "存在活动 execution，不能修改全局任务工作区")
+            raw_root = Path(candidate)
+            if not raw_root.is_absolute():
+                raise OperationsApiError(HTTPStatus.BAD_REQUEST, "全局任务工作区必须是绝对路径")
+            root, registry = validate_task_root(raw_root, self.server.runtime_config)
+            updated = write_task_root_config(
+                self.server.runtime_config_path,
+                self.server.runtime_config,
+                root,
+                registry,
+            )
+            self.server.runtime_config = updated
+        self.send_json(HTTPStatus.OK, {"ok": True, "outcome": "UPDATED", "task_root": str(root)})
+
     def _handle_secret_get(self, request: object) -> None:
         if getattr(request, "query", ""):
             raise SecretApiError(HTTPStatus.BAD_REQUEST, "Secret API 不接受查询参数")
@@ -696,6 +1075,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": "Secret 状态服务不可用"},
                 )
             return
+        if path == OPERATIONS_API_PATH:
+            if request.query:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "运维配置接口不接受查询参数"})
+                return
+            try:
+                self.send_json(
+                    HTTPStatus.OK,
+                    self._operations_config_payload(),
+                    headers={"X-CSRF-Token": self.server.csrf_token},
+                )
+            except (OSError, SecretStoreError, ValueError):
+                self.send_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "error": "运维配置服务不可用"},
+                )
+            return
+        if path in OPERATIONS_ASSETS:
+            asset_path = self.server.operations_paths[path]
+            content_type = OPERATIONS_ASSETS[path][1]
+            try:
+                self.send_bytes(HTTPStatus.OK, content_type, asset_path.read_bytes())
+            except OSError as error:
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(error)})
+            return
         if path in {"/", "/dashboard.html"}:
             try:
                 self.send_bytes(HTTPStatus.OK, "text/html; charset=utf-8", self.server.dashboard_path.read_bytes())
@@ -783,6 +1186,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": "Secret 状态服务不可用"},
                 )
             return
+        if request.path == OPERATIONS_ACTION_PATH:
+            try:
+                self._handle_operations_action(request)
+            except (OperationsApiError, SecretApiError) as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except (sqlite3.Error, OSError, ValueError):
+                self.send_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "error": "运维配置服务不可用"},
+                )
+            return
         if request.path != TASK_ACTION_PATH:
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
             return
@@ -837,7 +1251,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
 
     def do_OPTIONS(self) -> None:
-        if urlparse(self.path).path == SECRET_API_PATH:
+        if urlparse(self.path).path in {SECRET_API_PATH, OPERATIONS_ACTION_PATH}:
             self.send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "CORS 请求已拒绝"})
             return
         self.send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"ok": False, "error": "method not allowed"})
@@ -855,7 +1269,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = parser().parse_args()
     database_path = Path(args.db).resolve()
-    config = load_initialization_config(args.config)
+    config_path = Path(args.config).resolve()
+    config = load_initialization_config(config_path)
     dashboard_config = config["dashboard"]
     host = args.host or str(dashboard_config["host"])
     port = args.port or int(dashboard_config["port"])
@@ -864,7 +1279,10 @@ def main() -> None:
     runtime = BASE_DIR / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     pid_path = runtime / "dashboard-server.pid"
-    server = DashboardServer((host, port), database_path, BASE_DIR / "dashboard.html", config)
+    server = DashboardServer(
+        (host, port), database_path, BASE_DIR / "dashboard.html", config,
+        runtime_config_path=config_path,
+    )
     pid_path.write_text(str(os.getpid()), encoding="utf-8")
 
     def stop_server(signum: int, frame: object) -> None:

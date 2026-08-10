@@ -34,7 +34,7 @@ $root = Split-Path -Parent (Split-Path -Parent $resolvedConfig)
 $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
-Assert-Condition ($config.config_version -eq '4.2.0') 'config_version 为 4.2.0'
+Assert-Condition ($config.config_version -eq '4.3.0') 'config_version 为 4.3.0'
 Assert-Condition ($config.database.schema_version -eq '3.7.0') 'Schema 契约为 3.7.0'
 Assert-Condition ($config.prompts.planner -eq 'prompts/planner.md') 'Planner 提示词路径唯一且已登记'
 
@@ -57,6 +57,8 @@ Assert-Condition ($boundary.network_access -eq $false) 'Planner 禁止网络访�
 Assert-Condition ($boundary.default_tool_action -eq 'deny') 'Planner 工具策略默认拒绝'
 Assert-Condition ($boundary.source_access -eq 'read-only') 'Planner 业务源文件只读'
 Assert-Condition ($boundary.writeback.transport -eq 'host_controlled_loopctl_stdin') 'Planner 使用宿主受控 stdin 写回'
+Assert-Condition ($boundary.writeback.payload_encoding -eq 'utf-8') 'Planner 写回 payload 固定为 UTF-8'
+Assert-Condition ($boundary.writeback.integrity_policy -eq 'reject_suspicious_question_mark_corruption') 'Planner 写回拒绝明显问号损坏'
 Assert-Condition ($boundary.writeback.direct_sql -eq $false) 'Planner 禁止直接 SQL'
 Assert-Condition ($boundary.writeback.report_files -eq $false) 'Planner 禁止 report 文件'
 $expectedWriteback = @(
@@ -114,13 +116,18 @@ $loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'scripts\loopctl.py')
 Assert-Condition ($plannerPrompt -match 'preflight-claim') 'Planner 提示词包含单次 claim 协议'
 Assert-Condition ($plannerPrompt -match '--sandbox read-only') 'Planner 提示词核对只读入口'
 Assert-Condition ($plannerPrompt -match 'preflight-needs-review') 'Planner 提示词包含人工复核分支'
+Assert-Condition ($plannerPrompt -match '控制面会拒绝明显损坏的 payload') 'Planner 提示词要求 UTF-8 写回完整性检查'
 Assert-Condition ($plannerPrompt -match 'APPROVED_PLANNER_ESCALATION') 'Planner 提示词要求 L5/manual 明确批准'
 Assert-Condition ($plannerPrompt -match '不得实现任务') 'Planner 提示词禁止实现业务任务'
 Assert-Condition ($operatorPrompt -match 'APPROVED_PLANNER_ESCALATION') 'Operator 提示词记录 L5/manual 批准'
 Assert-Condition ($loopctlSource -match 'planner_escalation_is_approved') '控制面执行 L5/manual 批准门禁'
 Assert-Condition ($loopctlSource -match 'read_preflight_report') '控制面强制 Planner stdin 结果'
+Assert-Condition ($loopctlSource -match 'validate_preflight_text_integrity') '控制面拒绝损坏的 Planner 文本'
 Assert-Condition ($workerPrompt -match 'scope_lock_credential') 'Worker 编辑前核对锁凭证'
 Assert-Condition ($workerPrompt -match 'extend-scope') 'Worker 新范围写入前原子扩锁'
+Assert-Condition ($workerPrompt -match '唯一允许自动恢复的已跟踪范围外文件') 'Worker 仅允许自动恢复严格证明归属的已跟踪字节码缓存'
+Assert-Condition ($workerPrompt -match '不得删除文件、修改索引、使用通配符或递归操作') 'Worker 字节码恢复不得扩大为删除或批量回退权限'
+Assert-Condition ($cliPrompt -match '唯一允许自动恢复的已跟踪范围外文件') 'CLI Worker 使用相同的已跟踪字节码缓存恢复边界'
 Assert-Condition ($cliPrompt -match 'PENDING/READY') 'CLI Worker 只执行 READY 任务'
 Assert-Condition ($cliPrompt -match 'extend-scope') 'CLI Worker 遵循宿主扩锁契约'
 

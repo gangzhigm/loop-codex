@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sqlite3
 import sys
@@ -77,6 +78,8 @@ PLANNER_ESCALATION_MARKERS = {
     "manual": "APPROVED_PLANNER_ESCALATION: manual",
 }
 
+SUSPICIOUS_QUESTION_MARK_RUN = re.compile(r"\?{4,}")
+
 
 def output(payload: dict[str, Any], exit_code: int = 0) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -98,6 +101,20 @@ def read_preflight_report(source: str) -> Any:
     if source != "-":
         raise LoopError("Planner 预检结果只允许通过 UTF-8 stdin 提交")
     return read_json_source(source)
+
+
+def validate_preflight_text_integrity(value: Any, field: str = "payload") -> None:
+    """Reject unmistakable UTF-8 writeback corruption before Planner data reaches SQLite."""
+    if isinstance(value, str):
+        if "\ufffd" in value or SUSPICIOUS_QUESTION_MARK_RUN.search(value):
+            raise LoopError(f"Planner UTF-8 写回文本损坏: {field}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_preflight_text_integrity(item, f"{field}[{index}]")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            validate_preflight_text_integrity(item, f"{field}.{key}")
 
 
 def require_expected_row_version(args: argparse.Namespace, actual: int) -> None:
@@ -153,7 +170,7 @@ def normalize_legacy_task(task: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def command_init(args: argparse.Namespace) -> None:
+def command_migrate_legacy(args: argparse.Namespace) -> None:
     database_path = Path(args.db).resolve()
     tasks_path = Path(args.tasks).resolve()
     inbox_path = Path(args.inbox).resolve()
@@ -226,7 +243,7 @@ def command_init(args: argparse.Namespace) -> None:
         commit(database)
         output(
             {
-                "outcome": "INITIALIZED",
+                "outcome": "LEGACY_MIGRATED",
                 "database": str(database_path),
                 "backup": str(backup_path),
                 "tasks": expected,
@@ -849,6 +866,7 @@ def command_preflight_ready(args: argparse.Namespace) -> None:
     allowed = {"summary", "capability_level", "scope", "lock_mode", "technical_acceptance", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
         raise LoopError("READY 预检结果字段无效")
+    validate_preflight_text_integrity(report)
     summary = report.get("summary")
     capability = report.get("capability_level")
     lock_mode = report.get("lock_mode")
@@ -933,6 +951,7 @@ def command_preflight_needs_review(args: argparse.Namespace) -> None:
     allowed = {"summary", "question", "options", "split_suggestions", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
         raise LoopError("NEEDS_REVIEW 预检结果字段无效")
+    validate_preflight_text_integrity(report)
     summary = report.get("summary")
     question = report.get("question")
     if not isinstance(summary, str) or not summary.strip():
@@ -991,6 +1010,7 @@ def command_preflight_fail(args: argparse.Namespace) -> None:
     allowed = {"summary", "error", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
         raise LoopError("FAILED 预检结果字段无效")
+    validate_preflight_text_integrity(report)
     summary = report.get("summary")
     error = report.get("error")
     if not isinstance(summary, str) or not summary.strip() or not isinstance(error, str) or not error.strip():
@@ -2124,14 +2144,17 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--db", default=str(DEFAULT_DB))
     commands = root.add_subparsers(dest="command", required=True)
 
-    init = commands.add_parser("init")
-    init.add_argument("--tasks", required=True, help="旧 TASKS.json 的 UTF-8 路径")
-    init.add_argument("--inbox", required=True, help="旧 INBOX.json 的 UTF-8 路径")
-    init.add_argument("--registry", default=str(BASE_DIR.parent / "根目录清单.md"))
-    init.add_argument("--config", default=str(CONFIG_PATH))
-    init.add_argument("--backup-dir", default=str(BASE_DIR / "backups"))
-    init.add_argument("--force", action="store_true")
-    init.set_defaults(handler=command_init)
+    legacy_migrate = commands.add_parser(
+        "migrate-legacy",
+        help="将旧 TASKS.json 和 INBOX.json 导入 SQLite；不是空系统初始化入口",
+    )
+    legacy_migrate.add_argument("--tasks", required=True, help="旧 TASKS.json 的 UTF-8 路径")
+    legacy_migrate.add_argument("--inbox", required=True, help="旧 INBOX.json 的 UTF-8 路径")
+    legacy_migrate.add_argument("--registry", default=str(BASE_DIR.parent / "根目录清单.md"))
+    legacy_migrate.add_argument("--config", default=str(CONFIG_PATH))
+    legacy_migrate.add_argument("--backup-dir", default=str(BASE_DIR / "backups"))
+    legacy_migrate.add_argument("--force", action="store_true")
+    legacy_migrate.set_defaults(handler=command_migrate_legacy)
 
     migrate = commands.add_parser("migrate")
     migrate.set_defaults(handler=command_migrate)

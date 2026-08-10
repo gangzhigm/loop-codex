@@ -868,3 +868,367 @@ ConnectionAbortedError: [WinError 10053] ÄãµÄÖ÷»úÖÐµÄÈí¼þÖÐÖ¹ÁËÒ»¸öÒÑ½¨Á¢µÄÁ¬½Ó¡
 2026-08-06T18:29:48.573+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
 2026-08-06T18:30:19.639+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
 2026-08-06T18:31:27.458+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-06T18:38:41.964+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-06T18:38:42.045+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T09:32:09.948+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T09:38:32.912+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T10:08:32.573+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T10:36:48.384+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T10:36:48.750+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T10:37:05.230+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T10:38:34.447+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T10:39:06.311+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T10:39:06.857+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-10T10:47:52.575+08:00 127.0.0.1 "GET /api/secrets" 421
+2026-08-10T10:47:52.886+08:00 127.0.0.1 "GET /api/secrets" 421
+2026-08-10T10:51:56.869+08:00 127.0.0.1 "GET /api/secrets" 200
+2026-08-10T10:52:16.043+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:21.887+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:25.508+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:30.156+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:35.403+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:41.291+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:48.845+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:54.432+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:52:58.642+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:53:07.390+08:00 127.0.0.1 "GET /api/secrets" 421
+2026-08-10T10:53:07.401+08:00 127.0.0.1 "GET /api/secrets" 421
+2026-08-10T10:53:18.594+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:53:25.686+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T10:53:36.601+08:00 127.0.0.1 "GET /api/attachment?task_id=LOOP-DASHBOARD-REMOVE-CURRENT-TASK-METRIC-001&path=assets%2FLOOP-DASHBOARD-REMOVE-CURRENT-TASK-METRIC-001%2Fcurrent-task-metric-reference.png HTTP/1.1" 200 -
+2026-08-10T10:53:45.603+08:00 127.0.0.1 "GET /api/secrets" 200
+2026-08-10T10:53:46.061+08:00 127.0.0.1 "GET /api/secrets" 421
+2026-08-10T10:53:46.245+08:00 127.0.0.1 "GET /api/secrets" 421
+2026-08-10T10:54:01.466+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T10:54:02.426+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-10T10:54:04.870+08:00 127.0.0.1 "GET /api/secrets" 200
+2026-08-10T10:56:44.542+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T11:00:25.452+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T11:01:18.635+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T11:01:19.308+08:00 127.0.0.1 "GET /favicon.ico HTTP/1.1" 404 -
+2026-08-10T11:06:46.227+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T11:08:32.527+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T11:08:53.279+08:00 127.0.0.1 "GET /api/secrets" 200
+2026-08-10T11:08:58.318+08:00 127.0.0.1 "POST /api/secrets" 200
+2026-08-10T11:08:58.329+08:00 127.0.0.1 "GET /api/secrets" 200
+2026-08-10T11:09:01.885+08:00 127.0.0.1 "POST /api/secrets" 200
+2026-08-10T11:09:01.894+08:00 127.0.0.1 "GET /api/secrets" 200
+2026-08-10T11:38:32.394+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T11:46:13.905+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T11:46:21.848+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T12:08:32.582+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T12:09:20.086+08:00 127.0.0.1 "GET /api/attachment?task_id=LOOP-DASHBOARD-REMOVE-STATUS-FILTER-BAR-001&path=assets%2FLOOP-DASHBOARD-REMOVE-STATUS-FILTER-BAR-001%2Ftask-header-status-filter-reference.png HTTP/1.1" 200 -
+2026-08-10T12:30:04.141+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T12:30:15.543+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T12:38:32.431+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T13:08:32.461+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T13:38:32.443+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T13:55:40.056+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:00:07.084+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:01:46.747+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:08:32.524+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T14:08:38.592+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:12:55.260+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:12:55.720+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 404 -
+2026-08-10T14:12:56.493+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:12:59.099+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 404 -
+2026-08-10T14:12:59.156+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 65402)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 712, in do_GET
+    raise SecretApiError(HTTPStatus.FORBIDDEN, "CSRF token ÎÞÐ§")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 511, in send_json
+        database.close()
+    ...<4 lines>...
+    if (
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 502, in send_bytes
+    task = database.execute(
+    ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] ÄãµÄÖ÷»úÖÐµÄÈí¼þÖÐÖ¹ÁËÒ»¸öÒÑ½¨Á¢µÄÁ¬½Ó¡£
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 496, in handle
+    def handle(self):
+        ^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 484, in handle_one_request
+    HTTPStatus.NOT_IMPLEMENTED,
+    
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 716, in do_GET
+    raise SecretApiError(HTTPStatus.BAD_REQUEST, "²»Ö§³Ö Transfer-Encoding")
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 511, in send_json
+        database.close()
+    ...<4 lines>...
+    if (
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 501, in send_bytes
+    try:
+    
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 598, in end_headers
+    def end_headers(self):
+            ^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 602, in flush_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] ÄãµÄÖ÷»úÖÐµÄÈí¼þÖÐÖ¹ÁËÒ»¸öÒÑ½¨Á¢µÄÁ¬½Ó¡£
+----------------------------------------
+2026-08-10T14:13:35.298+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 404 -
+2026-08-10T14:13:51.425+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:13:52.697+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:14:07.113+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 404 -
+2026-08-10T14:19:57.225+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:20:01.460+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 404 -
+2026-08-10T14:21:08.295+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T14:21:08.349+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T14:21:28.432+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T14:21:28.459+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:21:31.582+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:21:31.737+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:21:31.742+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:21:31.822+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:21:32.450+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:22:07.524+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:22:59.315+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:25:59.840+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:32:12.036+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:32:12.115+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:32:12.120+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:32:12.147+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:32:12.150+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:32:17.738+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:36:04.373+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:37:02.522+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:37:50.047+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:37:50.237+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:37:50.260+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:37:50.307+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:37:50.311+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:38:32.896+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T14:38:33.677+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:42:11.221+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:42:23.655+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T14:42:23.778+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T14:43:15.243+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:43:15.275+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:43:15.277+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:43:15.301+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:43:21.387+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:43:21.549+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:43:21.557+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:43:21.608+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:43:21.629+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:43:23.777+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:43:51.239+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:43:51.371+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:43:51.375+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:43:51.420+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:43:51.430+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:44:37.180+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T14:44:37.381+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:45:36.675+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:46:52.034+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:46:52.171+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:46:52.178+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:46:52.255+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:46:52.302+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:47:28.978+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:47:44.145+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T14:47:48.285+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T14:47:53.759+08:00 127.0.0.1 "POST /api/task-action HTTP/1.1" 200 -
+2026-08-10T14:50:22.114+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T14:50:22.325+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T14:50:22.795+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:51:21.755+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:52:10.055+08:00 127.0.0.1 "GET /api/state HTTP/1.1" 503 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 65192)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 926, in do_GET
+    self.send_json(HTTPStatus.OK, payload)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 697, in send_json
+    self.send_bytes(
+    ~~~~~~~~~~~~~~~^
+        status,
+        ^^^^^^^
+    ...<2 lines>...
+        headers=headers,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 688, in send_bytes
+    self.wfile.write(body)
+    ~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] ÄãµÄÖ÷»úÖÐµÄÈí¼þÖÐÖ¹ÁËÒ»¸öÒÑ½¨Á¢µÄÁ¬½Ó¡£
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 500, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 488, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 930, in do_GET
+    self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 697, in send_json
+    self.send_bytes(
+    ~~~~~~~~~~~~~~~^
+        status,
+        ^^^^^^^
+    ...<2 lines>...
+        headers=headers,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "E:\code\local-agent-loop\scripts\dashboard_server.py", line 687, in send_bytes
+    self.end_headers()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 602, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 606, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+ConnectionAbortedError: [WinError 10053] ÄãµÄÖ÷»úÖÐµÄÈí¼þÖÐÖ¹ÁËÒ»¸öÒÑ½¨Á¢µÄÁ¬½Ó¡£
+----------------------------------------
+2026-08-10T14:53:35.596+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T14:53:49.087+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T14:53:49.304+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T14:53:49.314+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:53:49.358+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T14:53:49.371+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T14:54:43.026+08:00 127.0.0.1 "GET / HTTP/1.1" 200 -
+2026-08-10T15:08:32.640+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T15:15:02.695+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T15:15:02.819+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T15:15:02.847+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T15:15:02.899+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T15:15:03.921+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T15:25:39.602+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T15:25:39.708+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T15:25:40.227+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T15:25:40.479+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T15:25:55.855+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T15:25:55.874+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T15:25:55.874+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T15:25:55.896+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T15:29:55.575+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T15:29:55.710+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T15:29:55.718+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T15:29:55.786+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T15:29:56.104+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T15:31:10.890+08:00 127.0.0.1 "POST /api/operations-config/action HTTP/1.1" 200 -
+2026-08-10T15:31:12.059+08:00 127.0.0.1 "POST /api/operations-config/action HTTP/1.1" 400 -
+2026-08-10T15:38:32.594+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T15:55:29.054+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T15:55:29.245+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T15:55:43.359+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T15:55:43.379+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T15:55:43.380+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T15:55:43.420+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:03:39.774+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T16:03:39.800+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T16:03:40.558+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:03:40.822+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T16:03:49.255+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T16:03:49.456+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T16:03:49.465+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:03:49.548+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:03:49.791+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:05:54.443+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T16:05:54.618+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T16:05:54.630+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:05:54.736+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:05:55.457+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:08:32.637+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T16:11:03.958+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T16:11:04.093+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T16:11:04.102+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:11:04.182+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:11:04.671+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:13:28.119+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T16:13:28.250+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T16:13:28.258+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:13:28.346+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:13:28.404+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:17:36.375+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T16:17:36.552+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T16:17:37.128+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:17:37.351+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T16:18:06.090+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T16:18:06.252+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T16:18:06.260+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:18:06.349+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:18:06.930+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:22:13.778+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T16:22:13.902+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T16:22:13.907+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:22:13.975+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:22:14.018+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:23:16.291+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T16:23:16.377+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T16:23:17.098+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:23:17.445+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T16:26:51.011+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T16:26:51.138+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T16:26:51.144+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:26:51.227+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T16:26:51.272+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T16:38:32.694+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T17:08:32.804+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T17:19:49.943+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T17:19:50.143+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T17:19:56.296+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T17:20:34.394+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T17:20:34.420+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T17:20:34.427+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T17:20:34.450+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T17:21:23.538+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-10T17:21:23.654+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T17:21:31.802+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T17:21:31.819+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T17:21:31.823+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T17:21:31.853+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T17:22:26.997+08:00 127.0.0.1 "GET /operations.html HTTP/1.1" 200 -
+2026-08-10T17:22:27.117+08:00 127.0.0.1 "GET /operations.css HTTP/1.1" 200 -
+2026-08-10T17:22:27.125+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T17:22:27.196+08:00 127.0.0.1 "GET /api/operations-config HTTP/1.1" 200 -
+2026-08-10T17:22:27.239+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
+2026-08-10T17:38:33.632+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-10T18:08:32.543+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -

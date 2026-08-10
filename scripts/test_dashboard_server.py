@@ -20,6 +20,7 @@ from dashboard_server import (
     DashboardActionError,
     DashboardServer,
     archive_dashboard_task,
+    operations_config_payload,
     provider_secret_status,
     recover_dashboard_task,
     resolve_attachment_image,
@@ -434,13 +435,30 @@ class SecretApiTests(unittest.TestCase):
         self.backend = MemorySecretBackend()
         self.store = SecretStore(self.backend, "Loop Dashboard Tests", current_account="test-account")
         self.config: dict[str, Any] = copy.deepcopy(load_initialization_config())
+        self.workspace = self.base_dir / "workspace"
+        self.next_workspace = self.base_dir / "next-workspace"
+        for root in (self.workspace, self.next_workspace):
+            (root / "project").mkdir(parents=True)
+            (root / "根目录清单.md").write_text(
+                "| 文件夹名 | 说明 |\n| --- | --- |\n| `project` | test project |\n",
+                encoding="utf-8",
+            )
+        self.config["workspace"]["task_root"] = str(self.workspace)
+        self.config["workspace"]["project_registry"] = str(self.workspace / "根目录清单.md")
         self.config["dashboard"]["secret_api"]["max_body_bytes"] = 2048
         self.config["dashboard"]["secret_api"]["replay_cache_size"] = 32
+        self.config_path = self.base_dir / "initialization.json"
+        self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.db_path = self.base_dir / "unused.sqlite3"
+        database = connect(self.db_path)
+        initialize_schema(database)
+        database.close()
         self.server = DashboardServer(
             ("127.0.0.1", 0),
-            self.base_dir / "unused.sqlite3",
+            self.db_path,
             Path(__file__).resolve().parents[1] / "dashboard.html",
             self.config,
+            runtime_config_path=self.config_path,
             secret_store=self.store,
             health_state_path=self.health_state,
             provider_verifiers={"deepseek": lambda candidate: not candidate.startswith("reject-")},
@@ -501,6 +519,127 @@ class SecretApiTests(unittest.TestCase):
         status, headers, _payload = self.request("GET")
         self.assertEqual(status, 200)
         return headers["X-CSRF-Token"]
+
+    def raw_request(self, path: str) -> tuple[int, dict[str, str], bytes]:
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        try:
+            connection.request("GET", path, headers={"Host": self.server.expected_host})
+            response = connection.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            connection.close()
+
+    def test_operations_page_and_allowlisted_configuration_are_available(self) -> None:
+        for path, content_type in [
+            ("/operations.html", "text/html"),
+            ("/operations.js", "application/javascript"),
+            ("/operations.css", "text/css"),
+        ]:
+            status, headers, body = self.raw_request(path)
+            self.assertEqual(status, 200)
+            self.assertIn(content_type, headers["Content-Type"])
+            self.assertTrue(body)
+
+        status, _headers, payload = self.request("GET", "/api/operations-config")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            [section["id"] for section in payload["sections"]],
+            ["system", "ai-configuration", "operator", "planner", "supervisor", "dispatcher", "worker", "runner"],
+        )
+        serialized = json.dumps(payload, ensure_ascii=False).casefold()
+        for sensitive_name in ["secret_ref", "deepseek_api_key", "authorization", "hidden_reasoning", "request_body", "response_body"]:
+            self.assertNotIn(sensitive_name, serialized)
+        secret_item = next(item for section in payload["sections"] if section["id"] == "ai-configuration" for item in section["items"] if item["key"] == "provider-status")
+        provider = secret_item["value"][0]
+        self.assertEqual(set(provider), {"provider_id", "configured", "backend", "status", "last_validated_at", "validation_scope", "persistent", "mutable", "repair"})
+
+    def test_operations_projection_never_forwards_runtime_configuration(self) -> None:
+        payload = operations_config_payload(
+            self.config,
+            self.store,
+            self.server.provider_secret_refs,
+            self.health_state,
+        )
+        self.assertNotIn("runtime_config", payload)
+        self.assertNotIn("secret_ref", json.dumps(payload, ensure_ascii=False).casefold())
+
+    def test_task_root_editor_selects_and_atomically_updates_a_complete_workspace(self) -> None:
+        selection = {"action": "select_task_root", "request_id": str(uuid4())}
+        with patch("dashboard_server.choose_task_root", return_value=self.next_workspace):
+            status, _headers, payload = self.request("POST", "/api/operations-config/action", payload=selection)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"ok": True, "outcome": "SELECTED", "task_root": str(self.next_workspace)})
+
+        update = {
+            "action": "set_task_root",
+            "request_id": str(uuid4()),
+            "task_root": str(self.next_workspace),
+            "confirmation": "SET_TASK_ROOT",
+        }
+        status, _headers, payload = self.request("POST", "/api/operations-config/action", payload=update)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["outcome"], "UPDATED")
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["workspace"]["task_root"], str(self.next_workspace))
+        self.assertEqual(saved["workspace"]["project_registry"], str(self.next_workspace / "根目录清单.md"))
+        self.assertEqual(self.server.runtime_config["workspace"]["task_root"], str(self.next_workspace))
+
+    def test_task_root_editor_rejects_active_execution_and_cross_site_requests(self) -> None:
+        update = {
+            "action": "set_task_root",
+            "request_id": str(uuid4()),
+            "task_root": str(self.next_workspace),
+            "confirmation": "SET_TASK_ROOT",
+        }
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        database = connect(self.db_path)
+        try:
+            insert_task(
+                database,
+                {
+                    "id": "ACTIVE-TASK",
+                    "title": "active",
+                    "description": "active",
+                    "status": "PENDING",
+                    "priority": "medium",
+                    "runtime_environment": "codex_automation",
+                    "created_at": now_shanghai(),
+                    "scope": ["project/file.txt"],
+                    "acceptance": ["test"],
+                },
+                actor="test",
+                project_paths=["project"],
+            )
+            database.execute(
+                "UPDATE tasks SET status='RUNNING' WHERE id='ACTIVE-TASK'",
+            )
+            database.execute(
+                """INSERT INTO executions(
+                  execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at,
+                  runtime_environment, capability_level, execution_policy, model, reasoning,
+                  attempt_timeout_seconds, max_retries
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "active-execution", "ACTIVE-TASK", "RUNNING", now_shanghai(), now_shanghai(), now_shanghai(),
+                    "codex_automation", "L1", "automatic", "test-model", "low", 60, 0,
+                ),
+            )
+            database.commit()
+        finally:
+            database.close()
+        status, _headers, payload = self.request("POST", "/api/operations-config/action", payload=update)
+        self.assertEqual(status, 409)
+        self.assertIn("活动 execution", payload["error"])
+
+        status, _headers, payload = self.request(
+            "POST",
+            "/api/operations-config/action",
+            payload={"action": "select_task_root", "request_id": str(uuid4())},
+            headers={"Origin": "http://example.test"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"], "Origin 无效")
 
     def test_provider_secret_lifecycle_returns_only_non_sensitive_metadata(self) -> None:
         status, headers, payload = self.request("GET")

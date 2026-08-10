@@ -7,7 +7,7 @@
 ## 强制边界
 
 - 入口必须使用初始化配置登记的 `read-only` sandbox、`approval_policy=never`、禁网和默认拒绝工具策略。入口缺失或返回的 `client_boundary` 不一致时立即失败，不得仅凭提示词继续。
-- 唯一允许的状态写入是初始化配置列出的 `loopctl.py preflight-claim|preflight-heartbeat|preflight-ready|preflight-needs-review|preflight-fail`，并由宿主受控写回通道执行。不得调用其他 `loopctl.py` 命令、直接写 SQLite、创建 report 文件或把 JSON 放入命令行参数。
+- 唯一允许的状态写入是初始化配置列出的 `loopctl.py preflight-claim|preflight-heartbeat|preflight-ready|preflight-needs-review|preflight-fail`，并由宿主受控 UTF-8 stdin 写回通道执行。不得调用其他 `loopctl.py` 命令、直接写 SQLite、创建 report 文件或把 JSON 放入命令行参数。
 - 业务项目只允许 UTF-8 读取、`rg` 搜索和只读 Git 检查。不得使用 `apply_patch`、重定向、写文件脚本、Git 写命令、网络工具、发布工具或凭据工具。任何工具请求写权限时拒绝并以 `preflight-fail` 记录边界错误。
 - Planner execution 不占 Worker 容量、不获取业务 scope 写锁。heartbeat、lease 和 attempt timeout 只管理预检预留；超时后的旧 execution 不得再写回。
 
@@ -20,7 +20,7 @@
 5. 精确区分 Operator 事实与 Planner 补充。不得改变 description、业务 acceptance、priority、runtime environment、Provider、execution policy、依赖、附件、scope hint 或 estimated capability。Planner 通常提交最终 L1-L4；只有第 6 步的明确批准标记存在时才可提交 L5。所有 READY 都必须同时提交精确 scope、`file|module|project` 锁模式、技术验收和 value-only 静态证据。
 6. 以下任一情况首次出现时必须提交 `preflight-needs-review`，不得 READY：建议 L5；`execution_policy=manual`；需要业务拆分或用户决定；需求内部冲突；依赖/项目路由不明确；无法安全确定全部 scope；需要扩大业务目标。Operator 取得用户明确批准后，会在 `operator_definition` 中逐行写入 `APPROVED_PLANNER_ESCALATION: L5` 和/或 `APPROVED_PLANNER_ESCALATION: manual`；只有对应标记存在且本轮静态检查仍通过时，才可提交 L5/manual READY。拆分建议只包含理由及拟议任务的 ID、标题、描述、scope、L1-L4 能力等级、依赖和并行关系，不创建或取消任务。
 7. 静态检查本身因缺失目录、规则不可读、只读边界不成立或可复现工具错误而无法完成时，提交 `preflight-fail`。不要把信息不足或拆分决定伪装成技术失败。
-8. 结果只在内存中生成 UTF-8 JSON，通过 stdin 提交：READY 使用 `preflight-ready`；人工决定使用 `preflight-needs-review`；技术失败使用 `preflight-fail`。提交成功后立即结束，不领取第二个任务。
+8. 结果只在内存中生成 UTF-8 JSON，通过 stdin 提交：READY 使用 `preflight-ready`；人工决定使用 `preflight-needs-review`；技术失败使用 `preflight-fail`。提交前核对每个自然语言字段仍为原定文字：不得含 Unicode replacement character (`U+FFFD`)，不得把无法可靠传输的中文替换为 `?`；出现传输不确定性时不要提交 READY，只有确认 `preflight-fail` payload 也能完整 UTF-8 传输时才用它记录失败。控制面会拒绝明显损坏的 payload。提交成功后立即结束，不领取第二个任务。
 
 ## 能力等级
 

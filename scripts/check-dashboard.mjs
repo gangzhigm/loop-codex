@@ -1,8 +1,14 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const targetPath = resolve(process.argv[2] ?? "dashboard.html");
 const html = await readFile(targetPath, "utf8");
+const operationsDirectory = dirname(targetPath);
+const [operationsHtml, operationsJavaScript, operationsCss] = await Promise.all([
+  readFile(resolve(operationsDirectory, "operations.html"), "utf8"),
+  readFile(resolve(operationsDirectory, "operations.js"), "utf8"),
+  readFile(resolve(operationsDirectory, "operations.css"), "utf8"),
+]);
 const errors = [];
 
 function assert(condition, message) {
@@ -15,15 +21,57 @@ assert(!/<link[^>]+(?:stylesheet|preload)/i.test(html), "Dashboard 不能依赖�
 assert(html.includes('const STATE_ENDPOINT = "/api/state"'), "缺少状态 API");
 assert(/fetch\(STATE_ENDPOINT/.test(html), "未从状态 API 读取数据");
 assert(html.includes('const TASK_SCHEMA_VERSION = "3.7.0"'), "Schema 契约不正确");
+assert(html.includes("grid-template-columns: repeat(6, minmax(0, 1fr));"), "顶部统计区未按六项布局");
+assert(!html.includes("当前任务"), "顶部统计区仍显示当前任务指标");
+assert(!html.includes("metricTotal"), "已移除的当前任务总数仍被 DOM 或脚本引用");
+assert(!html.includes("<h1>Local Agent Loop</h1>"), "品牌标题仍作为可见 DOM 内容保留");
+assert(!html.includes("<p>本地任务运行状态</p>"), "品牌副标题仍作为可见 DOM 内容保留");
+assert(!html.includes('class="connection-meta"'), "顶部仍显示数据库版本与更新时间区域");
+assert(!html.includes("workspaceUpdated"), "已移除的顶部更新时间仍被 DOM 或脚本引用");
+assert(!html.includes("connectionLabel"), "已移除的数据库状态标签仍被 DOM 或脚本引用");
+assert(!html.includes("DB.V."), "顶部数据库版本文案仍存在");
+assert(html.includes("grid-template-columns: 36px minmax(0, 1fr) auto;"), "桌面头部品牌列未收紧为 LA 标记宽度");
+assert((html.match(/<button class="metric metric-filter"[^>]+data-filter="(?:draft|review|pending|active|closed|archived)"/g) ?? []).length === 6, "顶部统计入口数量不完整");
+assert((html.match(/class="metric-help"/g) ?? []).length === 6, "顶部统计项的状态说明图标数量不完整");
+assert((html.match(/class="metric-tooltip" role="tooltip"/g) ?? []).length === 6, "顶部统计项的状态说明浮层数量不完整");
+assert(html.includes("NEEDS_REVIEW（需确认）、WAITING_HUMAN（等待人工）、STALLED（已卡顿）"), "需确认浮层未准确说明包含状态");
+assert(html.includes("PENDING（待执行）、WAITING_CONFLICT（等待冲突）、BLOCKED（已阻塞）"), "待执行浮层未准确说明包含状态");
+assert(html.includes("SUCCEEDED（已完成）、CONFIRMED（已确认）、FAILED（失败）、CANCELLED（已取消）"), "已结束浮层未准确说明包含状态");
+assert(html.includes("archived_at 已设置的终态任务"), "已归档浮层未说明独立归档属性");
+assert(!/<div class="segments"[^>]*aria-label="任务筛选"/.test(html), "任务表头仍显示状态筛选按钮组");
+assert(html.includes('<input id="search" class="search-input"'), "任务表头搜索框缺失");
+assert(html.includes('document.querySelectorAll("[data-filter]")'), "顶部状态筛选联动事件缺失");
+assert(html.includes('<a class="operations-link" href="/operations.html">运维配置</a>'), "任务面板缺少运维配置入口");
+assert(operationsHtml.includes('href="/operations.css"'), "运维页面未加载专用样式");
+assert(operationsHtml.includes('src="/operations.js"'), "运维页面未加载专用脚本");
+assert(operationsHtml.includes('href="/" aria-label="返回任务面板"'), "运维页面缺少返回任务面板入口");
+assert(operationsJavaScript.includes('const OPERATIONS_ENDPOINT = "/api/operations-config"'), "运维页面未使用专用配置接口");
+assert(/fetch\(OPERATIONS_ENDPOINT/.test(operationsJavaScript), "运维页面未读取专用配置接口");
+assert(operationsHtml.includes('class="edit-button"'), "运维页面缺少配置编辑入口");
+assert(operationsHtml.includes('id="task-root-editor"'), "运维页面缺少全局任务工作区编辑窗口");
+assert(operationsJavaScript.includes('const OPERATIONS_ACTION_ENDPOINT = "/api/operations-config/action"'), "运维页面未使用受控配置修改接口");
+assert(operationsJavaScript.includes('action: "select_task_root"'), "运维页面未请求本机文件夹选择器");
+assert(operationsJavaScript.includes('confirmation: "SET_TASK_ROOT"'), "运维页面未确认全局任务工作区修改");
+assert(!/secret_ref|authorization|hidden_reasoning|response_body/i.test(operationsHtml + operationsJavaScript), "运维页面包含敏感字段名称");
+assert(operationsJavaScript.includes("textContent"), "运维页面未使用安全文本渲染");
+assert(operationsJavaScript.includes('"当前生效"'), "运维页面未分组展示当前生效配置");
+assert(operationsJavaScript.includes('"规划中"'), "运维页面未分组展示规划配置");
+assert(operationsCss.includes(".settings-group"), "运维页面缺少当前与规划配置的分区样式");
+assert(/@media \(max-width: 560px\)/.test(operationsCss), "运维页面缺少窄视图布局");
 
 for (const label of ["草稿", "需确认", "待执行", "执行中", "已结束", "已归档"]) {
-  assert(html.includes(`>${label}</button>`) || html.includes(`>${label}</span>`), `缺少 ${label} 生命周期入口`);
+  assert(html.includes(`<span class="metric-label">${label}`), `缺少 ${label} 生命周期入口`);
 }
 assert(html.includes('DRAFT: "草稿"'), "缺少 DRAFT 状态");
 assert(html.includes('NEEDS_REVIEW: "需确认"'), "缺少 NEEDS_REVIEW 状态");
 assert(html.includes('const PREFLIGHT_LABELS = { UNINSPECTED: "待静态检查", INSPECTING: "静态检查中"'), "缺少 Planner 预检阶段标签");
 assert(html.includes('currentFilter === "draft" && task.status !== "DRAFT"'), "草稿筛选没有精确匹配 DRAFT");
-assert(html.includes('currentFilter === "review" && task.status !== "NEEDS_REVIEW"'), "需确认筛选没有精确匹配 NEEDS_REVIEW");
+assert(html.includes('const REVIEW_STATUSES = new Set(["NEEDS_REVIEW", "WAITING_HUMAN", "STALLED"])'), "需确认状态集合不完整");
+assert(html.includes('const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"])'), "执行中状态集合不应包含等待人工或已卡顿任务");
+assert(html.includes('const confirmation = [...CLOSED_STATUSES].reduce'), "已结束顶部指标未使用统一终态集合");
+assert(html.includes('currentFilter === "review" && !REVIEW_STATUSES.has(task.status)'), "需确认筛选未使用统一状态集合");
+assert(html.includes('const review = [...REVIEW_STATUSES].reduce'), "需确认顶部指标未统计等待人工状态");
+assert(html.includes('const queued = drafts + pending;'), "状态分布将需确认重复计入待处理");
 assert(html.includes('task.status === "DRAFT" ? `${STATUS_LABELS[task.status]} · ${PREFLIGHT_LABELS[task.preflight_status]}`'), "草稿未展示静态检查阶段");
 assert(!html.includes('currentFilter === "attention"'), "旧的需关注筛选仍在使用");
 assert(!html.includes('const ATTENTION_STATUSES'), "旧的需关注状态集合仍在使用");
@@ -67,6 +115,11 @@ assert(html.includes('if (activeHeaderFilter) renderHeaderFilterMenu();'), "自�
 assert(/\.planner-meta\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/.test(html), "Planner 详情缺少稳定网格布局");
 assert(/@media \(max-width: 760px\)[\s\S]*?\.planner-meta\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/.test(html), "窄视图 Planner 信息未折叠为单列");
 assert(html.includes('overflow-wrap: anywhere'), "长路径缺少可换行展示");
+assert(html.includes('data-capability-level="${escapeHtml(level)}"'), "任务档位卡未声明可点击等级参数");
+assert(html.includes('function handleCapabilityAction(capabilityLevel)'), "任务档位卡未绑定空点击处理函数");
+assert(html.includes('handleCapabilityAction(button.dataset.capabilityLevel)'), "任务档位卡点击未调用等级处理函数");
+assert(html.includes('.profile-row:hover {'), "任务档位卡缺少悬浮效果");
+assert(html.includes('.profile-row:active {'), "任务档位卡缺少按下效果");
 
 const allIds = [...html.matchAll(/\sid=["']([^"']+)["']/g)].map((match) => match[1]);
 const ids = new Set(allIds);

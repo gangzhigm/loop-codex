@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Local Agent Loop 运维配置</title>
+  <link rel="stylesheet" href="/operations.css">
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="返回任务面板">LA</a>
+    <div>
+      <p class="eyebrow">Local Agent Loop</p>
+      <h1>运维配置</h1>
+    </div>
+    <a class="dashboard-link" href="/">任务面板</a>
+  </header>
+  <main>
+    <section class="overview" aria-labelledby="overview-title">
+      <div>
+        <p class="eyebrow">只读目录</p>
+        <h2 id="overview-title">本机运行配置</h2>
+      </div>
+      <p id="updated-at" class="updated-at" aria-live="polite">正在读取配置</p>
+    </section>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <nav id="section-nav" class="section-nav" aria-label="配置分组"></nav>
+    <div id="sections" class="sections"></div>
+  </main>
+  <template id="item-template">
+    <article class="setting">
+      <div class="setting-heading">
+        <h3></h3>
+        <div class="setting-actions">
+          <span class="state"></span>
+          <button class="edit-button" type="button" hidden>编辑</button>
+        </div>
+      </div>
+      <div class="value"></div>
+      <dl class="metadata">
+        <div><dt>配置来源</dt><dd class="source"></dd></div>
+        <div><dt>生效方式</dt><dd class="activation"></dd></div>
+        <div><dt>非敏感校验</dt><dd class="validation"></dd></div>
+      </dl>
+      <p class="description"></p>
+    </article>
+  </template>
+  <dialog id="task-root-editor" class="task-root-editor" aria-labelledby="task-root-editor-title">
+    <form method="dialog">
+      <div class="editor-header">
+        <h2 id="task-root-editor-title">编辑全局任务工作区</h2>
+        <button id="cancel-task-root" class="icon-button" value="cancel" aria-label="关闭">x</button>
+      </div>
+      <label for="task-root-value">工作区文件夹</label>
+      <div class="task-root-selection">
+        <input id="task-root-value" type="text" readonly>
+        <button id="select-task-root" type="button">选择文件夹</button>
+      </div>
+      <p id="task-root-message" class="editor-message" role="status" aria-live="polite"></p>
+      <div class="editor-footer">
+        <button value="cancel">取消</button>
+        <button id="save-task-root" type="button" disabled>保存</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/operations.js"></script>
+</body>
+</html>

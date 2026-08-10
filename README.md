@@ -38,6 +38,7 @@ SQLite 只保存任务及其执行一致性数据：任务内容和历史、每�
 py -3 .\scripts\loopctl.py validate
 py -3 .\scripts\loopctl.py state
 py -3 .\scripts\loopctl.py migrate
+py -3 .\scripts\loopctl.py migrate-legacy --tasks .\TASKS.json --inbox .\INBOX.json --registry ..\根目录清单.md
 py -3 .\scripts\loopctl.py enqueue .\new-task.json
 py -3 .\scripts\loopctl.py update INIT-001 .\task-patch.json
 py -3 .\scripts\loopctl.py preflight-claim planner-<GUID> --runtime-environment codex_automation --sandbox read-only
@@ -54,7 +55,7 @@ py -3 .\scripts\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action 
 py -3 .\scripts\loopctl.py resolve-human TASK-ID --response "人工确认内容"
 ```
 
-`cancel` 保留历史，不物理删除任务。新建任务和原始定义变更都进入 `DRAFT/UNINSPECTED`；`requeue` 处理 `DRAFT/NEEDS_REVIEW` 时仍回到预检阶段，不能直接生成 PENDING。Planner 提交 READY 才在一个事务中写入最终执行契约并形成 `DRAFT -> PENDING`。当 Worker 已完成全部实现和验证、`WAITING_HUMAN` 只缺最后一个人工事实时，`resolve-human` 要求非空 Worker verification、无活动 execution 和明确人工答复，可直接形成 `WAITING_HUMAN -> SUCCEEDED`。`confirm` 只接受 `SUCCEEDED`；归档仍是独立 nullable `archived_at` 属性。
+`migrate` 只用于既有 SQLite 的 Schema 升级；`migrate-legacy` 只用于一次性导入旧 `TASKS.json` 和 `INBOX.json`，会先备份输入并要求项目清单存在且可解析。两者都不是空系统初始化入口。`cancel` 保留历史，不物理删除任务。新建任务和原始定义变更都进入 `DRAFT/UNINSPECTED`；`requeue` 处理 `DRAFT/NEEDS_REVIEW` 时仍回到预检阶段，不能直接生成 PENDING。Planner 提交 READY 才在一个事务中写入最终执行契约并形成 `DRAFT -> PENDING`。当 Worker 已完成全部实现和验证、`WAITING_HUMAN` 只缺最后一个人工事实时，`resolve-human` 要求非空 Worker verification、无活动 execution 和明确人工答复，可直接形成 `WAITING_HUMAN -> SUCCEEDED`。`confirm` 只接受 `SUCCEEDED`；归档仍是独立 nullable `archived_at` 属性。
 
 Dashboard 的“已结束”分段为未归档终态任务提供归档按钮；`WAITING_HUMAN` 隔离任务的详情提供重新排队、标记失败和继续等待入口。本地 `POST /api/task-action` 只接受固定的 `archive/recover` 结构并以固定参数调用 `loopctl.py`。归档与恢复都使用乐观 `row_version`；恢复还校验 execution ID、`STALLED/TIMED_OUT` 与 `QUARANTINED`，并要求明确确认旧 Codex 会话结束。
 
@@ -74,11 +75,11 @@ $resultJson | py -3 .\scripts\loopctl.py finish <execution-id> <task-id> -
 
 `finish` 默认从 stdin 读取 UTF-8 JSON，也兼容显式 JSON 文件路径。正常流程不持久化中间 report。`claim` 强制显式提供 `runtime_environment`、`capability_level` 和 `execution_policy`，只扫描三个字段同时匹配的 READY 任务；冲突候选保持 `PENDING` 并动态投影 blocker、blocked scope 和 queue position，claim 继续寻找其他可运行 scope。旧 `WAITING_CONFLICT` 仅作迁移审计兼容。全局 8、平台 5、依赖与 scope 锁跨运行环境共同生效。它可能返回 `CLAIMED`、`NO_TASK`、`SLOT_FULL`、`CONFLICT` 或 `RECOVERY_REQUIRED`；除 `CLAIMED` 外均立即结束。
 
-Planner 预检是与 Worker execution 分离的状态机：`UNINSPECTED -> INSPECTING -> READY|FAILED`。入口必须声明 `codex_automation/read-only`，claim 只返回 Operator 业务定义和只读边界；预检结果只接受 UTF-8 stdin。READY 原子写入最终能力等级、精确 scope、`file|module|project` 锁模式、技术验收和检查证据，并把 DRAFT 转为 PENDING；首次 L5/manual、信息不足、需求冲突或需要拆分决定时转为 NEEDS_REVIEW。用户明确批准 L5/manual 后，Operator 把对应 `APPROVED_PLANNER_ESCALATION` 标记写回业务定义，Planner 复检通过才可 READY。拆分建议不自动创建任务。
+Planner 预检是与 Worker execution 分离的状态机：`UNINSPECTED -> INSPECTING -> READY|FAILED`。入口必须声明 `codex_automation/read-only`，claim 只返回 Operator 业务定义和只读边界；预检结果只接受 UTF-8 stdin。控制面会拒绝含 Unicode replacement character 或连续四个以上 `?` 的 Planner payload，避免明显编码损坏写入任务事实。READY 原子写入最终能力等级、精确 scope、`file|module|project` 锁模式、技术验收和检查证据，并把 DRAFT 转为 PENDING；首次 L5/manual、信息不足、需求冲突或需要拆分决定时转为 NEEDS_REVIEW。用户明确批准 L5/manual 后，Operator 把对应 `APPROVED_PLANNER_ESCALATION` 标记写回业务定义，Planner 复检通过才可 READY。拆分建议不自动创建任务。
 
 Worker claim 同时返回 scope 锁凭证。Worker 必须在第一次编辑前核对 execution/task/lock 状态；新增范围只能先把 `{"scope":[...]}` 通过 stdin 提交给 `extend-scope`，并在返回更新后的锁凭证后写入。Codex CLI 子模型和 self-hosted 模型不直接管理队列；它们需要新范围时由持有 execution 的 Runner/宿主执行相同扩锁契约。
 
-Codex Worker 可自行清理当前 execution 在任务登记项目内明确新生成且仍未被 Git 跟踪的普通临时文件，不需要额外 `delete` 批准。自动清理要求执行前状态、生成命令与时间证据，只允许逐个精确文件路径，并禁止目录、符号链接/重解析点、源码、配置、凭据、用户数据、通配符、递归删除和跨项目操作。Git 已跟踪、execution 前已存在或归属不明的文件仍需人工授权；清理后必须复核 Git 状态并记录 verification。自建 Agent Runtime 当前没有删除工具，不适用该例外。
+Codex Worker 可自行清理当前 execution 在任务登记项目内明确新生成且仍未被 Git 跟踪的普通临时文件，不需要额外 `delete` 批准。自动清理要求执行前状态、生成命令与时间证据，只允许逐个精确文件路径，并禁止目录、符号链接/重解析点、源码、配置、凭据、用户数据、通配符、递归删除和跨项目操作。Git 已跟踪、execution 前已存在或归属不明的文件原则上仍需人工授权；唯一例外是当前 execution 可证明生成或改写的同项目 `__pycache__/*.pyc`。当执行前完整 Git 基线证明精确缓存路径没有工作区或暂存改动、索引未变化且具体 Python/测试命令和时间可证明归属时，Codex 自动化与 Codex CLI 可用逐个精确路径仅恢复工作区到索引中的执行前内容，不删除文件、不修改索引，也不受 task.scope 限制。恢复后必须复核该路径完全干净并记录 verification；缺少任一证据仍进入 `WAITING_HUMAN`。该例外不适用于任何源码、配置、资源、数据库、文档或其他已跟踪文件。自建 Agent Runtime 当前没有删除或恢复工具，不适用这些例外。
 
 Codex 客户端的 heartbeat stalled、renewable lease expiry 与 attempt timeout 独立计算。任一存活性条件触发后，任务进入 `WAITING_HUMAN`，execution 转为非活动 `STALLED`；attempt timeout 到达后进一步转为 `TIMED_OUT`。这会释放全局和平台活动容量，但 scope lock 转为 `QUARANTINED`，继续阻止同项目写入。只有人工确认旧客户端会话已结束后，才能用 `recover --human-confirmed-safe --action requeue|failed|wait` 处置；迟到 heartbeat/finish 会被 execution fencing 拒绝。受控 Runner 平台改用 `--runner-confirmed-terminated`。
 
