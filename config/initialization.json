@@ -250,7 +250,7 @@
           "Pause all five Codex Worker automations before rollback.",
           "Confirm active_executions=0 and that no old client session can still edit.",
           "Restore both the database and initialization configuration from this backup set.",
-          "Restart Dashboard Server through scripts/health_run.py and validate Schema, API, task count, and database integrity before reactivating Workers.",
+          "Restart Dashboard Server through scripts/roles/supervisor/health_run.py and validate Schema, API, task count, and database integrity before reactivating Workers.",
           "Only Operator may reactivate or modify the five real Codex automations."
         ]
       },

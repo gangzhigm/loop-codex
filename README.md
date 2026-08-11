@@ -2,7 +2,9 @@
 
 `E:\code\local-agent-loop` 是 `E:\code` 下跨项目任务的并发执行中心。Operator 管理业务事实，Planner 做只读静态预检，Worker 执行 READY 任务，Windows 健康任务维护 Dashboard Server。
 
-## 固定配置
+## 当前配置摘要
+
+以下内容用于说明当前部署，不是第二份配置源；具体值始终以 `config/initialization.json` 为准。
 
 - 任务数据库：`E:\code\local-agent-loop\data\loop-agent.sqlite3`（Schema 3.7.0）
 - 初始化配置：`config/initialization.json`
@@ -10,8 +12,8 @@
 - Planner：独立 Terra/high 自动化每 5 分钟唤起一次，固定 read-only、禁网、默认拒绝，仅通过受控 `loopctl preflight-*` stdin 通道写回
 - Worker：L1 至 L5 五条 automatic 定时自动化各自每 20 分钟唤起一次；`L5/manual` 仅人工批准后一次性执行
 - 运行环境：`codex_automation`、`codex_cli`、`self_hosted_agent`；当前定时自动化固定为 `codex_automation`
-- Codex CLI Runner：`scripts/codex_cli_runner.py` 每次只领取并执行一个 `codex_cli` 任务，不包含调度循环或服务常驻
-- 自建 Agent：`scripts/agent_runtime.py` 提供与具体模型无关的单任务工具循环；真实模型适配由外部 Provider 工厂注入
+- Codex CLI Runner：`scripts/roles/runner/codex_cli_runner.py` 每次只领取并执行一个 `codex_cli` 任务，不包含调度循环或服务常驻
+- 自建 Agent：`scripts/roles/runner/agent_runtime.py` 提供与具体模型无关的单任务工具循环；真实模型适配由外部 Provider 工厂注入
 - SecretStore：默认 `os_keyring`；Windows 原生使用 Credential Manager，macOS/Linux 通过系统 keyring 适配器访问 Keychain/Secret Service；显式 `environment` 仅用于进程级临时注入
 - 并发：全局最多 8 个活动 execution，并同时受每个平台最多 5 个活动 execution 约束
 - Windows 健康任务：默认每 30 分钟运行一次，连续 3 次恢复失败告警
@@ -21,6 +23,27 @@
 - 文本编码：UTF-8
 
 SQLite 只保存任务及其执行一致性数据：任务内容和历史、每项任务所选运行环境、能力等级、Provider、执行策略、execution、租约、scope 锁与任务冲突。运行环境目录及入口配置、自动化周期、并发参数、SecretStore 后端和非敏感 `secret_ref`、服务部署配置只在 `config/initialization.json`；密钥值只在所选系统密钥库或显式进程环境中；项目清单实时读取；服务健康状态只在 `runtime/health-state.json`。
+
+## 权威来源
+
+| 信息或职责 | 权威来源 |
+| --- | --- |
+| 跨角色安全边界与角色入口 | `AGENTS.md` |
+| Operator 任务管理行为 | `prompts/operator.md` |
+| Planner 静态预检行为与结果契约 | `prompts/planner.md` |
+| Codex 客户端自动化 Worker 行为与结果契约 | `prompts/worker.md` |
+| Codex CLI 子进程的单任务行为与结果契约 | `prompts/cli-worker.md` |
+| Codex CLI 的 claim、heartbeat、超时、进程管理与 finish | `scripts/roles/runner/codex_cli_runner.py` |
+| Self-hosted Agent 的宿主循环、工具和执行边界 | `scripts/roles/runner/agent_runtime.py` |
+| Provider 模型协议适配 | 对应 Provider 适配器；当前实现为 `scripts/loop_agent/providers/deepseek.py` |
+| 运行环境、模型、周期、并发、执行与部署配置 | `config/initialization.json` |
+| 任务、预检与 execution 的当前事实 | `data/loop-agent.sqlite3` |
+| Schema、状态迁移、队列和 scope 锁的强制规则 | `schemas/loop-agent.sql`、`scripts/loop_agent/`；`scripts/loopdb.py` 与 `scripts/loopctl.py` 是稳定兼容入口 |
+| 项目路由 | 实时读取 `E:\code\根目录清单.md` |
+| Dashboard 健康状态 | `runtime/health-state.json` |
+| 架构和操作说明 | `README.md` 及相关说明文档；说明文字不得覆盖上述运行时来源 |
+
+若说明文字与运行时配置、任务事实或控制代码冲突，以表中对应运行时来源为准，同时修正文档；`AGENTS.md` 的全局安全红线仍然叠加适用。
 
 ## 角色
 
@@ -88,13 +111,13 @@ Codex 客户端的 heartbeat stalled、renewable lease expiry 与 attempt timeou
 Codex CLI 单次入口：
 
 ```powershell
-py -3 .\scripts\codex_cli_runner.py --capability-level L2 --execution-policy automatic
+py -3 .\scripts\roles\runner\codex_cli_runner.py --capability-level L2 --execution-policy automatic
 ```
 
 Codex CLI 单一调度入口：
 
 ```powershell
-py -3 .\scripts\codex_cli_dispatcher.py
+py -3 .\scripts\roles\dispatcher\codex_cli_dispatcher.py
 ```
 
 Dispatcher 只读检查 `codex_cli` 的 `PENDING` 且依赖已满足任务，沿用既有优先级、创建时间和 ID 顺序选出一个能力等级，并最多启动一次 Runner。原子领取、全局 8、平台 5、scope 冲突和最终状态仍由 Runner 的单次 `claim` 裁决；`NO_TASK`、`SLOT_FULL` 或 `CONFLICT` 不会触发第二个等级。`codex_cli.dispatcher` 是周期、任务名称、当前用户身份、工作目录、超时和日志边界的唯一来源。
@@ -102,7 +125,7 @@ Dispatcher 只读检查 `codex_cli` 的 `PENDING` 且依赖已满足任务，沿
 Windows 安装脚本仅在人工批准部署后运行；本轮不会注册或修改任务计划。先用 dry-run 核对命令：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_codex_cli_task.ps1 -DryRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\installers\install_codex_cli_task.ps1 -DryRun
 ```
 
 授权部署后运行同一脚本（不带 `-DryRun`）。停止或回滚时禁用或删除该任务计划，并恢复本次 Dispatcher、安装脚本与配置变更；这仍不是完整 Supervisor，未提供常驻重试、跨轮恢复或多 Runner 编排。
@@ -114,7 +137,7 @@ Runner 从 `codex_cli` 配置读取能力等级对应的模型与思考参数、
 自建 Agent 单次入口：
 
 ```powershell
-py -3 .\scripts\agent_runtime.py `
+py -3 .\scripts\roles\runner\agent_runtime.py `
   --runtime-environment self_hosted_agent `
   --provider-id deepseek `
   --capability-level L2 `
@@ -123,7 +146,7 @@ py -3 .\scripts\agent_runtime.py `
   --provider your_provider_package:create_provider
 ```
 
-Provider 工厂必须接受 `config` 与 `secret_store` 关键字参数，返回实现 `complete(request, timeout_seconds)` 的对象，并把任何模型 API 响应转换为协议版本 `1.0` 的 `tool_calls` 或 `final` 对象。Runtime 创建统一 SecretStore 并注入 Provider；Provider 不得另建密钥存储或直接读取持久化凭据。`scripts/deepseek_provider.py` 提供 DeepSeek Chat Completions 适配器，采用标准库 HTTP、非流式响应、限次退避重试和本地工具参数校验；模型调用本身不执行工具，重试只发生在工具结果尚未返回运行时之前。
+Provider 工厂必须接受 `config` 与 `secret_store` 关键字参数，返回实现 `complete(request, timeout_seconds)` 的对象，并把任何模型 API 响应转换为协议版本 `1.0` 的 `tool_calls` 或 `final` 对象。Runtime 创建统一 SecretStore 并注入 Provider；Provider 不得另建密钥存储或直接读取持久化凭据。`scripts/loop_agent/providers/deepseek.py` 提供 DeepSeek Chat Completions 适配器，采用标准库 HTTP、非流式响应、限次退避重试和本地工具参数校验；模型调用本身不执行工具，重试只发生在工具结果尚未返回运行时之前。
 
 DeepSeek Provider 的公开失败诊断是允许列表式结构：`category`、`http_status`、`retryable`、`retry_exhausted`、`finish_reason`、`agent_attempt` 和 `model_step`。类别仅包括鉴权、限流、服务端、连接、请求超时、空或畸形响应、截断响应、无效工具调用、无效最终 JSON、本地协议和未知结束原因。401/403 和本地配置/批准问题进入 `WAITING_HUMAN`；429、5xx、连接或请求超时会受 Provider 配置约束重试，并在耗尽后标记 `retry_exhausted=true`。Runtime 只接受该受信任诊断契约；未知异常只公开固定前缀和异常类型。诊断、事件和最终结果绝不包含 API key、Authorization、请求或响应正文、完整提示词、工具参数值、业务文件内容或隐藏推理。
 
@@ -140,11 +163,11 @@ Runtime 在每轮工具调用后保留对应的 assistant `tool_calls`，Provide
 DeepSeek 的非敏感端点、模型、超时、重试和 `secret_ref` 位于 `config/initialization.json`。密钥由统一 SecretStore 按引用读取；缺失、账户不符、权限不足或后端不可用会快速失败且不打印其值。先用隐藏输入初始化并查看不含原值或掩码的状态：
 
 ```powershell
-py -3 .\scripts\secretctl.py status deepseek
-py -3 .\scripts\secretctl.py set deepseek
-py -3 .\scripts\secretctl.py verify deepseek
-py -3 .\scripts\secretctl.py rotate deepseek
-py -3 .\scripts\secretctl.py delete deepseek
+py -3 .\scripts\roles\operator\secretctl.py status deepseek
+py -3 .\scripts\roles\operator\secretctl.py set deepseek
+py -3 .\scripts\roles\operator\secretctl.py verify deepseek
+py -3 .\scripts\roles\operator\secretctl.py rotate deepseek
+py -3 .\scripts\roles\operator\secretctl.py delete deepseek
 ```
 
 `set`、`rotate` 从隐藏终端输入读取且要求重复输入；`rotate` 与 `delete` 还要求人工确认。添加 `--connect` 会再次提示可能产生一次 Provider 调用，只有输入 `CONNECT` 才联网。临时冒烟需要在配置中显式选择 `secret_management.backend=environment`，并由启动进程注入与 `deepseek.secret_ref` 同名的环境变量；该后端不持久化，`secretctl` 不会假装把子进程环境写回父进程。
@@ -152,13 +175,13 @@ py -3 .\scripts\secretctl.py delete deepseek
 也可从 Dashboard 设置抽屉执行配置、替换、本地验证、显式确认的连接验证和删除。浏览器只把一次性输入交给同源 Dashboard Server；Server 复用同一个 SecretStore，不创建任务、不写 SQLite，也不把密钥交给 Operator 或 Worker。最近验证状态以非敏感事件写入 `runtime/health-state.json`；运行账户与 `secret_management.access_account` 不一致时界面只报告存储不可用及修复建议，不会静默复制第二份密钥。
 
 ```powershell
-py -3 .\scripts\agent_runtime.py `
+py -3 .\scripts\roles\runner\agent_runtime.py `
   --runtime-environment self_hosted_agent `
   --provider-id deepseek `
   --capability-level L2 `
   --execution-policy automatic `
   --execution-id deepseek-worker-<GUID> `
-  --provider deepseek_provider:create_provider
+  --provider loop_agent.providers.deepseek:create_provider
 ```
 
 停止方式是让单次运行自然结束；需要人工停止时终止该进程。受控 Runner 确认进程树退出后可执行安全恢复；Codex 客户端则必须人工确认旧会话结束。备份不包含密钥；密钥库丢失或迁移账户后必须重新运行 `secretctl.py set deepseek`。不要修改任务数据库或把密钥写入配置。未获得任务内 `credential_access` 批准前，Provider 不读取密钥；本轮也没有写入真实系统凭据或调用真实模型。
@@ -172,21 +195,19 @@ py -3 .\scripts\agent_runtime.py `
 - `prompts/planner.md`：Planner 自动化的单任务只读预检和结构化写回提示词。
 - `prompts/worker.md`：Codex Worker 自动化的权威提示词。
 - `prompts/cli-worker.md`：Codex CLI 子进程的单任务业务执行与结果契约提示词。
-- `scripts/loopdb.py`：任务库访问与状态投影。
-- `scripts/loopctl.py`：任务管理与 Worker 事务协议。
-- `scripts/check-initialization.ps1`：只读核对 Planner 边界、五条 Worker 与 Operator 切换清单。
-- `scripts/codex_cli_runner.py`：Codex CLI 单任务 claim、heartbeat、进程管理、结果校验和 finish 入口。
-- `scripts/agent_runtime.py`：通用自建 Agent 的单次运行入口、Provider 协议与受限工具层。
-- `scripts/deepseek_provider.py`：DeepSeek Chat Completions 到中立 Provider 协议的适配器。
-- `scripts/secret_store.py`：统一 SecretStore 契约、系统密钥库与显式环境后端。
-- `scripts/secretctl.py`：隐藏输入、状态、校验、轮换和删除命令。
-- `scripts/dashboard_server.py`：本地 HTTP 状态服务、受限归档接口与同源 Secret API。
-- `scripts/health_run.py`：Dashboard 健康检查和恢复。
-- `scripts/install_health_task.ps1`：按初始化配置注册或更新 Windows 健康任务。
-- `scripts/test_loop.py`：并发、冲突、租约和确认回归测试。
-- `scripts/test_codex_cli_runner.py`：假 Codex CLI 的 JSONL、超时、脱敏、scope 和真实 finish 回归测试。
-- `scripts/test_agent_runtime.py`：假 Provider、工具边界、心跳和真实 finish 回归测试。
-- `scripts/test_deepseek_provider.py`：本地假 HTTP 服务的 DeepSeek 工具循环、重试和脱敏边界回归测试。
+- `scripts/README.md`：脚本职责树、依赖方向、排障顺序与回归命令。
+- `scripts/loopdb.py`：数据库公共 API 的稳定兼容门面；实际实现位于 `scripts/loop_agent/database/` 与 `scripts/loop_agent/tasks/`。
+- `scripts/loopctl.py`：稳定 CLI 参数与命令分发；Operator、Planner、Worker 和恢复状态机位于 `scripts/loop_agent/control/`。
+- `scripts/checks/`：Dashboard 和初始化的只读结构检查。
+- `scripts/installers/`：Windows 健康任务与 Codex CLI 调度任务安装器。
+- `scripts/tests/`：并发、状态机、Dashboard、Runner、Provider 和 SecretStore 回归测试。
+- `scripts/roles/runner/codex_cli_runner.py`：Codex CLI 单任务 claim、heartbeat、进程管理、结果校验和 finish 入口。
+- `scripts/roles/runner/agent_runtime.py`：通用自建 Agent 的单次运行和兼容导出入口；Provider 协议、受限工具和编排位于 `scripts/loop_agent/runtime/`。
+- `scripts/loop_agent/providers/deepseek.py`：DeepSeek Chat Completions 到中立 Provider 协议的适配器。
+- `scripts/loop_agent/secrets/store.py`：统一 SecretStore 契约、系统密钥库与显式环境后端。
+- `scripts/roles/operator/secretctl.py`：隐藏输入、状态、校验、轮换和删除命令。
+- `scripts/roles/supervisor/dashboard_server.py`：本地 HTTP 路由和同源 Secret API；任务动作与运维配置实现位于 `scripts/loop_agent/dashboard/`。
+- `scripts/roles/supervisor/health_run.py`：Dashboard 健康检查和恢复。
 - `dashboard.html`：监控页面模板。
 - `runtime/`：PID、日志、健康状态和短时锁；不是任务事实源。
 - `backups/`：迁移前快照和旧产物，仅用于审计恢复。

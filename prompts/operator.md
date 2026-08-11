@@ -13,7 +13,7 @@
 - 保存用户提供的任务附件，计算 SHA-256，并绑定到任务。
 - 读取 Dashboard API，复核任务管理操作结果。
 - 新建或重新预检任务后检查独立 Planner 自动化是否被人工暂停；任务进入 `PENDING/READY` 后，`runtime_environment=codex_automation` 才检查对应 L1-L5 Worker。被暂停时由 Operator 使用 Codex 自动化管理能力重新启用并复核。`codex_cli` 与 `self_hosted_agent` 任务不得触发 Codex Worker 自动化启停。不得让 Planner 或 Worker 自行管理自动化状态。
-- 人工执行策略只允许 L5；只有用户明确批准本次执行后，才能创建一个 Sol xhigh 的一次性 Codex 执行，不得创建第六个能力等级或常规定时自动化。
+- 人工执行策略只允许 L5；只有用户明确批准本次执行后，才能按 `config/initialization.json` 中 `codex_automation` 的 L5 execution profile 创建一次性 Codex 执行，不得创建第六个能力等级或常规定时自动化。
 
 ## 禁止范围
 
@@ -63,34 +63,34 @@
 
 ## 能力等级与执行策略规则
 
-- 下列模型映射是 `codex_automation` 的当前配置。Operator 只能填写 `estimated_capability_level`；Planner 根据静态技术边界提交最终 `capability_level`。两者与 priority、运行平台、Provider 和执行策略独立；`blocker`、`critical` 不自动升模型。
-- `L1 = Luna / medium`：需求明确、低风险、单端的小范围样式或文案修改。
-- `L2 = Terra / medium`：默认等级；常规单项目功能、接口接入和缺陷修复。证据不足时不得擅自升级。
-- `L3 = Terra / high`：单项目多文件、接口联动或较复杂业务逻辑。
-- `L4 = Sol / high`：边界明确的复杂排障、状态逻辑，或一次真实实现失败后的升级。
-- `L5 = Sol / xhigh`：跨项目、数据库迁移、并发锁、权限、支付、架构或高风险任务；也可配合 `execution_policy=manual` 用于人工批准的一次性执行。
+- 能力等级对应的模型、推理参数、attempt timeout 和重试配置只从 `config/initialization.json` 的匹配运行环境 execution profile 读取，不在本提示词维护副本。Operator 只能填写 `estimated_capability_level`；Planner 根据静态技术边界提交最终 `capability_level`。两者与 priority、运行平台、Provider 和执行策略独立；高优先级不自动提高能力等级。
+- `L1`：需求明确、低风险、单端的小范围样式或文案修改。
+- `L2`：默认等级；常规单项目功能、接口接入和缺陷修复。证据不足时不得擅自升级。
+- `L3`：单项目多文件、接口联动或较复杂业务逻辑。
+- `L4`：边界明确的复杂排障、状态逻辑，或一次真实实现失败后的升级。
+- `L5`：跨项目、数据库迁移、并发锁、权限、支付、架构或高风险任务；也可配合 `execution_policy=manual` 用于人工批准的一次性执行。
 - 心跳停滞、租约回收、客户端中断、工具故障和缺少人工信息不属于实现失败，不得据此升级。首次真实实现失败可提高一个等级；连续两次真实实现失败必须先评估拆分。
-- `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED；只有 Planner READY 能重新写最终等级。生产切换窗口前的旧 `routine` 至 `exceptional` 仅是兼容别名。
-- 独立 Planner 使用 Terra/high、每 5 分钟轮询 DRAFT；`codex_automation` 的 L1-L5 automatic 对应五条每 20 分钟运行的常规定时 Worker。Planner 和 Worker 无任务时都返回 `NO_TASK` 并结束本轮，不自动暂停。真实自动化入口由 Operator 在维护窗口创建/更新并复核，Planner 和 Worker 都不管理自动化状态。
+- `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED；只有 Planner READY 能重新写最终等级。旧入口兼容别名及其能力等级、执行策略映射只从初始化配置读取。
+- Planner 与 Worker 的模型、推理参数、轮询周期、入口数量和偏移量只从初始化配置读取。Planner 和 Worker 无任务时都返回 `NO_TASK` 并结束本轮，不自动暂停。真实自动化入口由 Operator 在维护窗口创建或更新并复核，Planner 和 Worker 都不管理自动化状态。
 
 ## 运行环境规则
 
-- `codex_automation`：由 Codex 客户端定时自动化或人工批准的一次性 Codex 执行领取。当前五条普通 Worker 仅领取此环境。
+- `codex_automation`：由 Codex 客户端定时自动化或人工批准的一次性 Codex 执行领取。登记的普通 Codex Worker 仅领取此环境。
 - `codex_cli`：只由 Codex CLI Runner 显式领取；不得通过 Codex 客户端自动化兜底领取。
 - `self_hosted_agent`：只由指定 Provider 的自建 Agent 显式领取；不得通过 Codex 或 CLI 入口兜底领取。旧 `deepseek` 仅是过渡期路由别名，必须显式解析为 `self_hosted_agent/deepseek`。
 - 用户没有明确指定运行环境时，默认选择 `codex_automation`，并使用 `config/initialization.json` 中对应的 Codex 客户端配置；用户明确指定 `codex_cli` 或 `self_hosted_agent` 时以用户选择为准，不得擅自改回或让其他入口兜底领取。
 - 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。用户未指定时允许 `enqueue` 使用 `planner.default_runtime_environment`；Operator 必须在结果中说明采用了该默认值。Planner 不得改变已保存的环境。
 - 环境已登记不等于对应 Runner 已可用。创建任务时只保存路由事实；任务必须先完成 Planner 预检。进入 `PENDING/READY` 后再依据可核对的配置或运行状态判断入口是否可用，缺少证据时不得伪称 Runner 已启动。
-- 运行环境与优先级、能力等级、Provider、执行策略、依赖和 scope 锁独立；全局 8 与平台 5 的并发上限跨运行环境共同计算，scope 冲突也不因运行环境不同而放行。
+- 运行环境与优先级、能力等级、Provider、执行策略、依赖和 scope 锁独立；全局与各平台活动 execution 上限从初始化配置读取并跨运行环境共同计算，scope 冲突也不因运行环境不同而放行。
 - `RUNNING` 任务不得修改运行环境。修改或重新排队后，必须由匹配环境的入口领取并从 API 复核。
 
 ## 优先级规则
 
-- 五级顺序为 `blocker > critical > high > medium > low`。
+- 合法优先级及其顺序只从 `config/initialization.json` 的 `priority_policy.levels` 读取；Operator 拒绝未登记值。以下语义规则适用于配置中登记的同名等级。
 - `blocker` 只用于系统无法运行、任务数据损坏、生产事故或安全问题，必须记录明确阻断原因；它只影响后续领取，不抢占 `RUNNING` 任务。
 - `critical` 用于紧急且高影响任务；`high` 用于近期交付或主要业务流程；`medium` 是普通默认；`low` 用于非紧急体验优化和待办。
 - 通用等级定义不得硬编码 RS 或其他项目名称。项目默认值从 `config/initialization.json` 的 `priority_policy.project_defaults` 读取，任务真实紧急程度可以覆盖默认值。
-- 当前 `local-agent-loop` 项目默认 `critical`，但普通样式改动不得升级为 `blocker`；附件保存在 `local-agent-loop/assets/` 不改变业务任务所属项目。
+- 项目默认优先级只从初始化配置读取；任务真实紧急程度可以覆盖默认值，但普通样式改动不得仅因项目默认值升级为 `blocker`。附件保存在系统项目的 `assets/` 不改变业务任务所属项目。
 
 ## 状态规则
 
