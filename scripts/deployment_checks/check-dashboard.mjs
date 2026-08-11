@@ -1,5 +1,5 @@
 /**
- * 中文排查：对 Dashboard 与运维页面做静态契约检查，不启动浏览器也不写运行数据。
+ * 部署校验：对当前真实 Dashboard 与运维页面做静态契约检查，不启动浏览器也不写运行数据。
  * 断言失败时先根据中文消息搜索对应 DOM、常量或事件绑定，再判断是页面遗漏还是检查已过期。
  * 本脚本只读取 UTF-8 文件；新增页面能力时应同时增加正向存在性和旧实现移除检查。
  */
@@ -7,7 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
-const targetPath = resolve(process.argv[2] ?? "dashboard.html");
+const targetPath = resolve(process.argv[2] ?? "frontend/dashboard.html");
 const html = await readFile(targetPath, "utf8");
 const operationsDirectory = dirname(targetPath);
 const [operationsHtml, operationsJavaScript, operationsCss] = await Promise.all([

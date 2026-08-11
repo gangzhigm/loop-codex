@@ -1,5 +1,10 @@
 # Local Agent Loop
 
+> 维护入口：本文件说明系统能力、运行方式和文件索引；跨角色强制边界以 `AGENTS.md` 为准，
+> 任务事实以 `data/loop-agent.sqlite3` 为准，部署参数以 `config/initialization.json` 为准。
+> 排错时先运行 `scripts/loopctl.py validate`，再按 `scripts/README.md` 的角色调用链进入具体实现；
+> 不要从 Dashboard 显示结果反推并直接修改 SQLite。
+
 `E:\code\local-agent-loop` 是 `E:\code` 下跨项目任务的并发执行中心。Operator 管理业务事实，Planner 做只读静态预检，Worker 执行 READY 任务，Windows 健康任务维护 Dashboard Server。
 
 ## 当前配置摘要
@@ -198,7 +203,7 @@ py -3 .\scripts\roles\runner\agent_runtime.py `
 - `scripts/README.md`：脚本职责树、依赖方向、排障顺序与回归命令。
 - `scripts/loopdb.py`：数据库公共 API 的稳定兼容门面；实际实现位于 `scripts/loop_agent/database/` 与 `scripts/loop_agent/tasks/`。
 - `scripts/loopctl.py`：稳定 CLI 参数与命令分发；Operator、Planner、Worker 和恢复状态机位于 `scripts/loop_agent/control/`。
-- `scripts/checks/`：Dashboard 和初始化的只读结构检查。
+- `scripts/deployment_checks/`：针对当前真实部署的 Dashboard、初始化配置和入口文件只读校验。
 - `scripts/installers/`：Windows 健康任务与 Codex CLI 调度任务安装器。
 - `scripts/tests/`：并发、状态机、Dashboard、Runner、Provider 和 SecretStore 回归测试。
 - `scripts/roles/runner/codex_cli_runner.py`：Codex CLI 单任务 claim、heartbeat、进程管理、结果校验和 finish 入口。
@@ -208,7 +213,8 @@ py -3 .\scripts\roles\runner\agent_runtime.py `
 - `scripts/roles/operator/secretctl.py`：隐藏输入、状态、校验、轮换和删除命令。
 - `scripts/roles/supervisor/dashboard_server.py`：本地 HTTP 路由和同源 Secret API；任务动作与运维配置实现位于 `scripts/loop_agent/dashboard/`。
 - `scripts/roles/supervisor/health_run.py`：Dashboard 健康检查和恢复。
-- `dashboard.html`：监控页面模板。
+- `frontend/`：Dashboard 前端目录，包含主监控页和运维配置页的 HTML、CSS 与 JavaScript。
+- `frontend/dashboard.html`：主监控页面模板；Dashboard Server 的 `/` 和 `/dashboard.html` 路由读取此文件。
 - `runtime/`：PID、日志、健康状态和短时锁；不是任务事实源。
 - `backups/`：迁移前快照和旧产物，仅用于审计恢复。
 

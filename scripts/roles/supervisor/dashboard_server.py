@@ -680,7 +680,7 @@ def main() -> None:
     runtime.mkdir(parents=True, exist_ok=True)
     pid_path = runtime / "dashboard-server.pid"
     server = DashboardServer(
-        (host, port), database_path, BASE_DIR / "dashboard.html", config,
+        (host, port), database_path, BASE_DIR / "frontend" / "dashboard.html", config,
         runtime_config_path=config_path,
     )
     pid_path.write_text(str(os.getpid()), encoding="utf-8")

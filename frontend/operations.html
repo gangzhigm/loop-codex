@@ -1,4 +1,14 @@
 <!doctype html>
+<!--
+  Local Agent Loop 运维配置页的静态结构。
+
+  数据由 operations.js 从 /api/operations-config 读取，页面本身不读取配置文件或 SQLite。
+  #item-template 由服务端返回的 section/item 投影重复实例化；唯一可编辑项通过
+  #task-root-editor 调用受控 action API，不允许在前端直接拼接或写 initialization.json。
+
+  排查空白页时依次检查 operations.css/js 是否返回 200、配置 API 的 sections 是否为数组、
+  浏览器控制台是否出现模板节点缺失；保存失败则检查同源 CSRF 和服务端 action 校验。
+-->
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -8,6 +18,7 @@
   <link rel="stylesheet" href="/operations.css">
 </head>
 <body>
+  <!-- 固定页头只负责返回任务面板，不承载配置状态。 -->
   <header class="app-header">
     <a class="brand" href="/" aria-label="返回任务面板">LA</a>
     <div>
@@ -17,6 +28,7 @@
     <a class="dashboard-link" href="/">任务面板</a>
   </header>
   <main>
+    <!-- overview、status 和 section-nav 都由一次 load() 更新；失败时保留明确错误状态。 -->
     <section class="overview" aria-labelledby="overview-title">
       <div>
         <p class="eyebrow">只读目录</p>
@@ -28,6 +40,7 @@
     <nav id="section-nav" class="section-nav" aria-label="配置分组"></nav>
     <div id="sections" class="sections"></div>
   </main>
+  <!-- 每个配置项都显示来源、生效方式和非敏感校验，便于判断应修改哪个权威文件。 -->
   <template id="item-template">
     <article class="setting">
       <div class="setting-heading">
@@ -46,6 +59,7 @@
       <p class="description"></p>
     </article>
   </template>
+  <!-- 当前唯一写入口：系统文件夹选择器返回候选路径，用户再次点击保存后才提交。 -->
   <dialog id="task-root-editor" class="task-root-editor" aria-labelledby="task-root-editor-title">
     <form method="dialog">
       <div class="editor-header">

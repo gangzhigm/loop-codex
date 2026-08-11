@@ -214,7 +214,7 @@ class AttachmentImageTests(unittest.TestCase):
         )
 
     def test_served_dashboard_accepts_schema_3_7(self) -> None:
-        html = (REPOSITORY_ROOT / "dashboard.html").read_text(
+        html = (REPOSITORY_ROOT / "frontend" / "dashboard.html").read_text(
             encoding="utf-8"
         )
 
@@ -462,7 +462,7 @@ class SecretApiTests(unittest.TestCase):
         self.server = DashboardServer(
             ("127.0.0.1", 0),
             self.db_path,
-            REPOSITORY_ROOT / "dashboard.html",
+            REPOSITORY_ROOT / "frontend" / "dashboard.html",
             self.config,
             runtime_config_path=self.config_path,
             secret_store=self.store,
@@ -824,7 +824,7 @@ class SecretApiTests(unittest.TestCase):
             DashboardServer(
                 ("0.0.0.0", 0),
                 self.base_dir / "unused.sqlite3",
-                REPOSITORY_ROOT / "dashboard.html",
+                REPOSITORY_ROOT / "frontend" / "dashboard.html",
                 self.config,
                 secret_store=self.store,
                 health_state_path=self.health_state,
@@ -839,7 +839,7 @@ def run_visual_server(port: int) -> None:
     server = DashboardServer(
         ("127.0.0.1", port),
         DEFAULT_DB,
-        REPOSITORY_ROOT / "dashboard.html",
+        REPOSITORY_ROOT / "frontend" / "dashboard.html",
         config,
         secret_store=store,
         health_state_path=Path(temporary.name) / "health-state.json",

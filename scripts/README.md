@@ -24,7 +24,7 @@
 
 ```text
 scripts/
-├─ checks/                  只读结构与前端检查
+├─ deployment_checks/       当前真实部署、配置与前端文件的只读校验
 ├─ installers/              Windows 计划任务安装器
 ├─ tests/                   Python 回归测试与测试路径引导
 ├─ roles/
@@ -153,8 +153,8 @@ python scripts/tests/test_codex_cli_runner.py
 python scripts/tests/test_codex_cli_dispatcher.py
 python scripts/tests/test_secret_store.py
 python scripts/tests/test_instruction_authority.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/checks/check-initialization.ps1 -SkipCodexCliCheck
-node scripts/checks/check-dashboard.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deployment_checks/check-initialization.ps1 -SkipCodexCliCheck
+node scripts/deployment_checks/check-dashboard.mjs
 python scripts/loopctl.py validate
 ```
 

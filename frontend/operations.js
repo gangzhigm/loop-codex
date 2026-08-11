@@ -1,3 +1,16 @@
+/*
+ * 运维配置页控制器。
+ *
+ * 读取链路：load() -> GET /api/operations-config -> render() -> HTML template。
+ * 写入链路：系统文件夹选择器 -> 本地候选路径 -> set_task_root + 明确确认字符串 -> 重新 load()。
+ *
+ * 本文件不直接读写 initialization.json、项目清单或 SQLite。配置项来源、生效方式、校验结果
+ * 都由 Dashboard Server 返回；页面只负责安全展示和当前唯一可编辑项的受控提交。
+ * 手工排查先看 load() 的响应形状，再看 render()；写操作依次检查 CSRF、request_id、action
+ * 和服务端返回的 error，禁止绕过 runOperationsAction() 直接篡改 DOM 当作保存成功。
+ */
+
+// 一、服务端端点和固定 DOM。两个 API 都必须是当前 Dashboard Server 的同源路径。
 const OPERATIONS_ENDPOINT = "/api/operations-config";
 const OPERATIONS_ACTION_ENDPOINT = "/api/operations-config/action";
 const sectionsElement = document.querySelector("#sections");
@@ -10,9 +23,11 @@ const taskRootValue = document.querySelector("#task-root-value");
 const selectTaskRootButton = document.querySelector("#select-task-root");
 const saveTaskRootButton = document.querySelector("#save-task-root");
 const taskRootMessage = document.querySelector("#task-root-message");
+// 二、页面会话状态。CSRF token 只存在内存；selectedTaskRoot 只是保存前的候选值。
 let csrfToken = "";
 let selectedTaskRoot = "";
 
+// 三、配置值渲染。数组项使用允许列表字段展开，避免把整个服务端对象无差别显示出来。
 function text(value) {
   return value === null || value === undefined ? "未配置" : String(value);
 }
@@ -45,6 +60,7 @@ function renderValue(container, value) {
   container.append(list);
 }
 
+// item.editable 必须由服务端明确给出 true，前端不会根据 label 或 source 猜测写权限。
 function renderItem(item) {
   const fragment = itemTemplate.content.cloneNode(true);
   fragment.querySelector("h3").textContent = text(item.label);
@@ -67,6 +83,10 @@ function newRequestId() {
   return crypto.randomUUID();
 }
 
+/**
+ * 调用一次受控运维动作。
+ * CSRF 防止跨站请求，request_id 由调用方生成用于幂等审计；HTTP 成功但 ok !== true 仍视为失败。
+ */
 async function runOperationsAction(payload) {
   if (!csrfToken) throw new Error("运维操作会话无效");
   const response = await fetch(OPERATIONS_ACTION_ENDPOINT, {
@@ -84,6 +104,7 @@ function setTaskRootEditorMessage(message = "", isError = false) {
   taskRootMessage.classList.toggle("error", isError);
 }
 
+// 四、任务根目录编辑流程。打开时保存按钮保持禁用，只有系统选择器返回 SELECTED 才可提交。
 function openTaskRootEditor(value) {
   selectedTaskRoot = text(value);
   taskRootValue.value = selectedTaskRoot;
@@ -112,6 +133,7 @@ selectTaskRootButton.addEventListener("click", async () => {
   }
 });
 
+// 保存要求固定 confirmation，服务端仍会验证绝对路径、安全边界和写入目标。
 saveTaskRootButton.addEventListener("click", async () => {
   saveTaskRootButton.disabled = true;
   setTaskRootEditorMessage("正在校验并保存");
@@ -132,6 +154,7 @@ saveTaskRootButton.addEventListener("click", async () => {
   }
 });
 
+// 五、配置目录渲染。每个 section 再按 current/planned 分组，数量来自同一响应快照。
 function render(payload) {
   sectionsElement.replaceChildren();
   navigationElement.replaceChildren();
@@ -170,6 +193,10 @@ function render(payload) {
   updatedAtElement.textContent = `最近读取：${text(payload.generated_at)}`;
 }
 
+/**
+ * 读取完整运维配置快照并更新 CSRF token。
+ * 任何 HTTP、JSON 或 sections 形状错误都保留页面骨架并显示失败，不使用旧 token 继续写操作。
+ */
 async function load() {
   statusElement.className = "status";
   statusElement.textContent = "";
@@ -186,4 +213,5 @@ async function load() {
   }
 }
 
+// 六、页面启动只有一次主动读取；后续保存成功会再次调用 load() 获取服务端最终状态。
 load();

@@ -1,4 +1,18 @@
 <!doctype html>
+<!--
+  Local Agent Loop 主监控页。
+
+  运行链路：dashboard_server.py 提供本文件 -> 浏览器轮询 /api/state ->
+  validateState() 校验 Schema 3.7.0 -> applyState() 保留最后一次有效快照 -> render() 渲染。
+
+  本文件是单文件模板，CSS 和 JavaScript 均内嵌。任务事实不在浏览器中维护：筛选、弹窗、
+  抽屉等变量都只是临时界面状态；归档和恢复必须调用 /api/task-action，由服务端进入 loopctl
+  状态机。Provider 密钥只通过同源 /api/secrets 传给 SecretStore，禁止写入 DOM 持久存储。
+
+  手工排查顺序：先看 /api/state HTTP 响应，再看 validateState() 的页面提示，然后检查
+  renderTasks()/renderProfiles() 的投影；写操作失败则检查 Dashboard Server 对应 API 路由，
+  不要直接修改本文件伪造成功状态或直接修改 SQLite。
+-->
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -6,6 +20,7 @@
   <meta name="color-scheme" content="light">
   <title>Local Agent Loop</title>
   <style>
+    /* 一、全局设计令牌和页面骨架。颜色变量同时服务状态标签和分布条，修改时需复核对比度。 */
     :root {
       --canvas: #f3f5f7;
       --surface: #ffffff;
@@ -182,6 +197,7 @@
       padding: 16px 28px;
     }
 
+    /* 二、全局错误提示。状态校验或网络失败时显示，成功刷新后由 hideNotice() 清除。 */
     .notice {
       display: none;
       align-items: flex-start;
@@ -207,6 +223,7 @@
       font-weight: 800;
     }
 
+    /* 三、顶部任务状态总览。每个 metric 既显示数量，也作为一级任务分类筛选按钮。 */
     .summary-band {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -338,6 +355,7 @@
     .distribution .failed { background: var(--danger); }
     .distribution .queued { background: #98a2ad; }
 
+    /* 四、主工作区：左侧任务表，右侧只显示调度容量；窄屏下改为单列。 */
     .content-grid {
       flex: 1 1 auto;
       min-height: 0;
@@ -430,6 +448,7 @@
       overflow: hidden;
     }
 
+    /* 五、任务表与表头筛选。header-filter-menu 使用 fixed 定位，由 JS 跟随按钮和滚动重排。 */
     .table-wrap {
       flex: 1 1 auto;
       min-height: 0;
@@ -887,6 +906,7 @@
       font-size: 15px;
     }
 
+    /* 六、能力等级容量。这里只展示服务端投影，不在前端修改真实并发配置。 */
     .side-section {
       overflow: auto;
       scrollbar-gutter: stable;
@@ -1044,6 +1064,7 @@
 
     .agent-role { color: var(--muted); font-size: 11px; }
 
+    /* 七、任务详情弹窗。任务字段来自最后一次通过 validateState() 的完整快照。 */
     .detail-dialog {
       width: min(680px, calc(100vw - 32px));
       max-height: min(780px, calc(100vh - 32px));
@@ -1068,6 +1089,7 @@
       transition: opacity 180ms ease;
     }
 
+    /* 八、Provider 密钥抽屉。输入仅存于当前 DOM，关闭抽屉时由 clearSecretCandidateInputs() 清空。 */
     .settings-drawer {
       position: fixed;
       z-index: 31;
@@ -1428,6 +1450,7 @@
     .timeline li:last-child::after { display: none; }
     .timeline time { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
 
+    /* 九、响应式边界：1180 调整页头，1080 转单列，760 把表格转卡片行，420 收紧操作区。 */
     @media (max-width: 1180px) {
       .app-header {
         grid-template-columns: minmax(0, 1fr) auto;
@@ -1524,6 +1547,7 @@
   </style>
 </head>
 <body>
+  <!-- 顶部六项统计是一级筛选入口；数量由 render() 从未归档任务和 archived_at 重新计算。 -->
   <header class="app-header">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">LA</div>
@@ -1552,12 +1576,14 @@
   </header>
 
   <main class="main">
+    <!-- 网络、Schema 或写操作错误统一进入 notice，避免散落的错误提示覆盖任务表。 -->
     <div id="notice" class="notice" role="alert">
       <span id="noticeText"></span>
       <button id="dismissNotice" type="button" aria-label="关闭提示" title="关闭">×</button>
     </div>
 
     <div class="content-grid">
+      <!-- 任务列表默认显示待执行；表头筛选项只从当前上下文中确实存在的数据生成。 -->
       <section class="task-section">
         <div class="section-header">
           <div class="section-title"><h2>任务</h2><span id="taskViewCount" class="view-count">当前 0 项</span></div>
@@ -1588,6 +1614,7 @@
         <div id="headerFilterMenu" class="header-filter-menu" role="menu" hidden></div>
       </section>
 
+      <!-- 容量卡展示活动 execution/上限；按钮交互当前仅保留扩展入口，不直接触发调度。 -->
       <aside class="side-section" aria-label="运行详情">
         <section class="side-block">
           <button class="side-heading" type="button" aria-expanded="true" aria-controls="profileContent"><span class="side-heading-group"><span class="side-title" role="heading" aria-level="2">调度容量</span><span id="profileCount" class="side-heading-summary">0/8</span></span></button>
@@ -1597,6 +1624,7 @@
     </div>
   </main>
 
+  <!-- 任务详情包含 Operator 原始定义、Planner 补充、结果诊断、附件和历史。 -->
   <dialog id="taskDialog" class="detail-dialog">
     <div class="dialog-header">
       <div><h2 id="dialogTitle"></h2><p id="dialogSubtitle"></p></div>
@@ -1605,6 +1633,7 @@
     <div id="dialogBody" class="dialog-body"></div>
   </dialog>
 
+  <!-- Provider 密钥管理是独立安全边界；CSRF token 只保存在内存变量中。 -->
   <button id="settingsScrim" class="settings-scrim" type="button" aria-label="关闭设置" aria-hidden="true" tabindex="-1"></button>
   <aside id="settingsDrawer" class="settings-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="settingsDrawerTitle">
     <div class="settings-drawer-header">
@@ -1626,6 +1655,8 @@
   <script>
     "use strict";
 
+    // 一、服务端契约常量。TASK_SCHEMA_VERSION 必须与 state_payload 的 Schema 完全一致；
+    // 版本不匹配时页面保留最后一次有效快照，而不是尽力猜测新字段含义。
     const STATUS_LABELS = {
       DRAFT: "草稿",
       NEEDS_REVIEW: "需确认",
@@ -1667,6 +1698,7 @@
     };
     const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
 
+    // 二、固定 DOM 索引。启动时集中查询，后续渲染只更新节点内容，避免反复查找和 ID 漂移。
     const elements = {
       openSettings: document.querySelector("#openSettings"),
       closeSettings: document.querySelector("#closeSettings"),
@@ -1704,6 +1736,8 @@
       closeDialog: document.querySelector("#closeDialog")
     };
 
+    // 三、纯前端临时状态。这里不是真实任务状态，刷新页面后可以安全丢失。
+    // state 是最后一次通过 validateState() 的服务端快照；其余变量仅控制筛选、弹层和请求互斥。
     let state = null;
     let pollTimer = null;
     let currentFilter = "pending";
@@ -1722,6 +1756,7 @@
     let secretRequestInFlight = false;
     let activeSecretForm = null;
 
+    // 四、通用展示工具。所有进入 innerHTML 模板的服务端或任务文本都必须先 escapeHtml()。
     function escapeHtml(value) {
       return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -1778,6 +1813,7 @@
       }).format(date);
     }
 
+    // 五、SecretStore 抽屉。打开时读取非敏感状态，关闭时主动清空候选密钥和表单。
     function setSettingsDrawer(open) {
       elements.settingsDrawer.classList.toggle("is-open", open);
       elements.settingsDrawer.setAttribute("aria-hidden", String(!open));
@@ -1903,6 +1939,11 @@
       }
     }
 
+    /**
+     * 执行一次 Provider 密钥变更。
+     * 浏览器只保留当前同源响应下发的 CSRF token；request_id 防止重复提交。
+     * JSON 序列化后立即清空 body.secret 和 requestBody 引用，最终真实持久化由服务端 SecretStore 完成。
+     */
     async function mutateSecret(providerId, action, values = {}) {
       if (secretRequestInFlight || !secretCsrfToken || !crypto.randomUUID) return false;
       secretRequestInFlight = true;
@@ -2005,6 +2046,7 @@
       }
     }
 
+    // 六、时间、依赖和 scope 冲突投影。这里只解释服务端字段，不在前端推导新的锁状态。
     function formatDuration(start, end) {
       if (!start) return "--";
       const startTime = new Date(start).getTime();
@@ -2149,6 +2191,7 @@
       return `<section class="detail-block"><h3>待执行阻塞</h3><h4>依赖等待</h4>${dependencyItems}<h4>范围锁等待</h4>${scopeItems}${affectedScopes}${position}</section>`;
     }
 
+    // 七、任务路由和执行配置展示。项目来自规范化 scope key，模型信息来自 runtime_config。
     function taskProjects(task) {
       const scopes = Array.isArray(task.scope) ? task.scope : [];
       const keys = Array.isArray(task.scope_keys) ? task.scope_keys : [];
@@ -2213,6 +2256,8 @@
       return `<span class="environment-badge" title="${escapeHtml(`${environment}${providerLabel(task.provider_id)}`)}">${escapeHtml(runtimeEnvironmentName(environment) + providerLabel(task.provider_id))}</span>`;
     }
 
+    // 八、表头联动筛选。计算某列候选项时忽略该列自身条件，保留其他列和一级分类条件，
+    // 因此下拉菜单只出现当前结果集中真实存在且选择后仍可能有结果的值。
     function headerFilterOptions(kind, tasks = state?.tasks ?? []) {
       const contextualTasks = tasks.filter((task) => taskMatches(task, kind));
       if (kind === "status") {
@@ -2321,6 +2366,11 @@
       if (state) renderTasks(state.tasks);
     }
 
+    /**
+     * 校验 /api/state 的完整前端契约。
+     * 该检查是 UI 防御边界，不替代数据库 validate；任何关键字段、状态枚举、路由或恢复记录异常
+     * 都拒绝整份快照，防止部分新数据与旧 DOM 混合后显示出不存在的任务状态。
+     */
     function validateState(candidate) {
       const errors = [];
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) errors.push("根节点必须是对象");
@@ -2408,6 +2458,7 @@
       return candidate;
     }
 
+    // 九、轮询状态应用。只有完整校验成功才替换全局 state，失败时继续展示上一份有效数据。
     function applyState(candidate) {
       try {
         state = validateState(candidate);
@@ -2442,6 +2493,7 @@
       pollTimer = null;
     }
 
+    // 十、列表筛选。archived_at 与任务 status 独立处理，避免把“归档”误当成状态机终态。
     function taskMatches(task, ignoredHeaderFilter = null) {
       const archived = isArchived(task);
       if (currentFilter === "archived") {
@@ -2488,6 +2540,10 @@
       return `<button class="archive-button${submitting ? " is-submitting" : ""}" type="button" data-archive-task-id="${escapeHtml(task.id)}" aria-label="归档任务 ${escapeHtml(task.id)}" title="归档任务"${submitting ? " disabled aria-busy=\"true\"" : ""}><span class="archive-icon" aria-hidden="true">${submitting ? "↻" : "⇩"}</span><span>归档</span></button>`;
     }
 
+    /**
+     * 处置 STALLED/TIMED_OUT execution 的隔离锁。
+     * 前端必须取得人工确认并提交当前 row_version；真正的进程终止确认、状态迁移和解锁由服务端完成。
+     */
     async function recoverTask(taskId, executionId, recoveryAction) {
       const task = state?.tasks?.find((candidate) => candidate.id === taskId);
       const recovery = recoveryForTask(task ?? {});
@@ -2525,6 +2581,10 @@
       }
     }
 
+    /**
+     * 归档一个未归档终态任务。SUCCEEDED 会由服务端先执行人工确认再写 archived_at；
+     * row_version 用于拒绝基于旧页面快照的并发操作，前端不得自行修改任务对象模拟成功。
+     */
     async function archiveTask(taskId) {
       const task = state?.tasks?.find((candidate) => candidate.id === taskId);
       if (!task || !canArchiveTask(task) || archivingTaskId !== null) return;
@@ -2564,6 +2624,7 @@
       return Date.now() - new Date(task.heartbeat_at).getTime() > threshold;
     }
 
+    // 十一、主渲染入口：先聚合顶部统计，再校正已失效筛选，最后渲染任务表和容量卡。
     function render() {
       const tasks = state?.tasks ?? [];
       const currentTasks = tasks.filter((task) => !isArchived(task));
@@ -2598,6 +2659,7 @@
       renderProfiles(currentTasks, state.agents ?? []);
     }
 
+    // 任务排序固定为优先级、更新时间；任务名、ID、状态、项目和结果文本必须经过 HTML 转义。
     function renderTasks(tasks) {
       const visible = tasks
         .filter(taskMatches)
@@ -2708,6 +2770,7 @@
           </div>`).join("")}</div>`).join("")}</section>`;
     }
 
+    // 十二、详情视图。Planner 与 Operator 字段分区展示，避免把预检推断误认为用户原始需求。
     function renderPlannerSupplement(task) {
       const planner = task.planner_supplement ?? {};
       return `<section class="detail-block"><h3>Planner 预检</h3>
@@ -2840,6 +2903,8 @@
       elements.taskDialog.showModal();
     }
 
+    // 十三、事件绑定。动态任务行、SecretStore 按钮和筛选菜单采用容器委托；
+    // Escape、焦点圈和 beforeunload 分别负责可访问性、弹层隔离及停止轮询。
     elements.openSettings.addEventListener("click", () => setSettingsDrawer(true));
     elements.closeSettings.addEventListener("click", () => setSettingsDrawer(false));
     elements.settingsScrim.addEventListener("click", () => setSettingsDrawer(false));
@@ -2909,6 +2974,7 @@
     elements.taskTable.addEventListener("scroll", () => {
       if (activeHeaderFilter) renderHeaderFilterMenu();
     });
+    // 切换顶部一级状态分类时清空所有表头筛选，防止旧分类的隐藏条件造成空列表。
     function resetHeaderFilters() {
       currentStatus = "all";
       currentPriority = "all";
@@ -2988,6 +3054,7 @@
     });
     window.addEventListener("beforeunload", stopPolling);
 
+    // 十四、启动：首次请求无论成功与否都启动轮询，使服务恢复后页面可自动恢复。
     refreshState().finally(startPolling);
   </script>
 </body>

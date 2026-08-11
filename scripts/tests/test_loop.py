@@ -137,7 +137,7 @@ class LoopConcurrencyTests(unittest.TestCase):
         completed = subprocess.run(
             [
                 "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                str(BASE_DIR / "scripts" / "checks" / "check-initialization.ps1"), "-SkipCodexCliCheck",
+                str(BASE_DIR / "scripts" / "deployment_checks" / "check-initialization.ps1"), "-SkipCodexCliCheck",
             ],
             cwd=BASE_DIR,
             text=True,
