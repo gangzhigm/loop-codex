@@ -4,8 +4,8 @@
 核对端口监听者、PID 文件与实际进程身份；只有健康或拓扑异常时才尝试清理旧实例并
 启动新的 Supervisor 主进程。检查结果写入有限长度的健康状态文件，写入失败则退化到文本日志。
 
-本程序只管理 Supervisor 主进程（当前由其承载 Dashboard），不领取任务、不回收 Worker execution，也不会把
-“进程消失”解释为任务已经安全结束。
+本程序只管理 Supervisor 主进程（其承载 Dashboard 并运行组件监控），不领取任务、不回收 Worker execution，
+也不会把“进程消失”解释为任务已经安全结束。
 """
 
 from __future__ import annotations
@@ -78,6 +78,22 @@ def write_state(value: dict[str, Any]) -> None:
     temporary = HEALTH_STATE.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(HEALTH_STATE)
+
+
+def record_monitor_state(monitors: dict[str, dict[str, Any]]) -> None:
+    """保存常驻 Supervisor 的组件快照，并保留最近一次外部健康检查结果。
+
+    ``health`` 与 ``serve`` 都可能更新同一个健康文件。两者只保留自己拥有的字段：
+    这里更新 ``monitors``，健康检查的 ``record`` 会保留该字段，避免把组件状态误当作
+    任务状态写入 SQLite。
+    """
+    try:
+        state = read_state()
+        state["monitors"] = monitors
+        state["monitor_checked_at"] = now_shanghai()
+        write_state(state)
+    except Exception as error:
+        append_fallback(f"MONITOR_STATE_WRITE_FAILED {type(error).__name__}")
 
 
 def acquire_lock() -> None:
@@ -322,6 +338,7 @@ def record(status: str, message: str, failures: int, pid: int | None = None) -> 
     """更新健康快照并只保留最近 100 条事件；失败时写入后备日志。"""
     try:
         state = read_state()
+        monitors = state.get("monitors")
         checked_at = now_shanghai()
         events = list(state.get("events") or [])
         events.insert(
@@ -334,8 +351,7 @@ def record(status: str, message: str, failures: int, pid: int | None = None) -> 
                 "details": {"pid": pid, "failures": failures},
             },
         )
-        write_state(
-            {
+        value = {
                 "component": "dashboard-server",
                 "status": status,
                 "pid": pid,
@@ -345,7 +361,9 @@ def record(status: str, message: str, failures: int, pid: int | None = None) -> 
                 "message": message,
                 "events": events[:100],
             }
-        )
+        if isinstance(monitors, dict):
+            value["monitors"] = monitors
+        write_state(value)
     except Exception as error:
         append_fallback(f"{status} {message}; runtime state write failed: {error}")
 

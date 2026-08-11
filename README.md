@@ -16,7 +16,8 @@ py -3 .\supervisor\main.py serve
 ```
 
 Dashboard 默认地址、端口及其他部署参数以 `config/initialization.json` 为准。
-`serve` 用于人工前台运行；计划任务使用 `health` 做探活和必要恢复。
+`serve` 用于人工前台运行，托管 Dashboard 并周期检查 Dashboard、Planner 和 Codex CLI Dispatcher；
+计划任务使用 `health` 做探活和必要恢复。
 
 ## 工作流程
 

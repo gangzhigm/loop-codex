@@ -742,11 +742,17 @@ def parser() -> argparse.ArgumentParser:
     return value
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(
+    argv: list[str] | None = None,
+    *,
+    install_signal_handlers: bool = True,
+    shutdown_event: threading.Event | None = None,
+) -> None:
     """加载配置、强制本机监听、写 PID 文件并运行 HTTP 服务。
 
-    SIGTERM/SIGINT 通过独立线程调用 shutdown，避免在 serve_forever 所在线程死锁。
-    服务退出后关闭 socket，并且仅在 PID 文件仍属于当前进程时删除它。
+    独立运行时，SIGTERM/SIGINT 通过独立线程调用 shutdown，避免在 serve_forever
+    所在线程死锁。由 Supervisor 托管时，调用方会传入 shutdown_event，并由 Supervisor
+    主线程统一处理信号。服务退出后关闭 socket，并且仅在 PID 文件仍属于当前进程时删除它。
     """
     args = parser().parse_args(argv)
     database_path = Path(args.db).resolve()
@@ -773,8 +779,15 @@ def main(argv: list[str] | None = None) -> None:
         # shutdown() 必须在 serve_forever 所在线程之外调用，否则会互相等待形成死锁。
         threading.Thread(target=server.shutdown, daemon=True).start()
 
-    signal.signal(signal.SIGTERM, stop_server)
-    signal.signal(signal.SIGINT, stop_server)
+    if install_signal_handlers:
+        signal.signal(signal.SIGTERM, stop_server)
+        signal.signal(signal.SIGINT, stop_server)
+    if shutdown_event is not None:
+        def stop_on_supervisor_shutdown() -> None:
+            shutdown_event.wait()
+            stop_server(0, None)
+
+        threading.Thread(target=stop_on_supervisor_shutdown, daemon=True).start()
     print(f"{now_shanghai()} dashboard server listening on http://{host}:{port}", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)

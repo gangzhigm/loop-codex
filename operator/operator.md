@@ -113,7 +113,7 @@
 - NEEDS_REVIEW 可保存 question、options、检查证据和结构化拆分建议。拆分建议不是任务，Operator 必须取得人工决定后才可创建子任务。
 - 首次建议 L5、manual、拆分、需求冲突或无法安全确定全部 scope 时必须 NEEDS_REVIEW，不能直接 READY。用户明确批准 L5 或 manual 后，Operator 使用 `update` 把独立一行 `APPROVED_PLANNER_ESCALATION: L5` 和/或 `APPROVED_PLANNER_ESCALATION: manual` 写入 description 或业务 acceptance，再回到 DRAFT/UNINSPECTED；没有对应标记时控制面拒绝 L5/manual READY。不得替用户补写批准标记。
 - Planner execution 是只读预留，不占 Worker 容量、不持有 scope 写锁。超时后自动回到 DRAFT/UNINSPECTED；execution ID、task row_version 和 preflight_execution_id 共同拒绝迟到结果。
-- `/api/state` 只能输出上述结构化字段，不输出隐藏推理、源码内容或 Planner 的原始分析过程。本阶段没有常驻 Planner、Dispatcher 或 Supervisor。
+- `/api/state` 只能输出上述结构化字段，不输出隐藏推理、源码内容或 Planner 的原始分析过程。Supervisor 是常驻监控宿主，但不管理 Planner 自动化、Dispatcher 调度或任务状态迁移。
 
 ## Codex 停滞恢复规则
 

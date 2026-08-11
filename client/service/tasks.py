@@ -254,6 +254,12 @@ def runtime_health(
         )
     }
     services = [service] if service.get("component") else []
+    monitors = value.get("monitors")
+    if isinstance(monitors, dict):
+        services.extend(
+            item for item in monitors.values()
+            if isinstance(item, dict) and isinstance(item.get("component"), str)
+        )
     events = [
         item for item in (value.get("events") or []) if isinstance(item, dict)
     ][:12]

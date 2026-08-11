@@ -1,12 +1,22 @@
 {
   "component": "dashboard-server",
-  "status": "HEALTHY",
-  "pid": 16320,
-  "checked_at": "2026-08-11T17:32:36.462+08:00",
-  "last_checked_at": "2026-08-11T17:32:36.462+08:00",
+  "status": "RESTARTED",
+  "pid": 36764,
+  "checked_at": "2026-08-11T18:02:37.243+08:00",
+  "last_checked_at": "2026-08-11T18:02:37.243+08:00",
   "consecutive_failures": 0,
-  "message": "Supervisor 主进程正常。",
+  "message": "Supervisor 主进程已启动或恢复。",
   "events": [
+    {
+      "at": "2026-08-11T18:02:37.243+08:00",
+      "component": "dashboard-server",
+      "status": "RESTARTED",
+      "message": "Supervisor 主进程已启动或恢复。",
+      "details": {
+        "pid": 36764,
+        "failures": 0
+      }
+    },
     {
       "at": "2026-08-11T17:32:36.462+08:00",
       "component": "dashboard-server",
@@ -991,16 +1001,6 @@
     },
     {
       "at": "2026-08-06T09:08:34.184+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 14228,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-06T08:38:34.538+08:00",
       "component": "dashboard-server",
       "status": "HEALTHY",
       "message": "Dashboard Server 正常。",

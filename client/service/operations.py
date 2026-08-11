@@ -414,8 +414,8 @@ def operations_config_payload(
                 "id": "supervisor",
                 "title": "Supervisor 管理",
                 "items": [
-                    item("supervisor-service", "常驻 Supervisor", "尚未部署", "部署设计", "负责跨平台唤起、守护和管理 Planner、Worker 与 Runner。", "受保护", "尚未实现", "planned"),
-                    item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "当前仅恢复 Dashboard；不承担 Supervisor 职责。", "当前生效", "健康任务运行结果"),
+                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "托管 Dashboard，并周期检查 Dashboard、Planner 与 Codex CLI Dispatcher 的可核实状态。", "当前生效", "runtime/health-state.json", "active"),
+                    item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "健康任务探测并恢复整个 Supervisor 进程；不会领取任务或管理 Codex 自动化。", "当前生效", "健康任务运行结果"),
                 ],
             },
             {

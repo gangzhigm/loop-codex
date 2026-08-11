@@ -68,14 +68,59 @@ class SupervisorControlTests(unittest.TestCase):
         serve.assert_not_called()
 
     def test_main_dispatches_serve_without_running_health_check(self) -> None:
-        """serve 命令只能调用 Dashboard 入口，不能触发健康检查与自动恢复。"""
+        """serve 进入常驻 Supervisor，不能触发一次性健康检查。"""
         with (
             patch.object(control.health_run, "main") as health,
-            patch.object(control.dashboard_server, "main") as serve,
+            patch.object(control, "serve_supervisor") as serve,
         ):
             control.main(["serve", "--port", "4999"])
         health.assert_not_called()
-        serve.assert_called_once_with(["--db", str(control.DEFAULT_DB), "--config", str(control.CONFIG_PATH), "--port", "4999"])
+        serve.assert_called_once()
+        self.assertEqual(serve.call_args.args[0].port, 4999)
+
+    def test_component_snapshot_reports_pending_planner_and_undeployed_dispatcher(self) -> None:
+        """组件快照必须区分待预检任务与尚未部署的 Dispatcher。"""
+        config = {
+            "automations": {"planner": {"scheduled": True}},
+            "codex_cli": {"dispatcher": {"task_name": "Loop Dispatcher"}},
+        }
+        with (
+            patch.object(control, "_monitored_count", side_effect=[2, 0, 1]),
+            patch.object(control, "_scheduled_task_registered", return_value=False),
+            patch.object(control, "_dispatcher_process_count", return_value=0),
+        ):
+            snapshot = control.component_snapshot(
+                control.DEFAULT_DB,
+                config,
+                dashboard_running=True,
+                dashboard_error=None,
+            )
+        self.assertEqual(snapshot["dashboard"]["status"], "HEALTHY")
+        self.assertEqual(snapshot["planner"]["status"], "PENDING_WORK")
+        self.assertEqual(snapshot["planner"]["pending_tasks"], 2)
+        self.assertEqual(snapshot["dispatcher"]["status"], "UNDEPLOYED")
+        self.assertEqual(snapshot["dispatcher"]["pending_tasks"], 1)
+
+    def test_component_snapshot_keeps_dashboard_alive_when_task_database_is_unavailable(self) -> None:
+        """任务库读取失败只降级任务监控，不能中断 Dashboard 组件。"""
+        config = {
+            "automations": {"planner": {"scheduled": True}},
+            "codex_cli": {"dispatcher": {"task_name": "Loop Dispatcher"}},
+        }
+        with (
+            patch.object(control, "_monitored_count", return_value=None),
+            patch.object(control, "_scheduled_task_registered", return_value=True),
+            patch.object(control, "_dispatcher_process_count", return_value=0),
+        ):
+            snapshot = control.component_snapshot(
+                control.DEFAULT_DB,
+                config,
+                dashboard_running=True,
+                dashboard_error=None,
+            )
+        self.assertEqual(snapshot["dashboard"]["status"], "HEALTHY")
+        self.assertEqual(snapshot["planner"]["status"], "UNAVAILABLE")
+        self.assertEqual(snapshot["dispatcher"]["status"], "UNAVAILABLE")
 
 
 if __name__ == "__main__":

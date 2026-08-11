@@ -1394,3 +1394,5 @@ Traceback (most recent call last):
   File "E:\code\local-agent-loop\supervisor\dashboard_server.py", line 584, in do_GET
 NameError: name 'sqlite3' is not defined. Did you forget to import 'sqlite3'?
 ----------------------------------------
+2026-08-11T18:02:36.753+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-11T18:02:37.241+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
