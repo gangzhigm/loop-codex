@@ -1,12 +1,22 @@
 {
   "component": "dashboard-server",
   "status": "RESTARTED",
-  "pid": 36764,
-  "checked_at": "2026-08-11T18:02:37.243+08:00",
-  "last_checked_at": "2026-08-11T18:02:37.243+08:00",
+  "pid": 27128,
+  "checked_at": "2026-08-11T18:10:27.868+08:00",
+  "last_checked_at": "2026-08-11T18:10:27.868+08:00",
   "consecutive_failures": 0,
   "message": "Supervisor 主进程已启动或恢复。",
   "events": [
+    {
+      "at": "2026-08-11T18:10:27.868+08:00",
+      "component": "dashboard-server",
+      "status": "RESTARTED",
+      "message": "Supervisor 主进程已启动或恢复。",
+      "details": {
+        "pid": 27128,
+        "failures": 0
+      }
+    },
     {
       "at": "2026-08-11T18:02:37.243+08:00",
       "component": "dashboard-server",
@@ -998,16 +1008,33 @@
         "pid": 14228,
         "failures": 0
       }
-    },
-    {
-      "at": "2026-08-06T09:08:34.184+08:00",
+    }
+  ],
+  "monitors": {
+    "dashboard": {
       "component": "dashboard-server",
       "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 14228,
-        "failures": 0
-      }
+      "checked_at": "2026-08-11T18:11:34.081+08:00",
+      "message": "Dashboard 服务线程正在运行。"
+    },
+    "planner": {
+      "component": "planner",
+      "status": "IDLE",
+      "checked_at": "2026-08-11T18:11:34.081+08:00",
+      "pending_tasks": 0,
+      "active_preflights": 0,
+      "message": "没有待预检草稿；Codex 自动化运行状态无法由本机 Supervisor 直接查询。"
+    },
+    "dispatcher": {
+      "component": "codex-cli-dispatcher",
+      "status": "UNDEPLOYED",
+      "checked_at": "2026-08-11T18:11:34.081+08:00",
+      "pending_tasks": 0,
+      "task_name": "Local Agent Loop Codex CLI Dispatcher",
+      "message": "Dispatcher 计划任务尚未注册，无法自动调度待执行任务。",
+      "scheduled_task_registered": false,
+      "active_processes": 0
     }
-  ]
+  },
+  "monitor_checked_at": "2026-08-11T18:11:38.710+08:00"
 }

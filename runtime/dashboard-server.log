@@ -1396,3 +1396,7 @@ NameError: name 'sqlite3' is not defined. Did you forget to import 'sqlite3'?
 ----------------------------------------
 2026-08-11T18:02:36.753+08:00 dashboard server listening on http://127.0.0.1:4178
 2026-08-11T18:02:37.241+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-11T18:10:27.693+08:00 supervisor monitoring started
+2026-08-11T18:10:27.711+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-11T18:10:27.866+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-11T18:10:44.145+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
