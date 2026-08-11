@@ -1276,3 +1276,65 @@ ConnectionAbortedError: [WinError 10053] ÄãµÄÖ÷»úÖÐµÄÈí¼þÖÐÖ¹ÁËÒ»¸öÒÑ½¨Á¢µÄÁ¬½Ó¡
 2026-08-11T14:24:01.477+08:00 127.0.0.1 "GET /operations.js HTTP/1.1" 200 -
 2026-08-11T14:44:21.985+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
 2026-08-11T15:14:22.123+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-11T16:14:21.996+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-11T16:44:22.049+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-11T17:02:32.557+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-11T17:02:43.122+08:00 dashboard server listening on http://127.0.0.1:4178
+2026-08-11T17:02:43.345+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+2026-08-11T17:32:33.645+08:00 127.0.0.1 "GET /healthz HTTP/1.1" 200 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 62989)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\supervisor\dashboard_server.py", line 578, in do_GET
+  File "E:\code\local-agent-loop\scripts\loop_agent\database\state.py", line 95, in state_payload
+sqlite3.OperationalError: no such table: executions
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 500, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 488, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "E:\code\local-agent-loop\supervisor\dashboard_server.py", line 584, in do_GET
+NameError: name 'sqlite3' is not defined. Did you forget to import 'sqlite3'?
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 64384)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\supervisor\dashboard_server.py", line 578, in do_GET
+  File "E:\code\local-agent-loop\scripts\loop_agent\database\state.py", line 95, in state_payload
+sqlite3.OperationalError: no such table: executions
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 500, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 488, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "E:\code\local-agent-loop\supervisor\dashboard_server.py", line 584, in do_GET
+NameError: name 'sqlite3' is not defined. Did you forget to import 'sqlite3'?
+----------------------------------------
