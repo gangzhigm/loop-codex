@@ -11,10 +11,10 @@
     "schema_version": "3.7.0"
   },
   "prompts": {
-    "operator": "prompts/operator.md",
-    "planner": "prompts/planner.md",
-    "worker": "prompts/worker.md",
-    "cli_worker": "prompts/cli-worker.md"
+    "operator": "operator/operator.md",
+    "planner": "planner/planner.md",
+    "worker": "worker/worker.md",
+    "cli_worker": "runner/cli-worker.md"
   },
   "runtime_environments": {
     "codex_automation": {
@@ -136,7 +136,7 @@
   },
   "codex_cli": {
     "executable": "codex",
-    "prompt": "prompts/cli-worker.md",
+    "prompt": "runner/cli-worker.md",
     "use_user_config": true,
     "sandbox": "workspace-write",
     "termination_grace_seconds": 5,
@@ -206,7 +206,7 @@
   "automations": {
     "worker_interval_minutes": 20,
     "runtime_environment": "codex_automation",
-    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\worker.md，并严格执行；runtime_environment=codex_automation，capability_level={capability_level}，execution_policy=automatic；过渡期 legacy_profile={profile}。",
+    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\worker\\worker.md，并严格执行；runtime_environment=codex_automation，capability_level={capability_level}，execution_policy=automatic；过渡期 legacy_profile={profile}。",
     "planner": {
       "automation_id": "loop-agent-planner",
       "name": "Loop Agent Planner",
@@ -218,7 +218,7 @@
       "execution_kind": "PLANNER",
       "sandbox": "read-only",
       "approval_policy": "never",
-      "entry_prompt": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\prompts\\planner.md，并严格执行；runtime_environment=codex_automation，execution_kind=PLANNER，sandbox=read-only。"
+      "entry_prompt": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\planner\\planner.md，并严格执行；runtime_environment=codex_automation，execution_kind=PLANNER，sandbox=read-only。"
     },
     "capabilities": {
       "L1": { "name": "Loop Agent Worker · L1", "model": "gpt-5.6-luna", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-routine", "scheduled": true, "offset_minutes": 0, "legacy_profile": "routine" },

@@ -1,9 +1,7 @@
-"""Operations catalog, workspace configuration, and public Provider status.
+"""运维配置目录、工作区配置和公开 Provider 状态。
 
-The functions in this module are the only Dashboard code allowed to rewrite the
-non-secret workspace paths in initialization.json. Provider helpers expose
-allowlisted status metadata only; secret values and secret references never
-enter the operations catalog response.
+本模块函数是 Dashboard 中唯一允许改写 initialization.json 非敏感工作区路径的代码。
+Provider 辅助函数只公开允许列表中的状态元数据；密钥值和密钥引用不会进入运维目录响应。
 """
 
 from __future__ import annotations
@@ -45,7 +43,7 @@ class OperationsApiError(Exception):
 
 
 def choose_task_root(initial_directory: Path) -> Path | None:
-    """Open the local native directory picker without accepting a browser path."""
+    """打开本机原生目录选择器，不接受浏览器直接提交的路径。"""
     try:
         import tkinter
         from tkinter import filedialog
@@ -269,7 +267,7 @@ def operations_config_payload(
     provider_secret_refs_by_id: Mapping[str, str],
     health_state_path: Path,
 ) -> dict[str, object]:
-    """Return an explicit public catalog; never forward the runtime configuration."""
+    """返回显式公开目录，绝不转发完整运行时配置。"""
 
     def item(
         key: str,
@@ -452,4 +450,3 @@ def operations_config_payload(
             },
         ],
     }
-

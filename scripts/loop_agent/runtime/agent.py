@@ -1,14 +1,12 @@
-"""Single-task orchestration for the self-hosted Agent runtime.
+"""Self-hosted Agent Runtime 的单任务编排。
 
-``SingleTaskAgent`` owns the sequence from one atomic claim to one final report.
-It never claims a second task. The class coordinates heartbeat fencing, context
-construction, provider requests, tool calls, bounded retries, one optional
-final-schema repair, and the final ``loopctl finish`` call.
+``SingleTaskAgent`` 管理从一次原子领取到一份最终报告的完整顺序，绝不会领取第二个任务。
+该类协调 heartbeat fencing、上下文构建、Provider 请求、工具调用、有限重试、一次可选的
+final Schema 修复以及最终 ``loopctl finish`` 调用。
 
-Retry policy is deliberately conservative: only trusted transient failures are
-retryable, and a retry is suppressed after any local write. A provider thread
-that remains alive after an attempt deadline raises ``OwnedWorkStillRunning``;
-normal recovery must then quarantine its scope rather than start another writer.
+重试策略刻意保持保守：只有可信的瞬态失败可以重试，发生任何本地写入后都会抑制重试。
+attempt 截止后仍存活的 Provider 线程会触发 ``OwnedWorkStillRunning``；正常恢复流程必须隔离
+其 scope，而不是启动另一个写入者。
 """
 
 from __future__ import annotations
@@ -52,7 +50,7 @@ from loopdb import (
 
 
 class SingleTaskAgent:
-    """Run one claimed task to a fenced final control-plane report."""
+    """把一个已领取任务执行到受 fencing 保护的最终控制面报告。"""
 
     def __init__(
         self,
@@ -80,7 +78,7 @@ class SingleTaskAgent:
         capability_level: str,
         provider_id: str | None = None,
     ) -> dict[str, Any]:
-        """Claim once, run the task, and finish once."""
+        """领取一次、执行一个任务，并完成一次。"""
         if (
             runtime_environment not in CANONICAL_RUNTIME_ENVIRONMENTS
             or capability_level not in CAPABILITY_LEVELS
@@ -110,8 +108,8 @@ class SingleTaskAgent:
         if not isinstance(task, dict):
             raise AgentRuntimeError("claim omitted task")
 
-        # Defense in depth: a compromised or stale controller response cannot
-        # route a task to a different runtime, Provider, or capability level.
+        # 纵深防御：即使控制器响应被破坏或已经过期，也不能把任务路由到不同的 Runtime、
+        # Provider 或能力等级。
         expected_route = {
             "runtime_environment": execution_profile.runtime_environment,
             "provider_id": execution_profile.provider_id,
@@ -182,7 +180,7 @@ class SingleTaskAgent:
         execution_profile: ExecutionProfile,
         credential_access_approved: bool,
     ) -> dict[str, Any]:
-        """Run bounded attempts without replaying a local side effect."""
+        """执行有界 attempt，且不重放本地副作用。"""
         maximum_attempts = execution_profile.max_retries + 1
         last_result = self._failed("agent attempt did not start")
         for attempt in range(1, maximum_attempts + 1):
@@ -258,7 +256,7 @@ class SingleTaskAgent:
     def _task_context(
         self, task: dict[str, Any], policy: ScopePolicy
     ) -> dict[str, Any]:
-        """Build the bounded context sent to the Provider."""
+        """构建发送给 Provider 的有界上下文。"""
         instructions = []
         for path in policy.context_files():
             if path.stat().st_size > self.settings.max_file_bytes:
@@ -305,7 +303,7 @@ class SingleTaskAgent:
         }
 
     def _git_snapshot(self, repository: Path) -> dict[str, Any]:
-        """Read a bounded, credential-free worktree snapshot for context."""
+        """读取不含凭据的有界工作区快照，供上下文使用。"""
         environment = safe_subprocess_environment()
         environment.update(
             {
@@ -360,7 +358,7 @@ class SingleTaskAgent:
         execution_profile: ExecutionProfile,
         deadline: float,
     ) -> dict[str, Any]:
-        """Alternate Provider requests and sandboxed tool responses."""
+        """交替执行 Provider 请求和沙箱工具响应。"""
         messages: list[dict[str, Any]] = [
             {"role": "runtime", "content": context}
         ]
@@ -465,7 +463,7 @@ class SingleTaskAgent:
         deadline: float,
         guard: HeartbeatGuard,
     ) -> dict[str, Any]:
-        """Allow one tool-free correction after a malformed final response."""
+        """final 响应畸形后允许执行一次无工具修正。"""
         diagnostic = self._trusted_diagnostic(original_error, model_step=step)
         assert diagnostic is not None
         guard.ensure_healthy()
@@ -527,7 +525,7 @@ class SingleTaskAgent:
     def _call_provider(
         self, request: dict[str, Any], deadline: float
     ) -> dict[str, Any]:
-        """Run one Provider request within the remaining attempt deadline."""
+        """在 attempt 剩余截止时间内执行一次 Provider 请求。"""
         completed: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
         attempt_remaining = self._remaining_attempt_seconds(deadline)
         request_timeout_seconds = min(
@@ -627,7 +625,7 @@ class SingleTaskAgent:
 
     @staticmethod
     def _public_error(error: Exception) -> str:
-        """Return a bounded, credential-free failure description."""
+        """返回不含凭据且长度受限的失败描述。"""
         if isinstance(error, TrustedDiagnosticError):
             return error.diagnostic.public_text()
         if isinstance(error, AgentRuntimeError):

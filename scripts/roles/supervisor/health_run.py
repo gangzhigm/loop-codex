@@ -1,3 +1,13 @@
+"""Dashboard Server 的单次健康检查与受控恢复程序。
+
+脚本由计划任务周期调用，不常驻轮询。每次运行先取得文件锁，探测 ``/healthz`` 并
+核对端口监听者、PID 文件与实际进程身份；只有健康或拓扑异常时才尝试清理旧实例并
+启动新服务。检查结果写入有限长度的健康状态文件，写入失败则退化到文本日志。
+
+本程序只管理 Dashboard 进程，不领取任务、不回收 Worker execution，也不会把
+“进程消失”解释为任务已经安全结束。
+"""
+
 from __future__ import annotations
 
 # 中文排查：健康任务负责探活 Dashboard、维护 PID/健康 JSON，并在阈值满足时恢复服务。
@@ -41,17 +51,20 @@ SERVER_LOG = RUNTIME_DIR / "dashboard-server.log"
 
 
 def output(payload: dict[str, Any], exit_code: int = 0) -> None:
+    """输出 UTF-8 JSON 结果并以指定退出码立即结束本次健康检查。"""
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     raise SystemExit(exit_code)
 
 
 def append_fallback(message: str) -> None:
+    """健康状态 JSON 无法写入时，将最小诊断信息追加到后备日志。"""
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     with FALLBACK_LOG.open("a", encoding="utf-8", newline="\n") as stream:
         stream.write(f"{now_shanghai()} {message}\n")
 
 
 def read_state() -> dict[str, Any]:
+    """读取上次健康状态；文件缺失、损坏或不可读时返回安全初始值。"""
     if not HEALTH_STATE.exists():
         return {"consecutive_failures": 0, "last_checked_at": None, "events": []}
     try:
@@ -61,12 +74,17 @@ def read_state() -> dict[str, Any]:
 
 
 def write_state(value: dict[str, Any]) -> None:
+    """先写临时文件再原子替换健康状态，避免中断留下半截 JSON。"""
     temporary = HEALTH_STATE.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(HEALTH_STATE)
 
 
 def acquire_lock() -> None:
+    """建立健康检查互斥锁，并清理超过 120 秒的遗留锁。
+
+    新锁使用 ``O_EXCL`` 创建，确保两个计划任务实例不能同时重启 Dashboard。
+    """
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     if HEALTH_LOCK.exists():
         age = time.time() - HEALTH_LOCK.stat().st_mtime
@@ -79,6 +97,7 @@ def acquire_lock() -> None:
 
 
 def release_lock() -> None:
+    """幂等删除当前健康检查锁；锁已不存在时不报错。"""
     try:
         HEALTH_LOCK.unlink()
     except FileNotFoundError:
@@ -86,6 +105,7 @@ def release_lock() -> None:
 
 
 def health_request(url: str, timeout: float = 3.0) -> dict[str, Any] | None:
+    """请求 healthz 并解析 JSON；网络、系统或格式错误统一返回 ``None``。"""
     try:
         with urlopen(url, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -94,6 +114,7 @@ def health_request(url: str, timeout: float = 3.0) -> dict[str, Any] | None:
 
 
 def process_alive(pid: int) -> bool:
+    """跨平台判断 PID 是否仍活动；Windows 使用进程退出码避免发送信号。"""
     if os.name == "nt":
         import ctypes
 
@@ -118,6 +139,7 @@ def process_alive(pid: int) -> bool:
 
 
 def windows_powershell(command: str) -> str:
+    """隐藏运行 PowerShell 查询命令，失败时返回空字符串供身份校验拒绝通过。"""
     completed = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", command],
         check=False,
@@ -133,6 +155,7 @@ def windows_powershell(command: str) -> str:
 
 
 def listener_pids(port: int) -> set[int]:
+    """在 Windows 上从 netstat 提取指定 TCP 端口的全部监听 PID。"""
     if os.name != "nt":
         return set()
     completed = subprocess.run(
@@ -161,6 +184,7 @@ def listener_pids(port: int) -> set[int]:
 
 
 def is_dashboard_process(pid: int) -> bool:
+    """确认 PID 存活且 Windows 命令行确实指向本项目 Dashboard 脚本。"""
     if not process_alive(pid):
         return False
     if os.name != "nt":
@@ -175,6 +199,7 @@ def is_dashboard_process(pid: int) -> bool:
 
 
 def recorded_pid() -> int | None:
+    """读取 PID 文件；缺失、不可读或非整数内容都视为没有可信记录。"""
     if not PID_PATH.exists():
         return None
     try:
@@ -184,6 +209,7 @@ def recorded_pid() -> int | None:
 
 
 def dashboard_topology_is_clean(port: int) -> bool:
+    """确认端口只有一个监听者，且它与 PID 文件及 Dashboard 身份一致。"""
     if os.name != "nt":
         return True
     listeners = listener_pids(port)
@@ -194,6 +220,11 @@ def dashboard_topology_is_clean(port: int) -> bool:
 
 
 def stop_previous_process(port: int) -> None:
+    """停止本项目占用端口的旧 Dashboard，并拒绝终止外部进程。
+
+    函数先区分 Dashboard 与非本项目监听者；发现外部监听者立即报错。合法目标收到
+    终止信号后最多等待五秒，仍未退出则中止恢复，避免强杀未知状态进程。
+    """
     pid = recorded_pid()
     listeners = listener_pids(port)
     targets = {item for item in listeners if is_dashboard_process(item)}
@@ -229,6 +260,7 @@ def stop_previous_process(port: int) -> None:
 
 
 def start_server(database_path: Path, config_path: Path, port: int) -> int:
+    """清理旧实例后在后台启动 Dashboard，并把标准输出和错误追加到服务日志。"""
     stop_previous_process(port)
     log_stream = SERVER_LOG.open("a", encoding="utf-8", newline="\n")
     creation_flags = 0
@@ -266,6 +298,7 @@ def start_server(database_path: Path, config_path: Path, port: int) -> int:
 
 
 def record(status: str, message: str, failures: int, pid: int | None = None) -> None:
+    """更新健康快照并只保留最近 100 条事件；失败时写入后备日志。"""
     try:
         state = read_state()
         checked_at = now_shanghai()
@@ -296,11 +329,16 @@ def record(status: str, message: str, failures: int, pid: int | None = None) -> 
         append_fallback(f"{status} {message}; runtime state write failed: {error}")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    """执行一次探活、必要恢复、重试验证和阈值告警流程。
+
+    健康且拓扑干净时直接返回。否则连续失败数加一并尝试启动；恢复成功会清零失败数，
+    恢复失败则按配置阈值返回 ``UNHEALTHY`` 或 ``NEEDS_ATTENTION``。
+    """
     parser = argparse.ArgumentParser(description="Local Agent Loop dashboard health supervisor")
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--config", default=str(CONFIG_PATH))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     database_path = Path(args.db).resolve()
     config_path = Path(args.config).resolve()
     acquire_lock()

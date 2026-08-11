@@ -1,13 +1,14 @@
-"""Human-facing task management commands used by the Operator and Dashboard.
+"""Operator 与 Dashboard 共用的人工任务管理命令。
 
-These commands edit task definitions or perform explicit human workflow
-transitions. They never claim Worker work. New and materially edited tasks are
-returned to ``DRAFT / UNINSPECTED`` so the Planner must rebuild technical
-scope, acceptance checks, evidence, and capability classification.
+本模块负责两类操作：修改任务的原始定义，以及执行必须由人明确触发的状态流转。
+它不会领取 Worker 任务，也不会直接修改业务项目。新任务和发生实质修改的旧任务
+统一回到 ``DRAFT / UNINSPECTED``，由 Planner 重新生成技术范围、验收项、证据和
+能力等级，避免继续使用已经失效的预检结果。
 
-Most commands accept ``--expected-row-version``. That optimistic concurrency
-check is important for browser actions: it prevents an old page from silently
-overwriting changes made by an automation or another Operator session.
+多数写命令要求调用方传入 ``expected_row_version``。该字段是浏览器操作和自动化
+并发写入之间的乐观锁：页面如果基于旧版本提交，命令会拒绝覆盖较新的任务数据。
+排查“页面操作无效”时，应先核对任务状态、归档时间和 row_version，再检查事务内
+的状态历史与 revision 是否同时写入。
 """
 
 from __future__ import annotations
@@ -50,7 +51,11 @@ from loopdb import (
 
 
 def command_confirm(args: argparse.Namespace) -> None:
-    """Record that a human reviewer accepted a successful task."""
+    """把人工复核通过的 ``SUCCEEDED`` 任务标记为 ``CONFIRMED``。
+
+    命令先校验 row_version、成功状态和未归档条件，再在同一事务内更新进度、写入
+    ``task_history`` 并提升数据库 revision。该操作不归档任务，也不重新执行验证。
+    """
     database = connect(args.db)
     try:
         transaction(database)
@@ -95,7 +100,13 @@ def command_confirm(args: argparse.Namespace) -> None:
 
 
 def command_resolve_human(args: argparse.Namespace) -> None:
-    """Complete a Worker-blocked task after the final human answer is known."""
+    """用最终人工答复结束 Worker 留下的最后一个人工阻塞项。
+
+    正常入口是 ``WAITING_HUMAN``；仅当任务刚被误排回 ``PENDING`` 且尚未再次领取
+    时才兼容直接完成。任务不能存在活动 execution 或 scope 锁，并且必须已经保存
+    至少一条 Worker 验证记录。成功后写入人工答复、结果摘要和状态历史，状态变为
+    ``SUCCEEDED``，但仍需后续人工确认或归档。
+    """
     response = str(args.response or "").strip()
     if not response:
         raise LoopError("人工答复不能为空")
@@ -122,8 +133,8 @@ def command_resolve_human(args: argparse.Namespace) -> None:
         ).fetchone():
             raise LoopError("任务仍持有 scope 锁，不能由人工答复直接完成")
 
-        # PENDING is accepted only for the narrow case where a WAITING_HUMAN
-        # task was accidentally requeued and has not been claimed again.
+        # 这里只兼容一种 PENDING：WAITING_HUMAN 被误操作重新排队，且还没有再次被领取。
+        # 通过检查最新历史记录收窄入口，避免普通待执行任务绕过 Worker 直接完成。
         if task["status"] == "PENDING":
             latest_history = database.execute(
                 "SELECT from_status, to_status FROM task_history WHERE task_id=? ORDER BY id DESC LIMIT 1",
@@ -193,7 +204,11 @@ def command_resolve_human(args: argparse.Namespace) -> None:
 
 
 def command_archive(args: argparse.Namespace) -> None:
-    """Set ``archived_at`` without overloading the task's workflow status."""
+    """为终态任务写入独立的 ``archived_at``，不复用或改变工作流状态。
+
+    仅 ``ARCHIVABLE_STATUSES`` 中的任务可归档。重复归档按幂等操作返回原时间；首次
+    归档会增加 row_version、记录一条状态不变的历史并提升 revision。
+    """
     database = connect(args.db)
     try:
         transaction(database)
@@ -251,7 +266,11 @@ def command_archive(args: argparse.Namespace) -> None:
 
 
 def command_unarchive(args: argparse.Namespace) -> None:
-    """Clear ``archived_at`` while preserving the workflow status."""
+    """清除 ``archived_at`` 并保留任务原有工作流状态。
+
+    未归档任务会幂等返回；已归档任务只清除归档时间并记录操作历史，不会自动重排、
+    重开或回退任务。注意该兼容命令当前不执行 row_version 乐观锁校验。
+    """
     database = connect(args.db)
     try:
         transaction(database)
@@ -299,7 +318,13 @@ def command_unarchive(args: argparse.Namespace) -> None:
 
 
 def command_enqueue(args: argparse.Namespace) -> None:
-    """Create one or more raw Operator tasks as Planner-owned drafts."""
+    """从 UTF-8 JSON 文件批量创建由 Planner 接管的原始草稿任务。
+
+    输入可以是单个任务、带 ``tasks`` 的对象或任务数组。调用方只能提供 Operator
+    拥有的原始字段，不能预写 Planner 的 scope、技术验收和预检结果。每个任务都被
+    强制初始化为 ``DRAFT / UNINSPECTED``，整批任务在同一事务中提交，任一失败则
+    全部回滚。
+    """
     payload = read_json(Path(args.file).resolve())
     tasks = payload if isinstance(payload, list) else payload.get("tasks", [payload])
     database = connect(args.db)
@@ -365,7 +390,12 @@ def command_enqueue(args: argparse.Namespace) -> None:
 
 
 def command_update(args: argparse.Namespace) -> None:
-    """Update Operator-owned fields and invalidate previous Planner output."""
+    """更新 Operator 可编辑字段，并整体作废旧 Planner 结果。
+
+    命令拒绝运行中、已确认、已取消、已归档或正在预检的任务。定义一旦变化，旧的
+    scope、冲突、技术验收、预检证据、执行结果和人工阻塞信息都会在同一事务中清空，
+    任务回到 ``DRAFT / UNINSPECTED``。这样 Worker 不会基于旧锁范围领取新定义。
+    """
     patch = read_json(Path(args.file).resolve())
     allowed = {
         "title",
@@ -487,8 +517,8 @@ def command_update(args: argparse.Namespace) -> None:
         stamp = now_shanghai()
         previous_status = task["status"]
 
-        # All Planner-owned output is cleared as one unit. Keeping any old
-        # scope/evidence after a definition change would make claim unsafe.
+        # Planner 拥有的派生数据必须作为一个整体清空。若定义已变但仍保留旧 scope 或
+        # 预检证据，Worker 可能用错误的锁范围领取任务，造成并发修改越界。
         database.execute("DELETE FROM task_conflicts WHERE task_id=?", (args.task_id,))
         database.execute("DELETE FROM task_scopes WHERE task_id=?", (args.task_id,))
         replace_ordered_text(database, "task_technical_acceptance", args.task_id, [])
@@ -553,7 +583,12 @@ def command_update(args: argparse.Namespace) -> None:
 
 
 def command_requeue(args: argparse.Namespace) -> None:
-    """Return a task either to Planner inspection or the ready Worker queue."""
+    """按当前预检状态把任务送回 Planner 或 Worker 队列。
+
+    ``DRAFT`` 和 ``NEEDS_REVIEW`` 会清除 Planner 派生结果并回到预检入口；其他允许
+    重排的终止/等待状态只有在 preflight 已为 ``READY`` 时才能直接回到 ``PENDING``。
+    两条路径都会清除旧执行结果、人工阻塞和冲突投影，但不会修改原始任务定义。
+    """
     database = connect(args.db)
     try:
         transaction(database)
@@ -647,7 +682,11 @@ def command_requeue(args: argparse.Namespace) -> None:
 
 
 def command_cancel(args: argparse.Namespace) -> None:
-    """Cancel an inactive, unarchived task."""
+    """取消未运行、未预检占用且未归档的任务。
+
+    命令将状态改为 ``CANCELLED``、清除下一步提示并写入历史。它不会终止活动进程，
+    因此 ``RUNNING`` 或 ``INSPECTING`` 必须先由各自的恢复流程释放后才能取消。
+    """
     database = connect(args.db)
     try:
         transaction(database)

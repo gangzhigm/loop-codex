@@ -1,18 +1,13 @@
-"""Recover executions whose heartbeat, lease, or attempt timeout has expired.
+"""恢复 heartbeat、lease 或 attempt timeout 已过期的 execution。
 
-Recovery deliberately separates two concerns that are easy to conflate while
-debugging the queue:
+恢复流程刻意分离两个在排查队列时容易混淆的问题：
 
-1. An execution that stops proving liveness is removed from active capacity.
-2. Its scope locks remain quarantined until the old process or Codex session is
-   known to be unable to write again.
+1. 无法继续证明存活的 execution 会从活动容量中移除。
+2. 在确认旧进程或 Codex 会话无法再次写入前，其 scope 锁继续保持隔离。
 
-That separation prevents a replacement Worker from entering the same scope
-while an abandoned process may still be modifying files. Codex client sessions
-require a human safety confirmation because the local service cannot terminate
-them. Controlled runners instead require process-termination confirmation from
-the runner. This module owns those state transitions; claim code only asks it
-to refresh recovery state before selecting new work.
+这种分离可以防止废弃进程仍可能修改文件时，替代 Worker 进入同一 scope。本机服务无法终止
+Codex 客户端会话，因此必须由人工确认安全；受控 Runner 则必须确认进程已经终止。本模块
+负责这些状态迁移；claim 代码只会在选择新任务前要求它刷新恢复状态。
 """
 
 from __future__ import annotations
@@ -44,12 +39,10 @@ from loopdb import (
 
 
 def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Project executions that no longer satisfy the configured liveness rules.
+    """投影已经不满足存活规则的 execution。
 
-    This function does not mutate the database. Keeping detection read-only
-    makes it useful to both claim-time housekeeping and diagnostic commands.
-    Older schema versions are still readable so migrations can inspect a
-    pre-upgrade database without failing on newer columns.
+    本函数不修改数据库。保持只读后，claim 前的清理和诊断命令都可以复用它。旧 Schema
+    版本仍可读取，使迁移能够检查升级前数据库，而不会因为引用新列失败。
     """
     stamp = now_shanghai()
     current = datetime.fromisoformat(stamp)
@@ -124,7 +117,7 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def _recovery_reason(recovery: dict[str, Any]) -> tuple[str, str]:
-    """Return the machine code and operator-facing label for a liveness loss."""
+    """返回存活性丢失对应的机器代码和 Operator 展示标签。"""
     codes = []
     labels = []
     if recovery["heartbeat_stalled"]:
@@ -142,12 +135,11 @@ def _recovery_reason(recovery: dict[str, Any]) -> tuple[str, str]:
 def transition_recovery_states(
     database: sqlite3.Connection, recoveries: list[dict[str, Any]]
 ) -> None:
-    """Move newly stale executions and their tasks into recoverable states.
+    """把新近失联的 execution 及其任务转入可恢复状态。
 
-    Scope locks become ``QUARANTINED`` rather than being deleted. The task moves
-    from ``RUNNING`` to ``WAITING_HUMAN`` so capacity is released without
-    claiming that the old writer is safe. A later timeout may upgrade a
-    previously stalled execution to ``TIMED_OUT`` while preserving quarantine.
+    scope 锁会改为 ``QUARANTINED``，而不是被删除。任务从 ``RUNNING`` 转为
+    ``WAITING_HUMAN``，在不声称旧写入者安全的前提下释放容量。之后发生的超时可以把已经
+    stalled 的 execution 升级为 ``TIMED_OUT``，同时继续保留隔离。
     """
     if not uses_recovery_schema(database):
         return
@@ -244,7 +236,7 @@ def transition_recovery_states(
 
 
 def recovery_required_records(database: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Group quarantined scope rows into one operator record per execution."""
+    """按 execution 汇总隔离 scope，每个 execution 生成一条 Operator 记录。"""
     if not uses_recovery_schema(database):
         return stalled_executions(database)
     rows = database.execute(
@@ -290,7 +282,7 @@ def recovery_required_records(database: sqlite3.Connection) -> list[dict[str, An
 
 
 def command_recover(args: argparse.Namespace) -> None:
-    """Release a quarantined execution after its old writer is confirmed safe."""
+    """确认旧写入者安全后，释放被隔离的 execution。"""
     database = connect(args.db)
     try:
         transaction(database)

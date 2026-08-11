@@ -1,4 +1,4 @@
-"""Host control-plane adapter and heartbeat lifecycle for one Agent run."""
+"""单次 Agent 运行的宿主控制面适配器和 heartbeat 生命周期。"""
 
 from __future__ import annotations
 
@@ -21,11 +21,10 @@ LOOPCTL = BASE_DIR / "scripts" / "loopctl.py"
 
 
 class SubprocessLoopController:
-    """Invoke the authoritative SQLite control plane through UTF-8 JSON CLI.
+    """通过 UTF-8 JSON CLI 调用权威 SQLite 控制面。
 
-    The runtime intentionally does not import or mutate database functions
-    directly. This adapter keeps claim/heartbeat/finish behind the same
-    validations used by Codex and Dashboard callers.
+    Runtime 刻意不直接导入或调用数据库修改函数。该适配器让 claim、heartbeat 和 finish
+    继续受 Codex 与 Dashboard 调用方共用的校验约束。
     """
 
     def __init__(
@@ -81,7 +80,7 @@ class SubprocessLoopController:
         capability_level: str,
         provider_id: str | None = None,
     ) -> dict[str, Any]:
-        """Claim exactly once per runtime process."""
+        """每个 Runtime 进程只允许领取一次。"""
         if self.claim_count:
             raise AgentRuntimeError("claim may only be called once per runtime instance")
         self.claim_count += 1
@@ -111,7 +110,7 @@ class SubprocessLoopController:
 
 
 class HeartbeatGuard:
-    """Renew a claim on a background thread and surface failures synchronously."""
+    """在后台线程续期领取，并把失败同步暴露给主流程。"""
 
     def __init__(
         self,
@@ -138,7 +137,7 @@ class HeartbeatGuard:
         while not self.stop_event.wait(self.interval_seconds):
             try:
                 self.beat()
-            except Exception:  # pragma: no cover - wall-clock race
+            except Exception:  # pragma: no cover - 依赖真实时钟的竞态分支
                 self.stop_event.set()
 
     def beat(self) -> None:

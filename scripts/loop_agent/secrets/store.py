@@ -1,4 +1,4 @@
-"""Provider-neutral secret storage with fail-closed platform backends."""
+"""Provider 中立、平台后端默认拒绝的密钥存储。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class SecretStoreError(RuntimeError):
-    """Credential-free public failure from the secret boundary."""
+    """密钥边界产生的不含凭据公开失败。"""
 
 
 class SecretStoreUnavailable(SecretStoreError):
@@ -91,7 +91,7 @@ class SecretOperationResult:
 
 
 class SecretBackendAdapter(Protocol):
-    """Stable adapter contract for future external Secret Manager backends."""
+    """供未来外部 Secret Manager 后端使用的稳定适配器契约。"""
 
     capabilities: SecretStoreCapabilities
 
@@ -141,7 +141,7 @@ def validate_secret_value(value: str) -> None:
 
 
 class SecretStore:
-    """High-level store contract shared by initialization, runtimes, and providers."""
+    """初始化、Runtime 和 Provider 共用的高层存储契约。"""
 
     def __init__(
         self,
@@ -163,7 +163,7 @@ class SecretStore:
         return self.adapter.capabilities
 
     def check_access(self) -> SecretStoreCapabilities:
-        """Check account and backend availability without reading a secret value."""
+        """在不读取密钥值的情况下检查账户和后端可用性。"""
         self._ensure_access()
         return self.capabilities
 
@@ -435,7 +435,7 @@ class PythonKeyringBackend:
 
 
 class WindowsCredentialBackend:
-    """Windows Credential Manager adapter without third-party dependencies."""
+    """不依赖第三方库的 Windows Credential Manager 适配器。"""
 
     CRED_TYPE_GENERIC = 1
     CRED_PERSIST_LOCAL_MACHINE = 2

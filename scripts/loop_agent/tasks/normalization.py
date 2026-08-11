@@ -1,10 +1,8 @@
-"""Canonical validation for task text lists and value-free diagnostics.
+"""任务文本列表与无值诊断的标准校验。
 
-These functions are intentionally independent of SQLite. Operator, Planner,
-Worker, migrations, and database projections all use the same strict shapes,
-which prevents one entry point from accepting data another cannot read back.
-All diagnostic metadata is value-free: no prompt, response, or credential text
-is stored in the task database.
+这些函数刻意与 SQLite 解耦。Operator、Planner、Worker、迁移和数据库投影统一使用相同的
+严格数据形状，避免某个入口接受的数据无法被另一个入口读回。所有诊断元数据都不包含值：
+任务数据库不会保存提示词、响应或凭据文本。
 """
 
 from __future__ import annotations
@@ -75,7 +73,7 @@ TRANSIENT_RESULT_DIAGNOSTIC_CATEGORIES = {
 
 
 def normalize_result_diagnostic(raw: Any) -> dict[str, Any] | None:
-    """Validate and canonicalize value-free result diagnostics."""
+    """校验无值结果诊断并转换为标准形式。"""
     if raw is None:
         return None
     if not isinstance(raw, dict):
@@ -148,7 +146,7 @@ def normalize_result_diagnostic(raw: Any) -> dict[str, Any] | None:
 
 
 def _normalize_final_shape(raw: Any) -> dict[str, Any] | None:
-    """Validate final-response shape metadata without retaining field values."""
+    """校验最终响应的形状元数据，不保留字段值。"""
     if raw is None:
         return None
     if not isinstance(raw, dict) or set(raw) != {
@@ -231,7 +229,7 @@ def _normalize_final_shape(raw: Any) -> dict[str, Any] | None:
 def normalize_string_list(
     raw: Any, field: str, *, allow_empty: bool = True
 ) -> list[str]:
-    """Normalize an ordered, unique list of non-empty strings."""
+    """规范化有序、唯一的非空字符串列表。"""
     if not isinstance(raw, list):
         raise LoopError(f"{field} 必须是数组")
     values: list[str] = []
@@ -247,7 +245,7 @@ def normalize_string_list(
 
 
 def normalize_split_suggestions(raw: Any) -> list[dict[str, Any]]:
-    """Validate Planner suggestions without creating any child tasks."""
+    """校验 Planner 拆分建议，但不创建任何子任务。"""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -325,7 +323,7 @@ def normalize_split_suggestions(raw: Any) -> list[dict[str, Any]]:
 
 
 def load_result_diagnostic(value: str | None) -> dict[str, Any] | None:
-    """Load only diagnostics already stored in canonical JSON form."""
+    """只加载已经按标准 JSON 形式存储的诊断。"""
     if value is None:
         return None
     try:

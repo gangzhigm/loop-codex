@@ -1,8 +1,7 @@
-"""UTF-8 JSON and Asia/Shanghai timestamp helpers.
+"""UTF-8 JSON 与 Asia/Shanghai 时间戳辅助函数。
 
-SQLite stores timestamps as explicit ISO 8601 strings and structured values as
-compact UTF-8 JSON. Centralizing those conversions prevents subtly different
-formats in migrations, task writes, and execution results.
+SQLite 使用显式 ISO 8601 字符串保存时间戳，并使用紧凑 UTF-8 JSON 保存结构化值。
+集中处理这些转换可以避免迁移、任务写入和执行结果出现细微的格式差异。
 """
 
 from __future__ import annotations
@@ -20,22 +19,22 @@ SHANGHAI = timezone(timedelta(hours=8))
 
 
 def now_shanghai() -> str:
-    """Return the current Asia/Shanghai time with millisecond precision."""
+    """返回精确到毫秒的当前 Asia/Shanghai 时间。"""
     return datetime.now(SHANGHAI).isoformat(timespec="milliseconds")
 
 
 def expires_at(seconds: int) -> str:
-    """Return an Asia/Shanghai deadline relative to the current time."""
+    """返回相对当前时间计算的 Asia/Shanghai 截止时间。"""
     return (datetime.now(SHANGHAI) + timedelta(seconds=seconds)).isoformat(timespec="milliseconds")
 
 
 def json_dump(value: Any) -> str:
-    """Serialize structured state without ASCII escaping or extra whitespace."""
+    """序列化结构化状态，不转义 ASCII，也不添加多余空白。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def json_load(value: str | None, default: Any) -> Any:
-    """Decode stored JSON, returning the caller's default for empty columns."""
+    """解码已存储的 JSON；字段为空时返回调用方提供的默认值。"""
     if value is None or value == "":
         return default
     return json.loads(value)

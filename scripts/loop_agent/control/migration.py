@@ -1,9 +1,7 @@
-"""Explicit legacy-import and SQLite schema-migration commands.
+"""显式的旧数据导入和 SQLite Schema 迁移命令。
 
-Legacy JSON import is deliberately separate from empty-environment Bootstrap
-and from in-place SQLite upgrades. It always snapshots the input files first,
-refuses a populated target unless force was explicitly supplied, and validates
-the final database before committing.
+旧 JSON 导入刻意与空环境初始化、SQLite 原地升级分离。执行时总是先快照输入文件；除非显式
+提供 force，否则拒绝写入已有数据的目标库；提交前还会校验最终数据库。
 """
 
 from __future__ import annotations
@@ -190,6 +188,5 @@ def command_migrate(args: argparse.Namespace) -> None:
         output({"outcome": "MIGRATED" if result["migrated"] else "ALREADY_CURRENT", **result})
     finally:
         database.close()
-
 
 

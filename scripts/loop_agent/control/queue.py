@@ -1,4 +1,4 @@
-"""Shared queue compatibility and dependency readiness checks."""
+"""共享的队列兼容处理和依赖就绪检查。"""
 
 from __future__ import annotations
 
@@ -43,6 +43,5 @@ def dependencies_ready(database: sqlite3.Connection, task_id: str) -> bool:
         if not dependency or dependency[0] not in DEPENDENCY_COMPLETE_STATUSES:
             return False
     return True
-
 
 

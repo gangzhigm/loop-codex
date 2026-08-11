@@ -17,7 +17,7 @@ from unittest.mock import Mock
 
 from _bootstrap import REPOSITORY_ROOT
 
-from roles.runner.agent_runtime import (
+from runner.agent_runtime import (
     ExecutionProfile,
     RuntimeSettings,
     SafeLogger,

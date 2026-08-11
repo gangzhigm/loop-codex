@@ -1,4 +1,4 @@
-"""Read task execution limits from initialization configuration."""
+"""从初始化配置读取任务执行限制。"""
 
 from __future__ import annotations
 

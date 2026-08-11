@@ -4,7 +4,7 @@
 
 所有文本使用 UTF-8，时间使用 Asia/Shanghai。保留所有既有工作树改动。禁止读取或输出 `.env`、凭据、密钥、`$CODEX_HOME` 和 `.reasonix`。
 
-1. 读取 `E:\code\local-agent-loop\AGENTS.md`、`README.md`、`config\initialization.json` 和 `docs\architecture.md`。初始化配置只用于核对当前入口、支持的能力等级和兼容映射，不得把部署配置写入任务数据。
+1. 读取 `E:\code\local-agent-loop\AGENTS.md` 和 `config\initialization.json`。初始化配置只用于核对当前入口、支持的能力等级和兼容映射，不得把部署配置写入任务数据。
 2. 从自动化入口取得当前 `<capability-level>`、`<execution-policy>` 和固定的 `<runtime-environment>`；后两者分别必须为 `automatic` 与 `codex_automation`，任一值缺失、非法或不匹配时立即失败，不得默认猜测。生成唯一 execution-id（`<capability-level>-worker-` 加 GUID），运行：`py -3 E:\code\local-agent-loop\scripts\loopctl.py claim <execution-id> --runtime-environment codex_automation --capability-level <capability-level> --execution-policy automatic`。
 
    过渡期仅当入口明确提供旧 `<profile>`、但未提供 `<capability-level>` 时，读取 `config/initialization.json` 的 `automations.legacy_profile_compatibility` 解析能力等级与执行策略；只有解析结果为普通 automatic Worker 且能力等级受当前 `codex_automation` execution profile 支持时，才以解析后的 `--capability-level` 发起 claim。映射缺失、结构非法、解析为 manual，或入口同时提供的新旧值不一致时立即失败，不得默认猜测。生产维护窗口完成真实自动化切换与复核前，旧入口仅按该配置兼容。

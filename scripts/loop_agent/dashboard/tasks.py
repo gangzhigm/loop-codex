@@ -1,8 +1,7 @@
-"""Dashboard task actions, recovery validation, health projection, and assets.
+"""Dashboard 任务动作、恢复校验、健康投影和附件处理。
 
-HTTP handlers delegate here after decoding a request. Mutations still run
-through ``loopctl.py`` so Dashboard shares the Operator's transition and
-optimistic-concurrency rules. Only precondition checks read SQLite directly.
+HTTP handler 解码请求后委托给本模块。修改操作仍通过 ``loopctl.py`` 执行，使 Dashboard
+与 Operator 共用状态迁移和乐观并发规则。只有前置条件检查会直接读取 SQLite。
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ IMAGE_CONTENT_TYPES = {
 
 
 class DashboardActionError(Exception):
-    """Public task-action failure plus its HTTP response status."""
+    """公开任务动作失败及其 HTTP 响应状态。"""
 
     def __init__(self, status: HTTPStatus, message: str):
         super().__init__(message)
@@ -46,7 +45,7 @@ class DashboardActionError(Exception):
 def run_loopctl(
     database_path: Path, arguments: list[str]
 ) -> dict[str, object]:
-    """Invoke the task control plane and decode exactly one UTF-8 JSON object."""
+    """调用任务控制面，并严格解码一个 UTF-8 JSON 对象。"""
     try:
         completed = subprocess.run(
             [
@@ -93,7 +92,7 @@ def archive_dashboard_task(
     action: object,
     row_version: object,
 ) -> dict[str, object]:
-    """Confirm a successful task when necessary, then archive it."""
+    """必要时先确认成功任务，然后执行归档。"""
     if not isinstance(task_id, str) or TASK_ID_PATTERN.fullmatch(task_id) is None:
         raise DashboardActionError(HTTPStatus.BAD_REQUEST, "task_id 无效")
     if action != "archive":
@@ -167,7 +166,7 @@ def recover_dashboard_task(
     row_version: object,
     confirmed_safe: object,
 ) -> dict[str, object]:
-    """Recover Codex work only after explicit old-session confirmation."""
+    """只有明确确认旧会话结束后，才恢复 Codex 任务。"""
     if not isinstance(task_id, str) or TASK_ID_PATTERN.fullmatch(task_id) is None:
         raise DashboardActionError(HTTPStatus.BAD_REQUEST, "task_id 无效")
     if (
@@ -236,7 +235,7 @@ def recover_dashboard_task(
 def runtime_health(
     health_state_path: Path = HEALTH_STATE,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Read the UTF-8 health snapshot as service and recent-event lists."""
+    """读取 UTF-8 健康快照，生成服务列表和近期事件列表。"""
     if not health_state_path.exists():
         return [], []
     try:
@@ -267,7 +266,7 @@ def resolve_attachment_image(
     attachment_path: str,
     base_dir: Path = BASE_DIR,
 ) -> tuple[Path, str]:
-    """Resolve a registered task image without asset path traversal."""
+    """解析已登记的任务图片，并阻止附件路径越界。"""
     registered = database.execute(
         "SELECT 1 FROM task_attachments WHERE task_id=? AND path=?",
         (task_id, attachment_path),

@@ -1,6 +1,6 @@
-"""DeepSeek Chat Completions adapter for the neutral Local Agent Loop provider protocol.
+"""把 DeepSeek Chat Completions 适配到 Local Agent Loop 中立 Provider 协议。
 
-The API key is fetched through the shared SecretStore only for an approved provider request.
+只有经过批准的 Provider 请求才能通过共享 SecretStore 获取 API key。
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from loop_agent.secrets.store import (
 
 
 class DeepSeekProviderError(TrustedDiagnosticError):
-    """Public, credential-free provider failure."""
+    """不包含凭据的公开 Provider 失败。"""
 
     def __init__(
         self,
@@ -415,7 +415,7 @@ def verify_deepseek_credential(
     *,
     opener: Callable[..., Any] = urlopen,
 ) -> bool:
-    """Make one explicit, potentially billable request to validate a candidate credential."""
+    """显式发起一次可能计费的请求，以验证候选凭据。"""
     validate_secret_value(candidate)
     model, _reasoning = settings.capability_profiles["L1"]
     body = json.dumps(
@@ -466,6 +466,6 @@ def create_provider(
     config: Mapping[str, Any] | None = None,
     secret_store: SecretStore | None = None,
 ) -> DeepSeekProvider:
-    """Factory for --provider loop_agent.providers.deepseek:create_provider."""
+    """``--provider loop_agent.providers.deepseek:create_provider`` 使用的工厂函数。"""
     loaded_config = config or load_initialization_config()
     return DeepSeekProvider.from_config(loaded_config, secret_store=secret_store)

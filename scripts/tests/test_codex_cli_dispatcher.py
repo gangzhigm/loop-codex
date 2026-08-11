@@ -13,7 +13,7 @@ from pathlib import Path
 
 from _bootstrap import REPOSITORY_ROOT
 
-from roles.dispatcher.codex_cli_dispatcher import (
+from dispatcher.codex_cli_dispatcher import (
     BASE_DIR,
     CodexCliDispatcher,
     DispatcherError,

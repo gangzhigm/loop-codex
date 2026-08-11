@@ -18,9 +18,9 @@ sys.dont_write_bytecode = True
 
 from _bootstrap import REPOSITORY_ROOT
 
-from roles.runner import codex_cli_runner
-from roles.runner.agent_runtime import ExecutionProfile, SafeLogger
-from roles.runner.codex_cli_runner import (
+from runner import codex_cli_runner
+from runner.agent_runtime import ExecutionProfile, SafeLogger
+from runner.codex_cli_runner import (
     CodexCliRunner,
     CodexCliRunnerError,
     CodexCliSettings,

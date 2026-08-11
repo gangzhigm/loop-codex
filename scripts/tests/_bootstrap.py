@@ -22,3 +22,6 @@ sys.dont_write_bytecode = True
 scripts_path = str(SCRIPTS_ROOT)
 if scripts_path not in sys.path:
     sys.path.insert(0, scripts_path)
+repository_path = str(REPOSITORY_ROOT)
+if repository_path not in sys.path:
+    sys.path.append(repository_path)

@@ -1,8 +1,7 @@
-"""Public, value-free diagnostics for model and Provider failures.
+"""模型和 Provider 失败使用的公开无值诊断。
 
-Only the fixed fields defined here may cross from a model Provider into logs,
-task results, or the Dashboard. Raw responses, request bodies, tool arguments,
-and secret material must never be attached to these objects.
+只有这里定义的固定字段可以从模型 Provider 进入日志、任务结果或 Dashboard。原始响应、请求
+正文、工具参数和密钥材料绝不能附加到这些对象中。
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ def _shape_type(value: Any) -> str:
 
 @dataclass(frozen=True)
 class FinalShapeDiagnostic:
-    """Fixed, value-free metadata for a rejected final response."""
+    """被拒绝 final 响应使用的固定无值元数据。"""
 
     finish_reason: str
     content_length: int
@@ -110,7 +109,7 @@ def final_shape_diagnostic(
     content_length: int | None = None,
     json_parse_state: str = "parsed",
 ) -> FinalShapeDiagnostic:
-    """Summarize final content without retaining field values or unknown names."""
+    """汇总 final 内容，但不保留字段值或未知字段名。"""
     if content_length is None:
         content_length = len(raw) if isinstance(raw, str) else 0
     top_level_type = _shape_type(raw) if json_parse_state == "parsed" else "unavailable"
@@ -132,7 +131,7 @@ def final_shape_diagnostic(
 
 @dataclass(frozen=True)
 class ProviderDiagnostic:
-    """Fixed-shape, public metadata for a provider failure."""
+    """Provider 失败使用的固定形状公开元数据。"""
 
     category: str
     retryable: bool = False
@@ -198,13 +197,12 @@ class ProviderDiagnostic:
 
 
 class TrustedDiagnosticError(AgentRuntimeError):
-    """An error whose public details are limited to ProviderDiagnostic."""
+    """公开详情被严格限制为 ProviderDiagnostic 的错误。"""
 
     def __init__(self, diagnostic: ProviderDiagnostic, *, requires_human: bool = False) -> None:
         self.diagnostic = diagnostic
         self.retryable_request = diagnostic.retryable and not diagnostic.retry_exhausted
         self.requires_human = requires_human
         super().__init__(diagnostic.public_text())
-
 
 

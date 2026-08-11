@@ -1,13 +1,11 @@
-"""Task persistence, dependency graph checks, and Dashboard task projection.
+"""任务持久化、依赖图检查和 Dashboard 任务投影。
 
-This module owns rows whose lifecycle is the task itself: task definitions,
-ordered child records, dependencies, scopes, attachments, history, and the
-canonical JSON projection returned to callers. Execution claiming and recovery
-remain in ``control`` modules because they are transactional state machines.
+本模块管理生命周期从属于任务本身的记录：任务定义、有序子记录、依赖、scope、附件、历史，
+以及返回给调用方的标准 JSON 投影。execution 领取和恢复属于事务状态机，因此仍保留在
+``control`` 模块中。
 
-The code is intentionally explicit. Each child table write and compatibility
-branch stays visible so a database can be inspected manually without tracing a
-generic ORM or repository abstraction.
+代码刻意保持显式。每个子表写入和兼容分支都直接可见，人工检查数据库时无需继续追踪通用
+ORM 或仓储抽象。
 """
 
 from __future__ import annotations
@@ -58,7 +56,7 @@ from loop_agent.tasks.scopes import (
 def _dependencies_ready_for_projection(
     database: sqlite3.Connection, task_id: str
 ) -> bool:
-    """Project dependency readiness without changing queue state."""
+    """投影依赖就绪状态，但不改变队列状态。"""
     return (
         database.execute(
             "SELECT 1 FROM task_dependencies d JOIN tasks t ON t.id=d.dependency_id "
@@ -74,7 +72,7 @@ def scope_queue_position(
     task_id: str,
     scope_keys: Iterable[str],
 ) -> int | None:
-    """Return a task's one-based position among pending conflicting scopes."""
+    """返回任务在待执行冲突 scope 中从 1 开始的队列位置。"""
     target_keys = list(scope_keys)
     if not target_keys or not _dependencies_ready_for_projection(database, task_id):
         return None
@@ -109,7 +107,7 @@ def replace_ordered_text(
     task_id: str,
     values: Iterable[str],
 ) -> None:
-    """Replace one task's ordered text child rows inside the caller transaction."""
+    """在调用方事务内替换一个任务的有序文本子记录。"""
     database.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
     database.executemany(
         f"INSERT INTO {table}(task_id, ordinal, text) VALUES(?, ?, ?)",
@@ -132,7 +130,7 @@ def dependency_cycle_path(
     replacement_task_id: str | None = None,
     replacement_dependencies: Iterable[str] | None = None,
 ) -> list[str] | None:
-    """Return one concrete dependency cycle, including its repeated start node."""
+    """返回一条具体依赖环，并在末尾重复起始节点。"""
     graph: dict[str, list[str]] = {
         row[0]: []
         for row in database.execute("SELECT id FROM tasks ORDER BY id").fetchall()
@@ -177,7 +175,7 @@ def set_task_dependencies(
     task_id: str,
     dependencies: Iterable[str],
 ) -> None:
-    """Replace dependency edges after checking existence and global acyclicity."""
+    """检查依赖存在且全局无环后，替换任务依赖边。"""
     values = [str(dependency) for dependency in dependencies]
     if len(values) != len(set(values)):
         raise LoopError("任务依赖不能重复")
@@ -206,10 +204,10 @@ def insert_task(
     actor: str = "migration",
     project_paths: Iterable[str] | None = None,
 ) -> None:
-    """Validate and insert one task plus every owned child row.
+    """校验并插入一个任务及其全部从属子记录。
 
-    The caller owns the transaction. Compatibility branches allow migrations to
-    import into older schemas while current schemas enforce Planner readiness.
+    事务由调用方管理。兼容分支允许迁移向旧 Schema 导入数据，当前 Schema 则强制执行
+    Planner 就绪约束。
     """
     task_id = task.get("id")
     if not isinstance(task_id, str) or not re.fullmatch(
@@ -579,7 +577,7 @@ def task_children(
     column: str = "text",
     order_column: str = "ordinal",
 ) -> list[Any]:
-    """Read one ordered child column for a task."""
+    """读取任务某个有序子表字段。"""
     rows = database.execute(
         f"SELECT {column} FROM {table} WHERE task_id=? ORDER BY {order_column}",
         (task_id,),
@@ -590,7 +588,7 @@ def task_children(
 def task_dict(
     database: sqlite3.Connection, row: sqlite3.Row
 ) -> dict[str, Any]:
-    """Build the canonical API representation of one task row."""
+    """构建单条任务记录的标准 API 表示。"""
     task_id = row["id"]
     attachments = [
         dict(item)
@@ -808,7 +806,7 @@ def task_dict(
 
 
 def all_tasks(database: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Return all tasks in stable queue display order."""
+    """按稳定的队列展示顺序返回全部任务。"""
     rows = database.execute(
         "SELECT * FROM tasks ORDER BY CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 "
         "WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at, id"

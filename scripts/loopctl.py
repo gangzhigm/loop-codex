@@ -6,8 +6,8 @@
 2. 将子命令绑定到 Operator、Planner、Worker 或共享控制模块；
 3. 把可公开的控制面异常统一转换为 UTF-8 JSON。
 
-实际状态机不在这里：Operator 位于 ``roles/operator/control.py``，Planner
-位于 ``roles/planner/control.py``，Worker 位于 ``roles/worker/control.py``，
+实际状态机不在这里：Operator 位于 ``operator/control.py``，Planner
+位于 ``planner/control.py``，Worker 位于 ``worker/control.py``，
 迁移和恢复等共享逻辑位于 ``loop_agent/control``。
 
 手工排查顺序：
@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sqlite3
 import sys
 
@@ -40,6 +41,12 @@ from loopdb import (
     state_payload,
     validate_database,
 )
+
+# Planner 与 Worker 已迁至仓库根目录。追加而非前置根目录，避免根目录 operator/
+# 与 Python 标准库 operator 发生名称遮蔽；Operator 仍使用下方的文件路径加载。
+repository_path = str(BASE_DIR)
+if repository_path not in sys.path:
+    sys.path.append(repository_path)
 
 # 控制面通用工具：JSON/stdin 读取、统一输出、UTF-8 完整性和乐观并发检查。
 # 这些名字继续从 loopctl 导出，是为了兼容已有测试和人工诊断脚本。
@@ -63,7 +70,7 @@ from loop_agent.control.recovery import (
 from loop_agent.control.queue import dependencies_ready, requeue_resolved_conflicts
 
 # Planner 子命令只处理独立静态预检 execution，不占用 Worker execution 容量。
-from roles.planner.control import (
+from planner.control import (
     command_preflight_claim,
     command_preflight_fail,
     command_preflight_heartbeat,
@@ -72,7 +79,7 @@ from roles.planner.control import (
 )
 
 # Worker 子命令负责原子领取、租约心跳、动态扩锁和最终回写。
-from roles.worker.control import (
+from worker.control import (
     claim_target,
     command_claim,
     command_extend_scope,
@@ -83,17 +90,26 @@ from roles.worker.control import (
     task_scopes_and_conflicts,
 )
 
-# Operator 子命令只管理任务定义、人工状态和归档，不实现业务任务。
-from roles.operator.control import (
-    command_archive,
-    command_cancel,
-    command_confirm,
-    command_enqueue,
-    command_requeue,
-    command_resolve_human,
-    command_unarchive,
-    command_update,
+# Operator 位于仓库根目录 ``operator/``，该目录名与 Python 标准库 operator 冲突。
+# 因此按绝对文件路径加载，不能写成 ``from operator.control import ...``；对外保留
+# 不变的 loopctl 子命令和 handler 名称。
+operator_control_path = BASE_DIR / "operator" / "control.py"
+operator_spec = importlib.util.spec_from_file_location(
+    "local_agent_loop_operator_control", operator_control_path
 )
+if operator_spec is None or operator_spec.loader is None:
+    raise RuntimeError("无法加载根目录 Operator 控制模块")
+operator_control = importlib.util.module_from_spec(operator_spec)
+sys.modules[operator_spec.name] = operator_control
+operator_spec.loader.exec_module(operator_control)
+command_archive = operator_control.command_archive
+command_cancel = operator_control.command_cancel
+command_confirm = operator_control.command_confirm
+command_enqueue = operator_control.command_enqueue
+command_requeue = operator_control.command_requeue
+command_resolve_human = operator_control.command_resolve_human
+command_unarchive = operator_control.command_unarchive
+command_update = operator_control.command_update
 
 
 def command_validate(args: argparse.Namespace) -> None:

@@ -43,7 +43,7 @@ $config = $configText | ConvertFrom-Json
 
 Assert-Condition ($config.config_version -eq '4.3.0') 'config_version 为 4.3.0'
 Assert-Condition ($config.database.schema_version -eq '3.7.0') 'Schema 契约为 3.7.0'
-Assert-Condition ($config.prompts.planner -eq 'prompts/planner.md') 'Planner 提示词路径唯一且已登记'
+Assert-Condition ($config.prompts.planner -eq 'planner/planner.md') 'Planner 提示词路径唯一且已登记'
 
 $promptPaths = @(
     $config.prompts.operator,
@@ -89,7 +89,7 @@ Assert-Condition ($plannerAutomation.runtime_environment -eq 'codex_automation')
 Assert-Condition ($plannerAutomation.execution_kind -eq 'PLANNER') 'Planner execution kind 已隔离'
 Assert-Condition ($plannerAutomation.sandbox -eq 'read-only') 'Planner 自动化声明只读沙箱'
 Assert-Condition ($plannerAutomation.approval_policy -eq 'never') 'Planner 自动化禁止审批升级'
-Assert-Condition ($plannerAutomation.entry_prompt -match 'prompts\\planner\.md') 'Planner 入口只引用权威提示词'
+Assert-Condition ($plannerAutomation.entry_prompt -match 'planner\\planner\.md') 'Planner 入口只引用权威提示词'
 Assert-Condition ($plannerAutomation.entry_prompt -match 'runtime_environment=codex_automation') 'Planner 入口显式声明运行环境'
 Assert-Condition ($plannerAutomation.entry_prompt -match 'execution_kind=PLANNER') 'Planner 入口显式声明角色'
 Assert-Condition ($plannerAutomation.entry_prompt -match 'sandbox=read-only') 'Planner 入口显式声明只读边界'
@@ -111,7 +111,7 @@ foreach ($level in $expectedWorkers.Keys) {
     Assert-Condition ($worker.reasoning_effort -eq $expected[1]) "$level Worker reasoning 固定"
     Assert-Condition ($worker.offset_minutes -eq $expected[2]) "$level Worker 错峰固定"
 }
-Assert-Condition ($config.automations.entry_prompt_template -match 'prompts\\worker\.md') 'Worker 入口只引用权威提示词'
+Assert-Condition ($config.automations.entry_prompt_template -match 'worker\\worker\.md') 'Worker 入口只引用权威提示词'
 Assert-Condition ($config.automations.entry_prompt_template -match 'capability_level=\{capability_level\}') 'Worker 入口显式传递能力等级'
 Assert-Condition ($config.automations.entry_prompt_template -match 'execution_policy=automatic') 'Worker 入口显式传递执行策略'
 
@@ -120,7 +120,7 @@ $plannerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.planner)
 $workerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.worker)
 $cliPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.cli_worker)
 $loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'scripts\loopctl.py')
-$plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'scripts\roles\planner\control.py')
+$plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'planner\control.py')
 $controlIoSource = Read-Utf8Strict -Path (Join-Path $root 'scripts\loop_agent\control\io.py')
 Assert-Condition ($plannerPrompt -match 'preflight-claim') 'Planner 提示词包含单次 claim 协议'
 Assert-Condition ($plannerPrompt -match '--sandbox read-only') 'Planner 提示词核对只读入口'
@@ -130,7 +130,7 @@ Assert-Condition ($plannerPrompt -match 'APPROVED_PLANNER_ESCALATION') 'Planner 
 Assert-Condition ($plannerPrompt -match '不得实现任务') 'Planner 提示词禁止实现业务任务'
 Assert-Condition ($operatorPrompt -match 'APPROVED_PLANNER_ESCALATION') 'Operator 提示词记录 L5/manual 批准'
 Assert-Condition (
-    ($loopctlSource -match 'from roles\.planner\.control import') -and
+    ($loopctlSource -match 'from planner\.control import') -and
     ($plannerControlSource -match 'planner_escalation_is_approved')
 ) '控制面执行 L5/manual 批准门禁'
 Assert-Condition (

@@ -1,10 +1,8 @@
-"""Cross-table consistency validation for the SQLite task store.
+"""SQLite 任务存储的跨表一致性校验。
 
-Validation is intentionally exhaustive and read-only. It checks SQLite's own
-integrity, the task-only table allowlist, workflow/history invariants, routing,
-Planner state, recovery quarantine, concurrency limits, dependency cycles, and
-scope-lock compatibility. The returned error list is suitable for both CLI
-diagnostics and initialization checks.
+校验过程刻意保持全面且只读。它会检查 SQLite 自身完整性、仅任务表允许列表、工作流和历史
+不变量、执行路由、Planner 状态、恢复隔离、并发限制、依赖环及 scope 锁兼容性。返回的错误
+列表同时适用于 CLI 诊断和初始化检查。
 """
 
 from __future__ import annotations
@@ -58,7 +56,7 @@ def validate_database(
     database: sqlite3.Connection,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a structured validation result without mutating the database."""
+    """返回结构化校验结果，不修改数据库。"""
     value = config or load_initialization_config()
     errors: list[str] = []
     version = schema_version(database)

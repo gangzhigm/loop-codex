@@ -1,8 +1,7 @@
-"""Feature probes for databases that may still use an older task schema.
+"""探测仍可能使用旧任务 Schema 的数据库能力。
 
-The CLI must inspect and migrate older databases, so behavior cannot assume all
-new columns exist before a migration completes. These probes centralize the
-small PRAGMA checks used by task projection, validation, claim, and recovery.
+CLI 必须能够检查和迁移旧数据库，因此迁移完成前不能假设所有新列都存在。这里集中保存
+任务投影、校验、领取和恢复共用的少量 PRAGMA 检查。
 """
 
 from __future__ import annotations

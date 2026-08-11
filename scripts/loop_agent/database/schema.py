@@ -1,9 +1,8 @@
-"""SQLite connection, empty-schema creation, and version migrations.
+"""SQLite 连接、空 Schema 创建和版本迁移。
 
-Runtime task operations should not contain schema-rewrite logic. This module is
-the single place to inspect when Bootstrap cannot create a database or migrate
-an existing database. Every migration uses an explicit transaction, verifies
-foreign keys and quick_check, and restores foreign-key enforcement afterward.
+运行时任务操作不应包含 Schema 改写逻辑。初始化无法创建数据库或迁移现有数据库时，
+本模块是唯一排查入口。每次迁移都使用显式事务，校验外键和 quick_check，并在结束后恢复
+外键约束。
 """
 
 from __future__ import annotations
@@ -619,6 +618,5 @@ def commit(database: sqlite3.Connection) -> None:
 def rollback(database: sqlite3.Connection) -> None:
     if database.in_transaction:
         database.execute("ROLLBACK")
-
 
 

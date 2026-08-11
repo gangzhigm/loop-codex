@@ -1,13 +1,11 @@
-"""Filesystem scope enforcement and the self-hosted Agent tool sandbox.
+"""文件系统 scope 约束和 Self-hosted Agent 工具沙箱。
 
-This is the security-sensitive local I/O boundary. All model-supplied paths are
-resolved relative to the configured workspace, checked against the exact scope
-claimed from SQLite, and rejected when they address credentials, VCS internals,
-or other sensitive locations. Text reads and writes are strict UTF-8.
+这里是安全敏感的本地 I/O 边界。模型提供的所有路径都相对于配置工作区解析，并与从 SQLite
+领取的精确 scope 核对；指向凭据、VCS 内部目录或其他敏感位置时会被拒绝。文本读写严格使用
+UTF-8。
 
-Only read-only ``git``/``rg`` commands are allowed. They execute without a
-shell, with restricted arguments, a sanitized environment, and binaries that
-must resolve outside the task workspace.
+只允许执行只读 ``git``/``rg`` 命令；它们不经过 shell，参数受限、环境已脱敏，且可执行
+文件必须解析到任务工作区之外。
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ from loop_agent.runtime.core import (
 
 
 class ScopePolicy:
-    """Resolve model paths against the immutable scopes of a claimed task."""
+    """依据已领取任务的不可变 scope 解析模型路径。"""
 
     def __init__(self, workspace: Path, scopes: list[str]) -> None:
         self.workspace = workspace.resolve()
@@ -60,7 +58,7 @@ class ScopePolicy:
 
     @staticmethod
     def _is_sensitive(parts: tuple[str, ...]) -> bool:
-        """Detect control data, VCS internals, credential stores, and key files."""
+        """检测控制数据、VCS 内部目录、凭据存储和密钥文件。"""
         for part in parts:
             lowered = part.lower()
             if (
@@ -96,7 +94,7 @@ class ScopePolicy:
         must_exist: bool = False,
         directory: bool | None = None,
     ) -> Path:
-        """Return one safe absolute path or reject before any I/O occurs."""
+        """返回一个安全绝对路径，或在发生任何 I/O 前拒绝请求。"""
         if not isinstance(value, str) or not value.strip():
             raise ToolRejected("path must be a non-empty relative path")
         candidate = Path(value)
@@ -126,7 +124,7 @@ class ScopePolicy:
         return resolved
 
     def context_files(self) -> list[Path]:
-        """Find applicable AGENTS.md files from workspace root to scope roots."""
+        """查找从工作区根目录到各 scope 根目录适用的 AGENTS.md。"""
         candidates: set[Path] = set()
         for root, directory_scope in self.scope_roots:
             cursor = root if directory_scope else root.parent
@@ -143,7 +141,7 @@ class ScopePolicy:
 
 
 class ToolSandbox:
-    """Execute the small, explicit tool protocol exposed to a model provider."""
+    """执行暴露给模型 Provider 的小型显式工具协议。"""
 
     TOOL_SCHEMAS = [
         {"name": "read_file", "arguments": {"path": "relative UTF-8 file path"}},
@@ -174,8 +172,7 @@ class ToolSandbox:
         self.policy = policy
         self.settings = settings
         self.approved_actions = approved_actions
-        # Retry logic uses this counter to avoid replaying an attempt after any
-        # local write may already have succeeded.
+        # 重试逻辑通过该计数器避免在任何本地写入可能已经成功后重放 attempt。
         self.side_effect_count = 0
 
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -366,7 +363,7 @@ class ToolSandbox:
 
     @staticmethod
     def _safe_git(argv: list[str]) -> list[str]:
-        """Translate model git requests into fixed read-only invocations."""
+        """把模型 git 请求转换为固定的只读调用。"""
         if len(argv) < 2 or argv[1] not in {"status", "diff"}:
             raise ToolRejected("only git status and git diff are allowed")
         if argv[1] == "status":
@@ -401,7 +398,7 @@ class ToolSandbox:
         ]
 
     def _safe_rg(self, argv: list[str], cwd: Path) -> list[str]:
-        """Reject rg features that execute preprocessors or leave scope."""
+        """拒绝会执行预处理器或离开 scope 的 rg 功能。"""
         if len(argv) < 2:
             raise ToolRejected("rg requires a pattern")
         forbidden = {
@@ -454,7 +451,7 @@ class ToolSandbox:
         ]
 
     def _trusted_executable(self, name: str) -> Path:
-        """Resolve an allowlisted binary and reject workspace shadowing."""
+        """解析允许列表中的可执行文件，并拒绝工作区路径遮蔽。"""
         resolved_name = shutil.which(name, path=os.environ.get("PATH", ""))
         if not resolved_name:
             raise ToolRejected("allowed command is not installed")

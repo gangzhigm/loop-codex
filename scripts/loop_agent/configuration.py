@@ -1,8 +1,7 @@
-"""Configuration loading and execution-route resolution.
+"""初始化配置加载与执行路由解析。
 
-This module validates the complete non-secret deployment contract before any
-component uses it. It does not inspect whether optional executors are actually
-installed; Bootstrap capability detection is a separate concern.
+任何组件使用配置前，本模块都会验证完整的非敏感部署契约。这里不检查可选执行器是否
+真实安装；新环境的能力探测属于初始化流程的独立职责。
 """
 
 from __future__ import annotations
@@ -174,12 +173,14 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and isinstance(workspace.get("project_registry"), str)
         and database.get("path") == "data/loop-agent.sqlite3"
         and database.get("schema_version") == SCHEMA_VERSION
-        and prompts.get("operator") == "prompts/operator.md"
-        and prompts.get("planner") == "prompts/planner.md"
-        and prompts.get("worker") == "prompts/worker.md"
+        and prompts.get("operator") == "operator/operator.md"
+        and prompts.get("planner") == "planner/planner.md"
+        and prompts.get("worker") == "worker/worker.md"
+        and prompts.get("cli_worker") == "runner/cli-worker.md"
         and (BASE_DIR / prompts["operator"]).is_file()
         and (BASE_DIR / prompts["planner"]).is_file()
         and (BASE_DIR / prompts["worker"]).is_file()
+        and (BASE_DIR / prompts["cli_worker"]).is_file()
         and isinstance(execution.get("heartbeat_interval_seconds"), int)
         and execution["heartbeat_interval_seconds"] >= 1
         and isinstance(execution.get("stalled_after_seconds"), int)
@@ -277,7 +278,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner_automation.get("sandbox") == "read-only"
         and planner_automation.get("approval_policy") == "never"
         and isinstance(planner_automation.get("entry_prompt"), str)
-        and "prompts\\planner.md" in planner_automation["entry_prompt"]
+        and "planner\\planner.md" in planner_automation["entry_prompt"]
         and "runtime_environment=codex_automation" in planner_automation["entry_prompt"]
         and "execution_kind=PLANNER" in planner_automation["entry_prompt"]
         and "sandbox=read-only" in planner_automation["entry_prompt"]
@@ -297,6 +298,3 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     if not valid:
         raise LoopError(f"初始化配置字段或取值无效: {config_path}")
     return config
-
-
-

@@ -1,3 +1,15 @@
+"""Loop Agent 本机 Dashboard、任务操作、运维配置和 Secret API 服务。
+
+服务同时提供静态前端、SQLite 状态投影、附件图片、healthz，以及少量受控写接口。
+任务写操作必须委托 loopctl，不能在 HTTP Handler 内复制状态机。运维与密钥接口只
+允许 ``127.0.0.1``，并组合校验 Host、Origin、CSRF token、一次性 request_id、
+Content-Type 和请求体大小。
+
+排查顺序建议为：先确认路由和 HTTP 安全门禁，再检查 ``loop_agent.dashboard`` 中的
+领域函数，最后检查 SQLite 或 SecretStore。不得通过放宽监听地址或关闭安全校验临时
+解决页面请求失败。
+"""
+
 from __future__ import annotations
 
 # 中文排查：Dashboard Server 提供只读状态、受控任务动作、运维配置和本机 Secret API。
@@ -64,7 +76,10 @@ MAX_ACTION_BODY_BYTES = 4096
 
 
 class SecretApiError(Exception):
+    """携带 HTTP 状态码的可预期 Secret API 请求错误。"""
+
     def __init__(self, status: HTTPStatus, message: str):
+        """保存对客户端公开的安全消息与响应状态。"""
         super().__init__(message)
         self.status = status
 
@@ -92,6 +107,12 @@ from loop_agent.dashboard.tasks import (
 
 
 class DashboardServer(ThreadingHTTPServer):
+    """保存 Dashboard 共享依赖与本机安全状态的多线程 HTTP Server。
+
+    初始化时固定数据库、前端、运行配置、SecretStore、Provider 校验器和健康文件；
+    CSRF token 仅存在内存中。请求线程通过锁共享防重放缓存和运维配置写入口。
+    """
+
     daemon_threads = True
     allow_reuse_address = False
 
@@ -107,6 +128,7 @@ class DashboardServer(ThreadingHTTPServer):
         health_state_path: Path = HEALTH_STATE,
         provider_verifiers: Mapping[str, Callable[[str], bool | None]] | None = None,
     ):
+        """校验仅本机绑定和 Secret API 配置，然后建立共享服务上下文。"""
         if address[0] != "127.0.0.1":
             raise ValueError("Dashboard Server with Secret API must bind to 127.0.0.1")
         dashboard_config = runtime_config.get("dashboard")
@@ -145,6 +167,11 @@ class DashboardServer(ThreadingHTTPServer):
         self._operations_config_lock = threading.RLock()
 
     def reserve_request_id(self, value: object) -> str:
+        """校验并原子占用 UUIDv4 request_id，拒绝有限窗口内的请求重放。
+
+        缓存达到配置上限时淘汰最旧 ID。此方法只防止同一服务进程内重放，服务重启后
+        缓存不会持久化，因此仍必须同时依赖 Origin 与 CSRF 校验。
+        """
         if not isinstance(value, str):
             raise SecretApiError(HTTPStatus.BAD_REQUEST, "request_id 无效")
         try:
@@ -165,9 +192,12 @@ class DashboardServer(ThreadingHTTPServer):
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    """实现 Dashboard 的 GET、POST、OPTIONS 路由与统一安全响应头。"""
+
     server: DashboardServer
 
     def log_message(self, format_string: str, *args: object) -> None:
+        """抑制高频成功状态轮询，并对 Secret 路由隐藏请求细节后记录访问。"""
         if urlparse(self.path).path == "/api/state" and len(args) > 1 and str(args[1]) == "200":
             return
         if urlparse(self.path).path == SECRET_API_PATH:
@@ -187,6 +217,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         *,
         headers: Mapping[str, str] | None = None,
     ) -> None:
+        """发送字节响应并统一添加禁缓存、同源、禁嗅探和禁嵌入安全头。"""
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -207,6 +238,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         *,
         headers: Mapping[str, str] | None = None,
     ) -> None:
+        """以 UTF-8 序列化 JSON，并复用统一字节响应与安全头。"""
         self.send_bytes(
             status,
             "application/json; charset=utf-8",
@@ -215,11 +247,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
 
     def _require_secret_host(self) -> None:
+        """要求唯一 Host 头精确等于当前 127.0.0.1 监听地址，防御 DNS rebinding。"""
         values = self.headers.get_all("Host", failobj=[])
         if len(values) != 1 or not hmac.compare_digest(values[0], self.server.expected_host):
             raise SecretApiError(HTTPStatus.MISDIRECTED_REQUEST, "Host 无效")
 
     def _require_secret_origin(self) -> None:
+        """要求唯一同源 Origin，并拒绝浏览器明确标记的跨站请求。"""
         origins = self.headers.get_all("Origin", failobj=[])
         if len(origins) != 1 or not hmac.compare_digest(origins[0], self.server.expected_origin):
             raise SecretApiError(HTTPStatus.FORBIDDEN, "Origin 无效")
@@ -228,11 +262,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             raise SecretApiError(HTTPStatus.FORBIDDEN, "跨站请求已拒绝")
 
     def _require_csrf_token(self) -> None:
+        """使用恒定时间比较验证唯一的内存 CSRF token 请求头。"""
         values = self.headers.get_all("X-CSRF-Token", failobj=[])
         if len(values) != 1 or not hmac.compare_digest(values[0], self.server.csrf_token):
             raise SecretApiError(HTTPStatus.FORBIDDEN, "CSRF token 无效")
 
     def _read_secret_json(self) -> dict[str, object]:
+        """严格读取 Secret JSON 请求体并执行传输、大小、媒体类型和 UTF-8 校验。
+
+        不支持分块传输；Content-Length 必须准确。媒体类型错误时仍读取并丢弃固定长度
+        请求体，避免同一连接中的后续请求错位。
+        """
         if self.headers.get("Transfer-Encoding") is not None:
             raise SecretApiError(HTTPStatus.BAD_REQUEST, "不支持 Transfer-Encoding")
         try:
@@ -259,6 +299,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return payload
 
     def _secret_status_payload(self) -> dict[str, object]:
+        """生成所有已配置 Provider 的非敏感密钥状态列表，不读取或返回密钥值。"""
         providers = [
             provider_secret_status(
                 self.server.secret_store,
@@ -271,6 +312,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return {"ok": True, "providers": providers}
 
     def _operations_config_payload(self) -> dict[str, object]:
+        """组合当前运维配置、平台能力和 Secret 非敏感状态供配置页展示。"""
         return operations_config_payload(
             self.server.runtime_config,
             self.server.secret_store,
@@ -279,6 +321,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
 
     def _read_operations_json(self) -> dict[str, object]:
+        """按运维接口规则严格读取 UTF-8 JSON 对象，并限制请求体大小。"""
         if self.headers.get("Transfer-Encoding") is not None:
             raise OperationsApiError(HTTPStatus.BAD_REQUEST, "不支持 Transfer-Encoding")
         try:
@@ -300,6 +343,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return payload
 
     def _active_execution_count(self) -> int:
+        """通过短 SQLite 连接读取 RUNNING execution 数量，用于配置变更门禁。"""
         database = connect(self.server.database_path)
         try:
             return int(database.execute("SELECT count(*) FROM executions WHERE status='RUNNING'").fetchone()[0])
@@ -307,6 +351,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             database.close()
 
     def _handle_operations_action(self, request: object) -> None:
+        """处理工作区选择或全局 task_root 更新。
+
+        两种动作都要求本机 Host、同源、CSRF 和一次性 request_id。真正更新前还要求
+        明确确认词、绝对路径、零活动 execution，并在服务级锁内验证项目注册表后原子
+        写配置；文件选择对话框取消属于正常结果。
+        """
         if getattr(request, "query", ""):
             raise OperationsApiError(HTTPStatus.BAD_REQUEST, "运维操作接口不接受查询参数")
         self._require_secret_host()
@@ -351,6 +401,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_json(HTTPStatus.OK, {"ok": True, "outcome": "UPDATED", "task_root": str(root)})
 
     def _handle_secret_get(self, request: object) -> None:
+        """返回非敏感 Secret 状态，并通过响应头下发本进程 CSRF token。"""
         if getattr(request, "query", ""):
             raise SecretApiError(HTTPStatus.BAD_REQUEST, "Secret API 不接受查询参数")
         self._require_secret_host()
@@ -361,6 +412,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
 
     def _validate_secret_payload(self, payload: dict[str, object]) -> tuple[str, str, str, bool]:
+        """校验 Secret 动作的精确字段集、Provider、确认词和防重放 ID。
+
+        返回 Provider、动作、secret_ref 和是否真实联网；不会读取 payload 中的密钥值。
+        不同动作及 connect 组合使用不同确认词，防止 UI 状态错位导致高风险误操作。
+        """
         provider_id = payload.get("provider_id")
         action = payload.get("action")
         if not isinstance(provider_id, str) or provider_id not in self.server.provider_secret_refs:
@@ -393,6 +449,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return provider_id, action, self.server.provider_secret_refs[provider_id], connect
 
     def _handle_secret_post(self, request: object) -> None:
+        """执行 Secret 写入、轮换、校验或删除，并只记录非敏感健康事件。
+
+        持久化动作会先检查存储能力；联网校验必须存在 Provider verifier。领域异常映射
+        为稳定 HTTP 状态，响应只包含操作名和重新计算的状态，绝不回显密钥。
+        """
         if getattr(request, "query", ""):
             raise SecretApiError(HTTPStatus.BAD_REQUEST, "Secret API 不接受查询参数")
         self._require_secret_host()
@@ -462,6 +523,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
 
     def do_GET(self) -> None:
+        """分发只读页面、资源、状态、附件、健康检查及 Secret/运维查询。
+
+        每个需要数据库的路由使用短连接并在 finally 关闭。附件由任务记录与白名单图片
+        类型共同解析；healthz 同时验证 Schema 版本，不能只以 HTTP 进程存活判断健康。
+        """
         request = urlparse(self.path)
         path = request.path
         if path == SECRET_API_PATH:
@@ -574,6 +640,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:
+        """分发 Secret、运维和受控任务动作，并把预期错误映射为 JSON 响应。
+
+        任务动作当前只支持归档和人工确认后的恢复，字段集必须精确，写入委托 Dashboard
+        领域函数/loopctl 完成。未知路由、错误媒体类型和损坏 UTF-8 分别返回明确状态。
+        """
         request = urlparse(self.path)
         if request.path == SECRET_API_PATH:
             try:
@@ -651,6 +722,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(error)})
 
     def do_OPTIONS(self) -> None:
+        """显式拒绝敏感接口的 CORS 预检，其余路由返回方法不允许。"""
         if urlparse(self.path).path in {SECRET_API_PATH, OPERATIONS_ACTION_PATH}:
             self.send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "CORS 请求已拒绝"})
             return
@@ -658,6 +730,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def parser() -> argparse.ArgumentParser:
+    """构建 Dashboard Server 命令行，允许覆盖数据库、配置、主机和端口。"""
     value = argparse.ArgumentParser(description="Local Agent Loop SQLite dashboard server")
     value.add_argument("--db", default=str(DEFAULT_DB))
     value.add_argument("--config", default=str(CONFIG_PATH))
@@ -666,8 +739,13 @@ def parser() -> argparse.ArgumentParser:
     return value
 
 
-def main() -> None:
-    args = parser().parse_args()
+def main(argv: list[str] | None = None) -> None:
+    """加载配置、强制本机监听、写 PID 文件并运行 HTTP 服务。
+
+    SIGTERM/SIGINT 通过独立线程调用 shutdown，避免在 serve_forever 所在线程死锁。
+    服务退出后关闭 socket，并且仅在 PID 文件仍属于当前进程时删除它。
+    """
+    args = parser().parse_args(argv)
     database_path = Path(args.db).resolve()
     config_path = Path(args.config).resolve()
     config = load_initialization_config(config_path)
@@ -686,8 +764,10 @@ def main() -> None:
     pid_path.write_text(str(os.getpid()), encoding="utf-8")
 
     def stop_server(signum: int, frame: object) -> None:
+        """把进程信号转换为异步 HTTP Server 关闭请求。"""
+
         del signum, frame
-        # shutdown() must run outside the serve_forever thread.
+        # shutdown() 必须在 serve_forever 所在线程之外调用，否则会互相等待形成死锁。
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, stop_server)

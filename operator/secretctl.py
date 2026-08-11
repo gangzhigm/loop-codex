@@ -1,4 +1,9 @@
-"""Interactive UTF-8 secret initialization and lifecycle command."""
+"""Provider 密钥初始化与生命周期管理的 UTF-8 交互命令。
+
+本文件只负责解析人工命令、确认高风险动作并调用统一 ``SecretStore``。支持查询、
+校验、首次写入、轮换和删除；不会把密钥写入 SQLite、配置文件、日志或 JSON 输出。
+启用 ``--connect`` 会真实请求 Provider，可能产生费用，因此必须再次输入 CONNECT。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
-SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_ROOT = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
@@ -35,6 +40,7 @@ PROVIDERS = {"deepseek"}
 
 
 def parser() -> argparse.ArgumentParser:
+    """构建密钥管理命令行，并仅开放已注册的 Provider 与生命周期动作。"""
     root = argparse.ArgumentParser(description="Initialize Local Agent Loop provider secrets")
     root.add_argument("--config", default=str(CONFIG_PATH))
     commands = root.add_subparsers(dest="command", required=True)
@@ -51,6 +57,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _secret_ref(config: Mapping[str, Any], provider: str) -> str:
+    """从初始化配置解析 Provider 的密钥引用名，不读取密钥本身。"""
     value = config.get(provider)
     secret_ref = value.get("secret_ref") if isinstance(value, Mapping) else None
     if not isinstance(secret_ref, str) or not secret_ref:
@@ -59,11 +66,13 @@ def _secret_ref(config: Mapping[str, Any], provider: str) -> str:
 
 
 def _confirm(input_fn: Callable[[str], str], prompt: str, expected: str) -> None:
+    """要求用户完整输入指定确认词；任何其他输入都立即中止高风险操作。"""
     if input_fn(prompt).strip() != expected:
         raise SecretStoreError("operation was not confirmed")
 
 
 def _read_secret(secret_input: Callable[[str], str]) -> str:
+    """通过无回显输入读取两次 DeepSeek 密钥，并在内容不一致时拒绝继续。"""
     first = secret_input("DeepSeek API key: ")
     second = secret_input("Repeat DeepSeek API key: ")
     if first != second:
@@ -76,6 +85,7 @@ def _connection_verifier(
     connect: bool,
     input_fn: Callable[[str], str],
 ) -> Callable[[str], bool | None] | None:
+    """按 ``--connect`` 构造真实连接校验器，并在联网前取得明确确认。"""
     if not connect:
         return None
     _confirm(
@@ -95,6 +105,11 @@ def execute(
     input_fn: Callable[[str], str] = input,
     secret_input: Callable[[str], str] = getpass.getpass,
 ) -> dict[str, Any]:
+    """执行一个密钥动作并返回不含敏感值的结构化结果。
+
+    环境变量型存储只允许注入和校验，不能持久化 set、rotate 或 delete。写入和轮换
+    可选择先做真实连接验证；删除和轮换必须分别输入固定确认词。
+    """
     secret_ref = _secret_ref(config, args.provider)
     if args.command == "status":
         return {"outcome": "STATUS", "provider": args.provider, **store.status(secret_ref).as_dict()}
@@ -135,6 +150,7 @@ def main(
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
+    """加载配置与 SecretStore，统一输出 JSON，并将可预期错误映射为退出码 1。"""
     try:
         args = parser().parse_args(argv)
         config = load_initialization_config(Path(args.config))

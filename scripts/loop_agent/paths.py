@@ -1,8 +1,7 @@
-"""Canonical repository paths used by every Local Agent Loop component.
+"""所有 Local Agent Loop 组件共同使用的标准仓库路径。
 
-Keeping path calculation here prevents individual entry points from deriving
-different roots. Configuration may select a task workspace, but it may not
-move the Loop system files themselves at runtime.
+集中计算路径可以防止不同入口推导出不同的根目录。配置可以选择任务工作区，但运行时
+不能移动 Loop 系统文件本身。
 """
 
 # 中文排查：仓库根目录、数据库、Schema 和初始化配置的标准路径只允许在这里推导。

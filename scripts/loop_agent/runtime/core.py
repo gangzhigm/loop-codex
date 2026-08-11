@@ -1,4 +1,4 @@
-"""Core runtime types, route resolution, safe environment, and event logging."""
+"""Runtime 核心类型、路由解析、安全环境和事件日志。"""
 
 from __future__ import annotations
 
@@ -18,11 +18,10 @@ from loopdb import resolve_execution_profile
 
 
 def safe_subprocess_environment() -> dict[str, str]:
-    """Copy process settings without propagating injected credentials.
+    """复制进程环境，但不传播注入的凭据。
 
-    Providers receive credentials through ``SecretStore``. Child tools do not
-    inherit variables whose names indicate secrets, even when the parent Agent
-    process needed those values to call its provider.
+    Provider 通过 ``SecretStore`` 获取凭据。即使父 Agent 进程调用 Provider 时需要某个凭据，
+    子工具也不会继承名称表明其包含密钥的环境变量。
     """
     return {
         name: value
@@ -32,11 +31,11 @@ def safe_subprocess_environment() -> dict[str, str]:
 
 
 class ToolRejected(AgentRuntimeError):
-    """A requested tool call violated the local sandbox contract."""
+    """请求的工具调用违反了本地沙箱契约。"""
 
 
 class ApprovalRequired(AgentRuntimeError):
-    """A high-risk action was requested without task-level approval."""
+    """请求了尚未获得任务级批准的高风险操作。"""
 
     def __init__(self, action: str) -> None:
         self.action = action
@@ -44,19 +43,19 @@ class ApprovalRequired(AgentRuntimeError):
 
 
 class AgentAttemptTimeout(AgentRuntimeError):
-    """The complete Agent attempt exceeded its route-specific deadline."""
+    """完整 Agent attempt 超过了对应路由的截止时间。"""
 
 
 class ModelRequestTimeout(AgentRuntimeError):
-    """One model request exceeded the configured per-request timeout."""
+    """单次模型请求超过了配置的请求超时。"""
 
 
 class OwnedWorkStillRunning(AgentRuntimeError):
-    """A timed-out provider thread may still own side effects or resources."""
+    """超时的 Provider 线程可能仍持有副作用或资源。"""
 
 
 class ModelProvider(Protocol):
-    """Neutral provider boundary implemented by DeepSeek and future adapters."""
+    """由 DeepSeek 及后续适配器实现的中立 Provider 边界。"""
 
     def complete(
         self, request: dict[str, Any], timeout_seconds: float
@@ -65,7 +64,7 @@ class ModelProvider(Protocol):
 
 @dataclass(frozen=True)
 class ExecutionProfile:
-    """Immutable route snapshot used for one claimed execution."""
+    """单个已领取 execution 使用的不可变路由快照。"""
 
     runtime_environment: str
     provider_id: str | None
@@ -102,7 +101,7 @@ class ExecutionProfile:
         )
 
     def request_payload(self) -> dict[str, Any]:
-        """Return only route fields that a provider is allowed to inspect."""
+        """只返回允许 Provider 查看的一组路由字段。"""
         return {
             "runtime_environment": self.runtime_environment,
             "provider_id": self.provider_id,
@@ -114,7 +113,7 @@ class ExecutionProfile:
 
 @dataclass(frozen=True)
 class RuntimeSettings:
-    """Validated operational limits shared by one runtime process."""
+    """单个 Runtime 进程共享的已校验运行限制。"""
 
     max_steps: int
     model_timeout_seconds: float
@@ -175,7 +174,7 @@ class RuntimeSettings:
 
 
 class SafeLogger:
-    """Log event metadata only, never prompts, reasoning, or file contents."""
+    """只记录事件元数据，绝不记录提示词、推理或文件内容。"""
 
     def __init__(self, stream: Any = None) -> None:
         self.stream = stream or sys.stderr

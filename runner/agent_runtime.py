@@ -1,21 +1,18 @@
-"""Compatibility entry point for the self-hosted single-task Agent runtime.
+"""Self-hosted 单任务 Agent Runtime 的稳定入口与兼容导出层。
 
-The implementation is organized under ``loop_agent.runtime`` so each safety
-boundary can be inspected independently. Existing integrations may continue to
-import public names from this file; it intentionally re-exports the former API.
+真正实现已拆到 ``loop_agent.runtime``，以便按安全边界逐层排查；旧集成仍可从本文件
+导入原有公开名称。目录职责如下：
 
-Module map:
+* ``contracts``：Provider 协议、敏感名称模式和高风险动作清单；
+* ``core``：运行设置、路由快照、异常、安全日志与子进程环境；
+* ``controller``：loopctl 子进程适配器和后台心跳；
+* ``sandbox``：scope 路径策略和本地工具实现；
+* ``protocol``：模型响应、工具参数及最终报告校验；
+* ``diagnostics``：可信且可公开的 Provider/最终结果结构诊断；
+* ``agent``：一次领取、一次完成的主编排循环。
 
-* ``contracts``: provider schemas, sensitive-name patterns, high-risk actions.
-* ``core``: settings, route snapshot, errors, safe logging and child env.
-* ``controller``: loopctl subprocess adapter and background heartbeat.
-* ``sandbox``: scope path policy and local tool implementations.
-* ``protocol``: model response, tool argument, and final report validation.
-* ``diagnostics``: trusted, public Provider/final-shape diagnostics.
-* ``agent``: the one-claim/one-finish orchestration loop.
-
-Deployment starts ``python scripts/roles/runner/agent_runtime.py ...``. Provider
-factories continue to use the same ``module:factory`` contract.
+部署入口保持为 ``python runner/agent_runtime.py ...``。Provider 工厂继续
+使用 ``module:factory`` 约定，必须显式接收 config 和 SecretStore。
 """
 
 from __future__ import annotations
@@ -28,14 +25,14 @@ import argparse
 import importlib
 import inspect
 import json
-import subprocess  # Re-exported for existing diagnostics/tests that patch subprocess.run.
+import subprocess  # 兼容旧诊断和测试：它们会从本模块替换 subprocess.run。
 import sys
 from pathlib import Path
 from typing import Any
 
 sys.dont_write_bytecode = True
 
-SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_ROOT = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
@@ -99,11 +96,11 @@ def load_provider(
     config: dict[str, Any],
     secret_store: SecretStore | None = None,
 ) -> ModelProvider:
-    """Load a Provider factory with an explicit SecretStore dependency.
+    """加载 Provider 工厂，并显式注入 SecretStore。
 
-    Factories must accept exactly the named ``config`` and ``secret_store``
-    inputs. This prevents adapters from silently reading ambient credentials or
-    depending on the command-line wrapper's internal objects.
+    工厂必须接受具名参数 ``config`` 和 ``secret_store``。签名预绑定可在真正调用前
+    拒绝不兼容适配器，避免其绕过密钥边界读取环境凭据，或依赖命令行包装器内部对象。
+    返回对象还必须实现可调用的 ``complete`` 方法。
     """
     if ":" not in specification:
         raise AgentRuntimeError("provider must use module:factory syntax")
@@ -123,7 +120,7 @@ def load_provider(
 
 
 def parser() -> argparse.ArgumentParser:
-    """Build the unchanged single-run runtime command line."""
+    """构建保持兼容的单次 Runtime 命令行，并限制合法环境、等级和策略。"""
     root = argparse.ArgumentParser(
         description="Single-run self-hosted Local Agent Loop runtime"
     )
@@ -149,6 +146,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """装配 Provider、loopctl 控制器和单任务 Agent，执行指定 execution 后输出 JSON。"""
     args = parser().parse_args()
     config = load_initialization_config(Path(args.config))
     workspace = Path(config["workspace"]["task_root"])

@@ -5,7 +5,9 @@ from __future__ import annotations
 # 全部值使用内存 FakeKeyring，禁止在测试中接触本机真实系统密钥库内容。
 
 import argparse
+import importlib.util
 import json
+import sys
 import threading
 import unittest
 from typing import Any
@@ -24,7 +26,23 @@ from loop_agent.secrets.store import (
     SecretValidationError,
     create_secret_store,
 )
-from roles.operator.secretctl import execute, parser
+
+
+def load_operator_secretctl():
+    """按文件路径加载根目录 Operator 密钥入口，避开 Python 标准库 operator 同名冲突。"""
+    path = REPOSITORY_ROOT / "operator" / "secretctl.py"
+    spec = importlib.util.spec_from_file_location("test_operator_secretctl", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载 Operator secretctl")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+operator_secretctl = load_operator_secretctl()
+execute = operator_secretctl.execute
+parser = operator_secretctl.parser
 
 
 class FakeKeyringBackend:
@@ -253,8 +271,9 @@ class SecretStoreTests(unittest.TestCase):
         self.store.set("DEEPSEEK_API_KEY", token)
         args = argparse.Namespace(command="verify", provider="deepseek", connect=True)
         config = load_initialization_config()
-        with patch(
-            "roles.operator.secretctl.verify_deepseek_credential",
+        with patch.object(
+            operator_secretctl,
+            "verify_deepseek_credential",
             return_value=True,
         ) as verifier:
             result = execute(

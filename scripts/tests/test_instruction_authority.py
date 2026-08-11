@@ -28,10 +28,10 @@ class InstructionAuthorityTests(unittest.TestCase):
 
     def test_all_role_prompts_are_registered_and_documented(self) -> None:
         expected = {
-            "operator": "prompts/operator.md",
-            "planner": "prompts/planner.md",
-            "worker": "prompts/worker.md",
-            "cli_worker": "prompts/cli-worker.md",
+            "operator": "operator/operator.md",
+            "planner": "planner/planner.md",
+            "worker": "worker/worker.md",
+            "cli_worker": "runner/cli-worker.md",
         }
 
         self.assertEqual(self.config["prompts"], expected)
@@ -45,8 +45,8 @@ class InstructionAuthorityTests(unittest.TestCase):
 
     def test_runtime_authorities_are_documented_and_exist(self) -> None:
         authorities = (
-            "scripts/roles/runner/codex_cli_runner.py",
-            "scripts/roles/runner/agent_runtime.py",
+            "runner/codex_cli_runner.py",
+            "runner/agent_runtime.py",
             "scripts/loop_agent/providers/deepseek.py",
             "scripts/loopdb.py",
             "scripts/loopctl.py",
@@ -80,18 +80,28 @@ class InstructionAuthorityTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertNotIn(term, self.agents)
 
-    def test_authority_matrix_is_explicitly_non_configurational(self) -> None:
+    def test_readme_is_human_navigation_not_role_input(self) -> None:
+        self.assertLessEqual(len(self.readme.splitlines()), 140)
         self.assertIn("## 权威来源", self.readme)
         self.assertIn("不是第二份配置源", self.readme)
         self.assertIn("说明文字不得覆盖上述运行时来源", self.readme)
+        self.assertIn("本文只供人工快速了解和排障", self.readme)
+        self.assertNotIn("docs/architecture.md", self.readme)
+        self.assertNotIn("docs/initialization.md", self.readme)
+        self.assertNotIn("install_codex_cli_task.ps1", self.readme)
+
+        for relative_path in ("planner/planner.md", "worker/worker.md"):
+            with self.subTest(role_context=relative_path):
+                text = (ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertNotIn("README.md", text)
+                self.assertNotIn("docs\\architecture.md", text)
 
     def test_prompts_do_not_duplicate_deployment_values(self) -> None:
         prompt_paths = (
-            "prompts/operator.md",
-            "prompts/planner.md",
-            "prompts/worker.md",
-            "prompts/cli-worker.md",
-            "prompts/README.md",
+            "operator/operator.md",
+            "planner/planner.md",
+            "worker/worker.md",
+            "runner/cli-worker.md",
         )
         prompt_text = "\n".join(
             (ROOT / relative_path).read_text(encoding="utf-8")
@@ -112,9 +122,9 @@ class InstructionAuthorityTests(unittest.TestCase):
                 self.assertNotRegex(prompt_text, pattern)
 
         for relative_path in (
-            "prompts/operator.md",
-            "prompts/worker.md",
-            "prompts/README.md",
+            "operator/operator.md",
+            "planner/planner.md",
+            "worker/worker.md",
         ):
             with self.subTest(config_reference=relative_path):
                 text = (ROOT / relative_path).read_text(encoding="utf-8")

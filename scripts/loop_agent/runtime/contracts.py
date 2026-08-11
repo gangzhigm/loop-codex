@@ -1,8 +1,7 @@
-"""Stable provider/tool protocol constants for the self-hosted Agent runtime.
+"""Self-hosted Agent Runtime 的稳定 Provider 和工具协议常量。
 
-Keeping schemas and safety patterns in one small module makes protocol reviews
-possible without reading the orchestration loop. These values are code-owned
-runtime contracts, not deployment configuration.
+把 Schema 和安全模式集中在一个小模块中，可以在不阅读编排循环的情况下审查协议。这些值是
+代码拥有的 Runtime 契约，不是部署配置。
 """
 
 from __future__ import annotations
@@ -58,8 +57,7 @@ FINAL_RESULT_SCHEMA = {
     },
 }
 
-# These action names require an explicit task-level approval even if a future
-# sandbox grows an implementation for them.
+# 即使未来沙箱实现了这些操作，它们仍必须获得显式任务级批准。
 HIGH_RISK_ACTIONS = {
     "delete",
     "publish",
@@ -68,8 +66,7 @@ HIGH_RISK_ACTIONS = {
     "credential_access",
 }
 
-# Component checks apply to paths, while environment checks prevent injected
-# secrets from being inherited by git, tests, and other child processes.
+# component 检查用于路径；环境变量检查用于阻止 git、测试及其他子进程继承注入的密钥。
 SENSITIVE_COMPONENT = re.compile(
     r"(^|[._-])(secret|secrets|credential|credentials|api[_-]?key|access[_-]?token|private[_-]?key)([._-]|$)",
     re.IGNORECASE,

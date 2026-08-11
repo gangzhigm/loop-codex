@@ -1,9 +1,7 @@
-"""Project registry parsing and hierarchical scope-lock rules.
+"""项目清单解析与分层 scope 锁规则。
 
-A scope is normalized against the configured project registry before it can be
-stored or locked. Comparisons are case-insensitive and operate on canonical
-scope keys, which keeps file, module, project, and external conflicts
-predictable across all execution environments.
+scope 在存储或加锁前必须依据已配置的项目清单完成规范化。比较时忽略大小写并使用标准
+scope key，从而让文件、模块、项目和外部范围冲突在所有执行环境中保持可预测。
 """
 
 from __future__ import annotations
@@ -75,7 +73,7 @@ def normalize_scope(
     lock_mode: str,
     project_paths: Iterable[str] | None = None,
 ) -> dict[str, str]:
-    """Normalize a Planner scope and derive a case-insensitive hierarchical lock key."""
+    """规范化 Planner scope，并生成忽略大小写的分层锁键。"""
     if lock_mode not in LOCK_MODES:
         raise LoopError(f"lock_mode 无效: {lock_mode}")
     parts = _normalized_path_parts(scope, "scope")
@@ -194,6 +192,5 @@ def scope_conflicts_for_keys(
                 "blocker_lock_status": lock["status"],
             })
     return conflicts
-
 
 

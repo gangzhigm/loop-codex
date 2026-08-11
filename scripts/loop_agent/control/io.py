@@ -1,9 +1,8 @@
-"""UTF-8 command input/output and optimistic-concurrency helpers.
+"""UTF-8 命令输入输出与乐观并发辅助函数。
 
-Every loopctl command returns one JSON object on stdout. Planner and Worker
-reports use stdin so command lines never contain large or sensitive payloads.
-The integrity check rejects unmistakably corrupted Planner text before it can
-become task history.
+每个 loopctl 命令都在 stdout 返回一个 JSON 对象。Planner 和 Worker 报告通过 stdin 提交，
+避免命令行包含大段或敏感 payload。完整性检查会在明显损坏的 Planner 文本进入任务历史前
+将其拒绝。
 """
 
 from __future__ import annotations
@@ -26,33 +25,33 @@ SUSPICIOUS_QUESTION_MARK_RUN = re.compile(r"\?{4,}")
 
 
 def output(payload: dict[str, Any], exit_code: int = 0) -> None:
-    """Write one human-readable UTF-8 JSON response and optionally exit."""
+    """写出一份便于人工阅读的 UTF-8 JSON 响应，并按需退出。"""
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if exit_code:
         raise SystemExit(exit_code)
 
 
 def read_json(path: Path) -> Any:
-    """Read a UTF-8 JSON file without permissive replacement decoding."""
+    """读取 UTF-8 JSON 文件，不允许使用替换字符宽松解码。"""
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def read_json_source(source: str) -> Any:
-    """Read UTF-8 JSON from stdin when source is '-', otherwise from a file."""
+    """source 为 ``-`` 时从 stdin 读取 UTF-8 JSON，否则从文件读取。"""
     if source == "-":
         return json.loads(sys.stdin.read())
     return read_json(Path(source).resolve())
 
 
 def read_preflight_report(source: str) -> Any:
-    """Enforce the Planner's host-controlled stdin-only writeback boundary."""
+    """强制 Planner 只能通过宿主控制的 stdin 边界写回。"""
     if source != "-":
         raise LoopError("Planner 预检结果只允许通过 UTF-8 stdin 提交")
     return read_json_source(source)
 
 
 def validate_preflight_text_integrity(value: Any, field: str = "payload") -> None:
-    """Reject unmistakable UTF-8 writeback corruption before SQLite writes."""
+    """在写入 SQLite 前拒绝明显损坏的 UTF-8 写回内容。"""
     if isinstance(value, str):
         if "\ufffd" in value or SUSPICIOUS_QUESTION_MARK_RUN.search(value):
             raise LoopError(f"Planner UTF-8 写回文本损坏: {field}")
@@ -66,7 +65,7 @@ def validate_preflight_text_integrity(value: Any, field: str = "payload") -> Non
 
 
 def require_expected_row_version(args: argparse.Namespace, actual: int) -> None:
-    """Reject stale operator actions when a row changed after it was displayed."""
+    """记录在展示后发生变化时，拒绝基于旧版本的 Operator 操作。"""
     expected = getattr(args, "expected_row_version", None)
     if expected is not None and expected != actual:
         raise LoopError(f"任务已发生并发变化：expected row_version={expected}, actual={actual}")

@@ -1,7 +1,7 @@
 # Local Agent Loop 全局约束
 
 > 本文件只定义所有角色共同遵守的不可绕过边界，不保存某个角色的具体工作步骤。
-> 排查权限或职责冲突时，先读本文件确认全局上限，再进入 `prompts/` 下对应角色提示词，
+> 排查权限或职责冲突时，先读本文件确认全局上限，再进入对应角色目录的提示词，
 > 最后沿 `scripts/loopctl.py` 绑定的 handler 检查控制代码；下层规则不得扩大这里的权限。
 
 ## 全局边界
@@ -24,11 +24,11 @@
 
 先确认当前入口赋予的角色，再完整遵循对应权威提示词；不得把一个角色的权限扩展到另一个角色。
 
-- 人工任务管理 Operator：`prompts/operator.md`。只管理任务和 Planner/Worker 自动化，不实现任务业务内容。
-- 独立静态预检 Planner：`prompts/planner.md`。只做预检，不实现任务、创建子任务或管理自动化。
-- Codex 客户端自动化 Worker：`prompts/worker.md`。每次只领取并处理一个匹配的 READY 任务。
-- Codex CLI 子进程 Worker：`prompts/cli-worker.md`。只执行 Runner 已领取的单个任务；队列领取、heartbeat、进程生命周期和 finish 由 `scripts/roles/runner/codex_cli_runner.py` 负责。
-- Self-hosted Agent：宿主循环和工具边界由 `scripts/roles/runner/agent_runtime.py` 负责，Provider 只实现中立模型协议适配。
+- 人工任务管理 Operator：`operator/operator.md`。只管理任务和 Planner/Worker 自动化，不实现任务业务内容。
+- 独立静态预检 Planner：`planner/planner.md`。只做预检，不实现任务、创建子任务或管理自动化。
+- Codex 客户端自动化 Worker：`worker/worker.md`。每次只领取并处理一个匹配的 READY 任务。
+- Codex CLI 子进程 Worker：`runner/cli-worker.md`。只执行 Runner 已领取的单个任务；队列领取、heartbeat、进程生命周期和 finish 由 `runner/codex_cli_runner.py` 负责。
+- Self-hosted Agent：宿主循环和工具边界由 `runner/agent_runtime.py` 负责，Provider 只实现中立模型协议适配。
 - 健康检查：Windows 任务计划程序直接运行 `scripts/roles/supervisor/health_run.py`，不通过模型自动化领取任务。
 
-详细状态、恢复、拆分、归档和执行规则属于对应角色提示词及控制代码；本文件只保存跨角色且稳定的共同边界。完整权威来源矩阵见 `README.md`。
+详细状态、恢复、拆分、归档和执行规则属于对应角色提示词及控制代码；本文件只保存跨角色且稳定的共同边界。`README.md` 仅供人工导航，不是角色执行事实源。

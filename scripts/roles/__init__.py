@@ -1,1 +1,1 @@
-"""按 Operator、Planner、Worker、Supervisor、Dispatcher、Runner 划分的角色代码。"""
+"""Supervisor 角色代码；其余角色实现已迁至仓库根目录对应目录。"""

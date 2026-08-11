@@ -6,7 +6,7 @@ param(
 <#
 中文排查：注册或更新 Dashboard 健康检查计划任务，并可通过 -StartNow 立即运行一次。
 异常先核对配置中的任务名和 30 分钟周期，再检查 py.exe、Supervisor 路径及账户权限。
-该任务只运行 health_run.py，不调用模型、不领取业务任务。
+该任务通过 Supervisor 统一入口运行 health，不调用模型、不领取业务任务。
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -25,9 +25,9 @@ if ([string]::IsNullOrWhiteSpace($taskName) -or $interval -lt 1) {
 }
 
 $pythonLauncher = (Get-Command py.exe -ErrorAction Stop).Source
-$healthScript = Join-Path $loopRoot 'scripts\roles\supervisor\health_run.py'
+$supervisorControl = Join-Path $loopRoot 'scripts\roles\supervisor\control.py'
 $database = Join-Path $loopRoot ([string]$config.database.path)
-$arguments = "-3 -B `"$healthScript`" --db `"$database`" --config `"$resolvedConfig`""
+$arguments = "-3 -B `"$supervisorControl`" health --db `"$database`" --config `"$resolvedConfig`""
 
 $action = New-ScheduledTaskAction `
     -Execute $pythonLauncher `

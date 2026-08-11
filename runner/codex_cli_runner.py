@@ -1,3 +1,15 @@
+"""Codex CLI 平台的一次领取、一次执行、一次结束 Runner。
+
+Runner 根据能力等级解析固定模型与推理配置，通过 loopctl 原子领取一个任务，把任务
+限制到单个已登记项目和 Planner 声明的 scope 内，再启动隔离的 ``codex exec`` 子进程。
+执行期间后台心跳维持 execution 与锁租约；标准输出按 JSONL 解析，最终结果还要经过
+统一协议校验后才能 finish。
+
+重试只发生在没有观察到命令执行、文件修改或 MCP 调用等副作用时。一旦可能已经写入，
+Runner 会抑制自动重试，避免同一操作重复执行。超时或异常清理仅针对当前精确进程树，
+不按进程名进行全局终止。
+"""
+
 from __future__ import annotations
 
 # 中文排查：Runner 负责单次 claim、Codex 子进程、heartbeat、超时、结果解析与 finish。
@@ -23,11 +35,14 @@ from typing import Any, TextIO
 
 sys.dont_write_bytecode = True
 
-SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_ROOT = REPOSITORY_ROOT / "scripts"
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.append(str(REPOSITORY_ROOT))
 
-from roles.runner.agent_runtime import (
+from runner.agent_runtime import (
     AgentRuntimeError,
     ExecutionProfile,
     HeartbeatGuard,
@@ -62,17 +77,27 @@ SECRET_PATTERNS = (
 
 
 class CodexCliRunnerError(RuntimeError):
+    """Runner 配置、边界、协议或进程生命周期违反约束时的基础异常。"""
+
     pass
 
 
 class CodexCliAttemptError(CodexCliRunnerError):
+    """单次 Codex CLI 尝试失败，并显式携带是否允许安全重试。"""
+
     def __init__(self, message: str, *, retryable: bool) -> None:
+        """保存可公开错误信息与重试判定，供外层尝试循环决策。"""
         self.retryable = retryable
         super().__init__(message)
 
 
 @dataclass(frozen=True)
 class CodexCliSettings:
+    """Codex CLI Runner 的不可变配置快照。
+
+    包含可信可执行文件、权威提示词、sandbox、终止宽限、心跳/停滞阈值及输出上限。
+    构造后本轮 execution 不再读取这些值，防止运行中配置变化导致行为漂移。
+    """
     command_prefix: tuple[str, ...]
     prompt_path: Path
     use_user_config: bool
@@ -91,6 +116,7 @@ class CodexCliSettings:
         base_dir: Path = BASE_DIR,
         command_prefix: tuple[str, ...] | None = None,
     ) -> "CodexCliSettings":
+        """校验配置、全部能力档位和时间关系，并解析安全的绝对路径。"""
         raw = config.get("codex_cli")
         if not isinstance(raw, dict):
             raise CodexCliRunnerError("codex_cli configuration is missing")
@@ -145,6 +171,7 @@ class CodexCliSettings:
 
     @staticmethod
     def _resolve_executable(executable: str, config: dict[str, Any]) -> tuple[str, ...]:
+        """从 PATH 定位 Codex CLI，并拒绝位于任务工作区内的可执行文件。"""
         resolved = shutil.which(executable)
         if not resolved:
             raise CodexCliRunnerError("configured Codex CLI executable was not found")
@@ -157,13 +184,21 @@ class CodexCliSettings:
 
 @dataclass(frozen=True)
 class ProjectContext:
+    """一次任务解析出的唯一项目根目录、登记路径和原始 scope 列表。"""
     root: Path
     relative_path: str
     scopes: list[str]
 
 
 class BoundedText:
+    """线程安全的尾部文本缓冲区，超过上限时丢弃最旧内容。
+
+    子进程可能持续输出，限制缓冲可避免长期任务耗尽内存；``truncated`` 用于日志标记
+    内容曾被裁剪，但不会把被裁剪的敏感文本写入其他位置。
+    """
+
     def __init__(self, maximum: int) -> None:
+        """创建最多保留 ``maximum`` 个字符的空缓冲区。"""
         self.maximum = maximum
         self.parts: deque[str] = deque()
         self.length = 0
@@ -171,6 +206,7 @@ class BoundedText:
         self.lock = threading.Lock()
 
     def append(self, value: str) -> None:
+        """追加文本并从头部精确裁剪超出上限的字符。"""
         with self.lock:
             self.parts.append(value)
             self.length += len(value)
@@ -186,11 +222,13 @@ class BoundedText:
                 self.truncated = True
 
     def value(self) -> str:
+        """在锁内合并并返回当前保留的文本快照。"""
         with self.lock:
             return "".join(self.parts)
 
 
 def sanitize_public_text(value: str, maximum: int = 1000) -> str:
+    """清除密钥、认证头、Codex 私有路径、换行和空字符后截断公开文本。"""
     text = value.replace("\x00", " ")
     for pattern in SECRET_PATTERNS:
         text = pattern.sub("[REDACTED]", text)
@@ -199,6 +237,11 @@ def sanitize_public_text(value: str, maximum: int = 1000) -> str:
 
 
 def final_result_schema() -> dict[str, Any]:
+    """返回传给 Codex CLI 的严格最终结果 JSON Schema。
+
+    Schema 禁止额外字段，并限制三种终态及等待人工时的进度范围；Runtime 仍会用
+    ``validate_final_result`` 做第二次语义校验。
+    """
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -229,6 +272,8 @@ def final_result_schema() -> dict[str, Any]:
 
 
 class CodexCliRunner:
+    """编排单个 Codex CLI execution 的完整生命周期。"""
+
     def __init__(
         self,
         controller: Any,
@@ -237,6 +282,7 @@ class CodexCliRunner:
         *,
         logger: SafeLogger | None = None,
     ) -> None:
+        """注入 loopctl 控制器、配置快照、Runner 设置和安全事件日志器。"""
         self.controller = controller
         self.config = config
         self.settings = settings
@@ -245,6 +291,12 @@ class CodexCliRunner:
         self._process: subprocess.Popen[str] | None = None
 
     def run(self, execution_id: str, capability_level: str) -> dict[str, Any]:
+        """领取并执行一个匹配能力等级的任务，然后保证写入一个最终结果。
+
+        claim 的 NO_TASK/SLOT_FULL/CONFLICT 直接作为正常结果返回。领取成功后严格复核
+        环境、Provider 和等级，解析唯一项目；项目边界错误转为 WAITING_HUMAN。执行期
+        心跳失败、进程异常或中断统一清理当前进程树，最后通过 finish 关闭 execution。
+        """
         if not execution_id or capability_level not in CAPABILITY_LEVELS:
             raise CodexCliRunnerError("execution id and capability level must be explicit")
         execution_profile = ExecutionProfile.resolve(
@@ -282,6 +334,7 @@ class CodexCliRunner:
             )
 
         def heartbeat() -> Any:
+            """把 HeartbeatGuard 的周期回调转发给当前 execution/task。"""
             return self.controller.heartbeat(execution_id, task_id)
 
         try:
@@ -305,6 +358,11 @@ class CodexCliRunner:
         execution_profile: ExecutionProfile,
         guard: HeartbeatGuard,
     ) -> dict[str, Any]:
+        """按档位重试预算执行 Codex CLI，并在可能有副作用后禁止重试。
+
+        每次尝试前后都确认心跳健康。只有 FAILED 且输出没有副作用证据时才进入下一次；
+        SUCCEEDED 和 WAITING_HUMAN 立即结束。最后一次失败始终原样返回。
+        """
         maximum_attempts = execution_profile.max_retries + 1
         last_result = self._failed("Codex CLI attempt did not start")
         for attempt in range(1, maximum_attempts + 1):
@@ -339,6 +397,11 @@ class CodexCliRunner:
         return last_result
 
     def _project_context(self, task: dict[str, Any]) -> ProjectContext:
+        """把任务 scope 解析为单个已登记且存在的项目工作目录。
+
+        先由 ScopePolicy 校验工作区边界，再要求所有 scope_key 指向同一 project，拒绝
+        external scope、多项目任务、磁盘缺失项目及任何逃逸项目根目录的路径。
+        """
         scopes = task.get("scope")
         if not isinstance(scopes, list) or not scopes or not all(isinstance(item, str) and item.strip() for item in scopes):
             raise CodexCliRunnerError("claimed task has invalid scope")
@@ -372,6 +435,12 @@ class CodexCliRunner:
         guard: HeartbeatGuard,
         attempt: int,
     ) -> tuple[dict[str, Any], bool]:
+        """启动一次 ``codex exec``，监控超时并返回最终报告与副作用标记。
+
+        临时目录只存最终结果 Schema。提示词经 stdin 传入，stdout/stderr 由独立线程
+        有界采集。退出后先根据 JSONL 事件识别副作用，再区分认证问题、普通非零退出、
+        超时和最终结果解析失败，以决定等待人工或是否允许重试。
+        """
         prompt = self._build_prompt(task, project, attempt)
         stdout = BoundedText(self.settings.max_stdout_chars)
         stderr = BoundedText(self.settings.max_stderr_chars)
@@ -459,6 +528,7 @@ class CodexCliRunner:
             raise CodexCliAttemptError(str(error), retryable=not side_effects) from error
 
     def _start_process(self, command: list[str]) -> subprocess.Popen[str]:
+        """以 UTF-8 管道和独立进程组启动 Codex CLI，始终禁用 shell 解析。"""
         kwargs: dict[str, Any] = {
             "stdin": subprocess.PIPE,
             "stdout": subprocess.PIPE,
@@ -478,10 +548,12 @@ class CodexCliRunner:
             raise CodexCliRunnerError("Codex CLI process could not be started") from error
 
     def _reader(self, stream: TextIO | None, capture: BoundedText, name: str) -> threading.Thread:
+        """启动守护线程分块读取一个子进程管道，并在结束时可靠关闭流。"""
         if stream is None:
             raise CodexCliRunnerError(f"Codex CLI {name} pipe is unavailable")
 
         def read() -> None:
+            """持续读取 4096 字符块到有界缓冲，直到 EOF。"""
             try:
                 while True:
                     chunk = stream.read(4096)
@@ -496,12 +568,18 @@ class CodexCliRunner:
         return thread
 
     def _terminate_active_process(self) -> None:
+        """若当前精确子进程仍活动，则终止其进程树并清空内部引用。"""
         process = self._process
         if process is not None and process.poll() is None:
             self._terminate_process_tree(process)
         self._process = None
 
     def _terminate_process_tree(self, process: subprocess.Popen[str]) -> None:
+        """终止给定 PID 的进程树，宽限期后升级为强制终止。
+
+        Windows 使用 ``taskkill /PID /T``，其他平台使用独立进程组信号。两轮终止后
+        仍存活会抛错，禁止在后台遗留一个失去心跳和锁续期的写进程。
+        """
         self.logger.event("codex_cli_terminating", pid=process.pid)
         try:
             if os.name == "nt":
@@ -530,6 +608,7 @@ class CodexCliRunner:
 
     @staticmethod
     def _output_may_have_side_effects(output: str) -> bool:
+        """从 Codex JSONL 事件保守判断本次尝试是否可能执行过写操作。"""
         side_effect_types = {"command_execution", "file_change", "mcp_tool_call"}
         for line in output.splitlines():
             try:
@@ -546,6 +625,7 @@ class CodexCliRunner:
         return False
 
     def _parse_final_result(self, output: str) -> dict[str, Any]:
+        """从最新 Agent 消息向前查找首个合法 JSON 最终结果并做协议校验。"""
         candidates: list[str] = []
         for line in output.splitlines():
             try:
@@ -569,6 +649,11 @@ class CodexCliRunner:
         raise CodexCliRunnerError("Codex CLI produced no valid final result")
 
     def _build_prompt(self, task: dict[str, Any], project: ProjectContext, attempt: int) -> str:
+        """拼接权威 Runner 提示词与当前任务最小 JSON 载荷。
+
+        依赖只暴露“领取前已满足”，不把数据库内部状态传给模型；项目使用登记相对路径，
+        scope 和验收项保持 Planner 发布的顺序。
+        """
         authority = self.settings.prompt_path.read_text(encoding="utf-8")
         payload = {
             "id": task.get("id"),
@@ -585,6 +670,7 @@ class CodexCliRunner:
         return f"{authority.rstrip()}\n\n# 当前任务\n\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
 
     def _finish(self, execution_id: str, task_id: str, result: dict[str, Any]) -> dict[str, Any]:
+        """再次校验最终结果并要求 loopctl 明确确认 FINISHED 后才返回成功。"""
         validated = validate_final_result(result)
         finish = self.controller.finish(execution_id, task_id, validated)
         if finish.get("outcome") != "FINISHED":
@@ -593,6 +679,7 @@ class CodexCliRunner:
 
     @staticmethod
     def _failed(error: str) -> dict[str, Any]:
+        """把异常转为经过脱敏和长度限制的标准 FAILED 报告。"""
         return {
             "status": "FAILED",
             "summary": "Codex CLI Runner 本轮执行失败。",
@@ -601,6 +688,7 @@ class CodexCliRunner:
 
     @staticmethod
     def _waiting(summary: str, question: str) -> dict[str, Any]:
+        """构造因外部条件无法自动修复而等待人工处理的标准报告。"""
         return {
             "status": "WAITING_HUMAN",
             "summary": summary[:4000],
@@ -612,12 +700,14 @@ class CodexCliRunner:
 
     @staticmethod
     def _public_error(error: Exception) -> str:
+        """仅公开白名单异常正文；未知异常只暴露类型，不泄露堆栈或本机路径。"""
         if isinstance(error, (CodexCliRunnerError, AgentRuntimeError)):
             return sanitize_public_text(str(error))
         return f"runner error: {type(error).__name__}"
 
 
 def parser() -> argparse.ArgumentParser:
+    """构建单任务 Codex CLI Runner 命令行。"""
     root = argparse.ArgumentParser(description="Single-task Local Agent Loop Codex CLI Runner")
     root.add_argument("--capability-level", required=True, choices=CAPABILITY_LEVELS)
     root.add_argument("--config", default=str(CONFIG_PATH))
@@ -626,6 +716,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """加载配置、生成唯一 execution_id、装配控制器并执行一次 Runner。"""
     args = parser().parse_args()
     config = load_initialization_config(Path(args.config))
     settings = CodexCliSettings.from_config(config)

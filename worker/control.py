@@ -1,22 +1,19 @@
-"""Worker execution lifecycle: claim, heartbeat, scope extension, and finish.
+"""Worker 的领取、心跳、scope 扩展与结束状态机。
 
-The four commands in this module form one fenced execution protocol:
+四个命令共同组成一套带 fencing 的执行协议：
 
 ``claim``
-    Atomically chooses a compatible task, creates an execution, and acquires
-    every declared scope lock.
+    在一个事务中选择兼容任务、创建 execution、取得全部已声明 scope 锁并转为 RUNNING；
 ``heartbeat``
-    Renews both the execution lease and its scope locks.
+    同时续期 execution 租约和该 execution 持有的活动 scope 锁；
 ``extend-scope``
-    Acquires additional locks before a Worker touches newly discovered files.
+    Worker 接触预检范围外的新文件前，先原子登记 scope 并获取新增锁；
 ``finish``
-    Writes the final report and releases locks owned by that execution.
+    校验最终报告，结束 execution，并只释放该 execution 拥有的锁。
 
-Every mutating command verifies both ``execution_id`` and ``task_id``. This is
-the fencing boundary that prevents a stale Worker from updating a task after a
-replacement execution has claimed it. Recovery of a lost execution lives in
-``control.recovery`` because its locks must be quarantined, not normally
-released as part of this lifecycle.
+所有写命令都同时核对 ``execution_id`` 和 ``task_id``，部分入口还核对 row_version。
+这是阻止旧 Worker 在替代 execution 领取后继续写回的 fencing 边界。丢失 execution
+的恢复位于 ``control.recovery``，因为其锁必须先隔离确认，不能走正常 finish 直接删除。
 """
 
 from __future__ import annotations
@@ -71,7 +68,7 @@ from loopdb import (
 def task_scopes_and_conflicts(
     database: sqlite3.Connection, task_id: str
 ) -> tuple[list[sqlite3.Row], list[dict[str, Any]]]:
-    """Load a task's canonical scope keys and project active lock conflicts."""
+    """读取任务去重后的规范 scope_key，并计算当前活动锁冲突投影。"""
     scopes = database.execute(
         "SELECT DISTINCT scope_key FROM task_scopes WHERE task_id=? ORDER BY scope_key",
         (task_id,),
@@ -85,7 +82,7 @@ def describe_conflicting_task(
     task_id: str,
     conflicts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Keep conflict output stable for Dashboard and automation consumers."""
+    """把单个候选任务的冲突包装成 Dashboard 与自动化共用的稳定结构。"""
     return {"task_id": task_id, "conflicts": conflicts}
 
 
@@ -94,11 +91,11 @@ def scope_lock_credential(
     execution_id: str,
     task_id: str,
 ) -> dict[str, Any]:
-    """Return the lock credential a Worker must retain while it is active.
+    """返回 Worker 活动期间必须保留并核对的 scope 锁凭证。
 
-    Schema probes keep this projection readable during database migration. A
-    credential contains only lock identity and lease metadata; it is not a
-    bearer secret and does not grant authority without execution fencing.
+    函数先探测 Schema 列，保证迁移中的旧数据库仍可读取。凭证仅包含 execution/task
+    身份、锁模式、scope_key、状态和租约元数据；它不是授权密钥，脱离数据库中的
+    execution fencing 不能单独获得写权限。
     """
     task_columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)")}
     task = (
@@ -125,7 +122,11 @@ def scope_lock_credential(
 
 
 def claim_target(args: argparse.Namespace) -> dict[str, Any]:
-    """Normalize legacy profile flags into the current execution dimensions."""
+    """把旧 ``--profile`` 参数规范化为当前环境、Provider、等级和策略维度。
+
+    兼容参数与显式 execution_policy 冲突时立即拒绝；规范化后解析固定的模型、推理
+    程度、单次超时与重试次数快照，确保 execution 启动后不受配置热变更影响。
+    """
     if args.profile:
         capability_level = LEGACY_PROFILE_TO_CAPABILITY[args.profile]
         inferred_policy = "manual" if args.profile == "exceptional" else "automatic"
@@ -150,12 +151,12 @@ def claim_target(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def command_claim(args: argparse.Namespace) -> None:
-    """Atomically claim the highest-priority compatible, unblocked task.
+    """原子领取最高优先级且兼容、依赖完成、无 scope 冲突的任务。
 
-    Selection happens inside one immediate transaction. A candidate is skipped
-    when dependencies are incomplete or any scope key conflicts. Scope-conflict
-    tasks stay ``PENDING`` so another concurrent profile can continue selecting
-    unrelated work instead of treating the queue as globally blocked.
+    选择发生在立即事务中。领取前先把停滞 execution 转入恢复状态，再检查全局和平台
+    容量。候选依赖未完成或 scope 冲突时只跳过该任务，冲突任务继续保持 ``PENDING``，
+    让同档 Worker 仍可选择后续无关任务。选中后 execution、全部锁和任务 RUNNING
+    状态在同一事务创建，任何一步失败都会整体回滚。
     """
     if not args.execution_id or len(args.execution_id) > 128:
         raise LoopError("execution-id 无效")
@@ -170,8 +171,8 @@ def command_claim(args: argparse.Namespace) -> None:
         ).fetchone():
             raise LoopError("execution-id 已存在")
 
-        # Reconcile stale executions before counting capacity. Recovery removes
-        # them from active slots but retains quarantined locks until confirmed.
+        # 统计容量前先转换停滞 execution。恢复流程会释放它占用的活动名额，但旧锁仍
+        # 保持隔离，直到恢复确认完成，不能因为“进程不在”就直接删除。
         transition_recovery_states(database, stalled_executions(database))
         recovery_required = recovery_required_records(database)
         compatible_recoveries = [
@@ -239,8 +240,8 @@ def command_claim(args: argparse.Namespace) -> None:
             )
             return
 
-        # New schemas require Planner evidence before a task enters the Worker
-        # queue. Compatibility branches remain for inspecting/upgrading older DBs.
+        # 新 Schema 只允许带完整 Planner 契约的 READY 任务进入 Worker 队列。后两条
+        # 兼容分支仅用于检查或升级旧数据库，不能作为新任务绕过预检的入口。
         if preflight_schema:
             candidates = database.execute(
                 "SELECT * FROM tasks WHERE status='PENDING' AND preflight_status='READY' "
@@ -351,8 +352,8 @@ def command_claim(args: argparse.Namespace) -> None:
             )
             return
 
-        # Execution, locks, and task state are created in the same transaction;
-        # no Worker can observe a RUNNING task without its corresponding locks.
+        # execution、scope 锁和任务 RUNNING 状态必须在同一事务建立，保证任何 Worker
+        # 都不会观察到“任务已运行但尚未持锁”的中间状态。
         lease_seconds = int(execution_setting("task_lease_seconds", 3600))
         expiry = expires_at(lease_seconds)
         if capability_schema:
@@ -467,7 +468,11 @@ def command_claim(args: argparse.Namespace) -> None:
 
 
 def command_heartbeat(args: argparse.Namespace) -> None:
-    """Renew an active execution and all of its active scope-lock leases."""
+    """续期活动 execution 及其全部活动 scope 锁。
+
+    execution 必须仍为 RUNNING 且 task_id 匹配。任务心跳和 row_version 同步更新，
+    返回最新锁凭证，供 Runner 继续操作前确认租约范围。
+    """
     database = connect(args.db)
     try:
         transaction(database)
@@ -511,7 +516,12 @@ def command_heartbeat(args: argparse.Namespace) -> None:
 
 
 def command_extend_scope(args: argparse.Namespace) -> None:
-    """Atomically add normalized scopes and locks before new files are touched."""
+    """Worker 接触新文件前，原子扩展规范化 scope 与对应锁。
+
+    报告只能包含 scope。命令核对活动 execution、任务归属、锁模式和 row_version，
+    再排除已登记项并检查新增 scope_key 冲突。冲突时不写入任何范围；无新增项时幂等
+    返回；成功时 scope、锁、进度和历史在同一事务提交。
+    """
     report = read_json_source(args.report)
     if not isinstance(report, dict) or set(report) != {"scope"}:
         raise LoopError("scope 扩展结果必须只包含 scope")
@@ -655,7 +665,12 @@ def command_extend_scope(args: argparse.Namespace) -> None:
 
 
 def command_finish(args: argparse.Namespace) -> None:
-    """Persist a validated Worker report and close its active execution."""
+    """保存经过校验的 Worker 最终报告并关闭其活动 execution。
+
+    SUCCEEDED 必须有验证记录，FAILED 必须有错误，WAITING_HUMAN 必须有问题；成功
+    报告不得携带失败诊断。只有匹配的 RUNNING execution/task 可以结束。事务内更新
+    任务终态、完成项、验证、历史和 execution，最后只删除该 execution 的 scope 锁。
+    """
     report = read_json_source(args.report)
     status = report.get("status")
     if status not in FINAL_EXECUTION_STATUSES:

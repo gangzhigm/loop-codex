@@ -1,8 +1,8 @@
 # Scripts 代码导航
 
 `scripts/` 根目录只保留跨角色共享的 `loopctl.py`、`loopdb.py` 和本导航。
-角色入口和实现按 Operator、Planner、Worker、Supervisor、Dispatcher、Runner
-分区；可复用基础模块位于 `scripts/loop_agent/`。
+Supervisor 位于 `roles/`；Operator、Planner、Worker、Dispatcher、Runner 位于仓库根目录
+对应角色目录；可复用基础模块位于 `scripts/loop_agent/`。
 
 所有文本输入输出使用 UTF-8。SQLite 写入必须经过 `loopctl.py` 暴露的控制面，
 不能从 Dashboard、Provider 或业务脚本直接更新任务表。
@@ -13,12 +13,15 @@
 | --- | --- | --- |
 | `loopctl.py` | CLI 参数、命令分发、`validate/state` | 具体任务状态机实现 |
 | `loopdb.py` | 兼容导出数据库公共 API | SQL 业务实现 |
-| `roles/operator/secretctl.py` | 系统密钥库的人工管理入口 | 任务数据库 |
+| `../operator/secretctl.py` | 系统密钥库的人工管理入口 | 任务数据库 |
+| `../planner/control.py` | Planner 的只读静态预检状态机 | 业务实现与 scope 写锁 |
+| `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
+| `../dispatcher/codex_cli_dispatcher.py` | 只读选择一个 Codex CLI 能力等级并启动一次 Runner | 原子 claim 与业务实现 |
+| `../runner/codex_cli_runner.py` | 单任务 Codex CLI 进程、heartbeat、finish | 周期调度 |
+| `../runner/agent_runtime.py` | Self-hosted Agent 启动、Provider 工厂、兼容导出 | 工具循环具体实现 |
+| `roles/supervisor/control.py` | Supervisor 统一入口：一次健康检查或前台 Dashboard 服务 | 任务调度与任务表写入 |
 | `roles/supervisor/dashboard_server.py` | 本机 HTTP 路由、Secret API、服务启动 | 任务状态直接写入 |
 | `roles/supervisor/health_run.py` | Dashboard 探活与恢复 | AI 自动化与任务领取 |
-| `roles/dispatcher/codex_cli_dispatcher.py` | 只读选择一个 Codex CLI 能力等级并启动一次 Runner | 原子 claim 与业务实现 |
-| `roles/runner/codex_cli_runner.py` | 单任务 Codex CLI 进程、heartbeat、finish | 周期调度 |
-| `roles/runner/agent_runtime.py` | Self-hosted Agent 启动、Provider 工厂、兼容导出 | 工具循环具体实现 |
 
 ## 目录分区
 
@@ -28,12 +31,8 @@ scripts/
 ├─ installers/              Windows 计划任务安装器
 ├─ tests/                   Python 回归测试与测试路径引导
 ├─ roles/
-│  ├─ operator/             人工控制命令与任务定义状态机
-│  ├─ planner/              静态预检状态机
-│  ├─ worker/               Worker claim 到 finish 状态机
-│  ├─ supervisor/           Dashboard 服务与健康恢复
-│  ├─ dispatcher/           任务到 Runner 的一次调度
-│  └─ runner/               Codex CLI 与 Self-hosted 单任务执行
+│  ├─ supervisor/           Supervisor 入口、Dashboard 服务与健康恢复
+│  └─ __init__.py           角色目录说明
 ├─ loop_agent/              跨角色可复用内部实现
 ├─ loopctl.py               共享任务控制 CLI
 └─ loopdb.py                共享数据库兼容门面
@@ -105,14 +104,14 @@ operator / planner / worker / supervisor / dispatcher / runner
 
 任务无法创建或更新：
 
-1. 检查 `roles/operator/control.py` 的输入字段和 row version 门禁。
+1. 检查 `../operator/control.py` 的输入字段和 row version 门禁。
 2. 检查 `tasks/normalization.py` 与 `tasks/scopes.py` 的纯校验错误。
 3. 检查 `database/task_store.py` 的任务与子表写入。
 4. 运行 `python scripts/loopctl.py validate` 查看跨表错误。
 
 Planner 无法把 DRAFT 变为 PENDING：
 
-1. 检查 `roles/planner/control.py` 的 execution fencing 和 UTF-8 stdin 契约。
+1. 检查 `../planner/control.py` 的 execution fencing 和 UTF-8 stdin 契约。
 2. 检查最终 capability、scope、lock mode、技术验收和 evidence 是否齐全。
 3. 检查 L5/manual 是否具有 Operator 明确批准标记。
 4. 运行 Planner 专项测试或完整 `test_loop.py`。
@@ -121,7 +120,7 @@ Worker 无法领取任务：
 
 1. 检查任务是否为 `PENDING/READY` 且路由四元组匹配。
 2. 检查 `database/task_store.py` 投影出的依赖状态和 scope queue position。
-3. 检查 `roles/worker/control.py` 的全局/平台容量和动态冲突列表。
+3. 检查 `../worker/control.py` 的全局/平台容量和动态冲突列表。
 4. 检查 `control/recovery.py` 是否保留了 `QUARANTINED` 锁。
 
 Self-hosted Agent 异常：
@@ -142,6 +141,19 @@ Dashboard 异常：
 5. Secret API 只允许本机同源请求，失败时检查 Host、Origin、CSRF 和一次性 UUID。
 
 ## 回归测试
+
+`test_loop.py` 是兼容入口，直接执行时会发现并运行全部 `test_loop_*.py` 控制面回归。
+控制面测试按职责拆分：
+
+| 文件 | 职责 |
+| --- | --- |
+| `_loop_support.py` | UTF-8 路径、临时数据库、任务构造、CLI 调用和历史 Schema fixture；不定义独立测试场景 |
+| `test_loop_configuration.py` | 初始化配置、状态投影和执行路由 |
+| `test_loop_migrations.py` | 旧 JSON、SQLite Schema 和混合锁迁移 |
+| `test_loop_planner.py` | Planner 预检、契约、诊断和迟到写回 fencing |
+| `test_loop_claiming.py` | 领取、容量、优先级、依赖和 scope 锁 |
+| `test_loop_recovery.py` | 心跳、租约、超时、隔离和人工恢复 |
+| `test_loop_lifecycle.py` | 人工确认、阻塞答复、归档和重新排队 |
 
 ```powershell
 $env:PYTHONUTF8 = '1'

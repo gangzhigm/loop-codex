@@ -1,8 +1,7 @@
-"""Read-only Dashboard state projection and revision calculation.
+"""只读 Dashboard 状态投影和 revision 计算。
 
-The revision is derived entirely from task/execution records; no mutable
-metadata table is used. ``state_payload`` adapts old routing schemas while
-returning the current public shape expected by the Dashboard.
+revision 完全由任务和 execution 记录派生，不使用可变元数据表。``state_payload`` 在适配
+旧路由 Schema 的同时，返回 Dashboard 当前要求的公开数据形状。
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from loop_agent.tasks.scopes import configured_projects
 
 
 def current_revision(database: sqlite3.Connection) -> int:
-    """Calculate a deterministic monotonic-enough UI revision from task data."""
+    """根据任务数据计算确定且足够单调的界面 revision。"""
     task_versions = int(
         database.execute(
             "SELECT COALESCE(sum(row_version), 0) FROM tasks"
@@ -56,7 +55,7 @@ def state_payload(
     database: sqlite3.Connection,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the complete read-only payload consumed by the Dashboard."""
+    """构建 Dashboard 使用的完整只读数据。"""
     value = config or load_initialization_config()
     if uses_capability_schema(database):
         executions = database.execute(
@@ -208,6 +207,6 @@ def state_payload(
 
 
 def bump_revision(database: sqlite3.Connection, writer: str) -> int:
-    """Compatibility API: revision is derived, so writer is audit-neutral."""
+    """兼容接口：revision 为派生值，因此 writer 不影响审计结果。"""
     del writer
     return current_revision(database)

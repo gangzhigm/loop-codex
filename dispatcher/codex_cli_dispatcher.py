@@ -1,3 +1,15 @@
+"""Codex CLI 平台的单次调度入口。
+
+Dispatcher 读取任务和活动执行快照，只判断“当前是否值得启动一个 Runner”。它按
+数据库既有顺序选择首个满足环境、能力等级、自动策略和依赖条件的 PENDING 任务，
+再检查全局与平台并发容量。真正的原子领取、scope 冲突复核和 execution 创建仍由
+Runner 调用 loopctl 完成，因此多个 Dispatcher 同时看到同一候选也不会获得双重
+写权限。
+
+每次运行最多启动一个 Runner。日志只记录调度元数据与退出码，不记录子进程输出，
+防止任务内容或命令输出意外进入长期日志。
+"""
+
 from __future__ import annotations
 
 # 中文排查：Dispatcher 只选择一个可执行能力等级，并最多启动一次 Codex CLI Runner。
@@ -12,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_ROOT = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
@@ -37,11 +49,18 @@ TERMINAL_RUNNER_OUTCOMES = {"NO_TASK", "SLOT_FULL", "CONFLICT"}
 
 
 class DispatcherError(RuntimeError):
+    """配置、路径或调度前置条件不合法时抛出的公开异常。"""
+
     pass
 
 
 @dataclass(frozen=True)
 class DispatcherSettings:
+    """从初始化配置冻结出的 Dispatcher 运行参数。
+
+    路径在构造时解析为绝对路径，并限制在 Loop Agent 根目录内；并发上限必须与统一
+    配置解析函数一致；超时时间必须覆盖最慢能力等级的全部重试和终止宽限期。
+    """
     config_path: Path
     database_path: Path
     runner_path: Path
@@ -64,6 +83,7 @@ class DispatcherSettings:
         base_dir: Path = BASE_DIR,
         config_path: Path = CONFIG_PATH,
     ) -> "DispatcherSettings":
+        """严格校验配置结构、能力映射、路径边界和超时预算后生成设置。"""
         cli = config.get("codex_cli")
         execution = config.get("task_execution")
         database = config.get("database")
@@ -123,7 +143,7 @@ class DispatcherSettings:
         database_path = (root / str(database.get("path") or "")).resolve()
         log_path = (root / log_value).resolve()
         runner_path = (
-            root / "scripts" / "roles" / "runner" / "codex_cli_runner.py"
+            root / "runner" / "codex_cli_runner.py"
         ).resolve()
         if not database_path.is_relative_to(root) or not log_path.is_relative_to(root) or not runner_path.is_file():
             raise DispatcherError("dispatcher paths are unsafe or unavailable")
@@ -156,12 +176,14 @@ class DispatcherSettings:
 
 
 class EventLogger:
-    """Write only dispatcher metadata, never child-process output."""
+    """以 UTF-8 JSONL 追加调度元数据，禁止写入子进程标准输出。"""
 
     def __init__(self, path: Path | None) -> None:
+        """保存可选日志路径；传入 ``None`` 时完全禁用落盘。"""
         self.path = path
 
     def event(self, outcome: str, **fields: object) -> None:
+        """追加一条带上海时区时间戳的紧凑事件记录。"""
         payload = {"at": now_shanghai(), "outcome": outcome, **fields}
         line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         if self.path is not None:
@@ -171,6 +193,7 @@ class EventLogger:
 
 
 def dependencies_complete(task: dict[str, Any], statuses: dict[str, str]) -> bool:
+    """判断任务声明的所有依赖是否都已进入允许继续执行的完成状态。"""
     dependencies = task.get("depends_on")
     return isinstance(dependencies, list) and all(
         statuses.get(str(dependency)) in DEPENDENCY_COMPLETE_STATUSES for dependency in dependencies
@@ -180,6 +203,11 @@ def dependencies_complete(task: dict[str, Any], statuses: dict[str, str]) -> boo
 def select_candidate(
     tasks: list[dict[str, Any]], supported_capability_levels: tuple[str, ...]
 ) -> dict[str, Any] | None:
+    """按快照顺序返回首个可交给 Codex CLI 的自动任务。
+
+    本函数只做静态过滤，不检查容量和 scope 锁，也不修改数据库。最终能否领取必须
+    以 Runner 的原子 claim 结果为准。
+    """
     statuses = {str(task.get("id")): str(task.get("status")) for task in tasks}
     for task in tasks:
         if (
@@ -195,6 +223,7 @@ def select_candidate(
 
 
 def default_snapshot(settings: DispatcherSettings, config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """在一次短连接中读取完整任务投影与当前活动执行列表。"""
     database = connect(settings.database_path)
     try:
         return all_tasks(database), state_payload(database, config)["agents"]
@@ -203,10 +232,13 @@ def default_snapshot(settings: DispatcherSettings, config: dict[str, Any]) -> tu
 
 
 def default_launcher(command: list[str], cwd: Path, timeout: float) -> subprocess.CompletedProcess[str]:
+    """以 UTF-8 捕获模式同步运行 Runner，并由调用方负责处理超时和退出码。"""
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
 
 
 class CodexCliDispatcher:
+    """完成一次候选选择、容量判断、Runner 启动和元数据记录。"""
+
     def __init__(
         self,
         settings: DispatcherSettings,
@@ -216,6 +248,7 @@ class CodexCliDispatcher:
         launcher: Callable[[list[str], Path, float], subprocess.CompletedProcess[str]] = default_launcher,
         logger: EventLogger | None = None,
     ) -> None:
+        """注入设置、快照读取器和启动器，便于测试时隔离数据库与真实进程。"""
         self.settings = settings
         self.config = config
         self.snapshot_reader = snapshot_reader
@@ -223,6 +256,11 @@ class CodexCliDispatcher:
         self.logger = logger or EventLogger(settings.log_path)
 
     def run(self) -> dict[str, Any]:
+        """执行一次调度并返回稳定 outcome，不循环等待也不重试。
+
+        无任务和容量已满属于正常终止；进程超时、无法启动或非零退出会记录为独立
+        outcome。返回值不包含 Runner 的 stdout/stderr。
+        """
         tasks, active_agents = self.snapshot_reader(self.settings, self.config)
         candidate = select_candidate(tasks, self.settings.supported_capability_levels)
         if candidate is None:
@@ -295,6 +333,7 @@ class CodexCliDispatcher:
 
 
 def parser() -> argparse.ArgumentParser:
+    """构建单次调度命令行，支持覆盖配置、数据库和只校验不启动模式。"""
     root = argparse.ArgumentParser(description="Single-dispatch Codex CLI Runner launcher")
     root.add_argument("--config", default=str(CONFIG_PATH))
     root.add_argument("--db")
@@ -303,6 +342,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """加载初始化配置，应用受根目录约束的数据库覆盖，并执行一次调度。"""
     args = parser().parse_args()
     config_path = Path(args.config).resolve()
     config = load_initialization_config(config_path)

@@ -1,9 +1,10 @@
-"""Planner preflight reservation, heartbeat, and result state machine.
+"""Planner 预检的预留、心跳与结果状态机。
 
-Planner executions are isolated from Worker capacity and never acquire business
-scope locks. A task remains DRAFT while inspection is active. READY atomically
-writes the final execution contract and moves the task to PENDING; review or
-failure returns control to the Operator without creating child tasks.
+Planner execution 使用独立并发容量，不占用 Worker 名额，也不获取业务 scope 锁。
+预检期间任务始终保持 ``DRAFT``，通过 ``preflight_execution_id`` 与 row_version 防止
+迟到或并发结果覆盖新定义。``READY`` 会在同一事务内写入最终 scope、锁模式、技术
+验收、证据和能力等级，再把任务送入 ``PENDING``；需要决策或预检失败则转交 Operator，
+只保存拆分建议，不由 Planner 自行创建子任务。
 """
 
 from __future__ import annotations
@@ -51,6 +52,12 @@ PLANNER_ESCALATION_MARKERS = {
 
 
 def recover_timed_out_preflights(database: sqlite3.Connection) -> list[str]:
+    """回收心跳停滞、租约过期或超过总时限的 Planner execution。
+
+    满足任一超时信号的 execution 会标记 ``TIMED_OUT``；仅当任务仍由该 execution
+    fenced 且保持 DRAFT/INSPECTING 时，才把任务恢复为 UNINSPECTED 并写历史。调用方
+    必须已开启事务，本函数不自行提交。
+    """
     if not uses_preflight_schema(database):
         return []
     settings = load_initialization_config()["planner"]
@@ -97,6 +104,7 @@ def recover_timed_out_preflights(database: sqlite3.Connection) -> list[str]:
 
 
 def planner_task_payload(database: sqlite3.Connection, task: sqlite3.Row) -> dict[str, Any]:
+    """生成 Planner 可见的最小任务投影，避免暴露 Worker 执行结果和无关字段。"""
     value = task_dict(database, task)
     return {
         "id": value["id"],
@@ -113,6 +121,11 @@ def planner_task_payload(database: sqlite3.Connection, task: sqlite3.Row) -> dic
 def planner_escalation_is_approved(
     database: sqlite3.Connection, task: sqlite3.Row, escalation: str
 ) -> bool:
+    """检查 Operator 是否在描述或验收项中逐行写入了精确升级批准标记。
+
+    L5 与 manual 都属于 Planner 不能自行决定的升级；使用整行不区分大小写匹配，
+    避免普通自然语言提到等级时被误识别为授权。
+    """
     marker = PLANNER_ESCALATION_MARKERS[escalation].casefold()
     values = [task["description"] or ""]
     values.extend(
@@ -125,6 +138,12 @@ def planner_escalation_is_approved(
 
 
 def command_preflight_claim(args: argparse.Namespace) -> None:
+    """原子预留一个最高优先级的未检查草稿任务。
+
+    入口强制使用配置指定的 Runtime 和只读 sandbox。事务内先回收超时预检、检查
+    Planner 独立容量，再按优先级和创建时间选择任务；execution 插入与任务 fencing
+    更新必须同时成功。输出只包含 Operator 原始定义和只读客户端边界。
+    """
     if not args.execution_id or len(args.execution_id) > 128:
         raise LoopError("Planner execution-id 无效")
     config = load_initialization_config()
@@ -222,6 +241,11 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
 
 
 def command_preflight_heartbeat(args: argparse.Namespace) -> None:
+    """续期活动 Planner execution，并同步增加任务 row_version。
+
+    心跳前会先执行超时回收，因此已经过期的 execution 无法被迟到心跳复活。只有
+    execution_id、task_id 与任务当前 fencing 全部一致时才延长租约。
+    """
     database = connect(args.db)
     try:
         transaction(database)
@@ -267,6 +291,12 @@ def command_preflight_heartbeat(args: argparse.Namespace) -> None:
 def preflight_finish_context(
     database: sqlite3.Connection, args: argparse.Namespace, expected_outcome: str
 ) -> tuple[sqlite3.Row | None, sqlite3.Row]:
+    """校验 Planner 结束写回的 execution/task fencing，并处理幂等重放。
+
+    若 execution 已以相同期望 outcome 完成，则返回 ``(None, execution)`` 供调用方
+    输出 ALREADY_FINISHED；不同 outcome 的迟到结果会被拒绝。活动结果还必须匹配
+    DRAFT/INSPECTING、preflight_execution_id 和 expected row_version。
+    """
     recover_timed_out_preflights(database)
     execution = database.execute(
         "SELECT * FROM preflight_executions WHERE execution_id=?", (args.execution_id,)
@@ -287,6 +317,13 @@ def preflight_finish_context(
 
 
 def command_preflight_ready(args: argparse.Namespace) -> None:
+    """验证 READY 报告并原子发布最终 Worker 执行契约。
+
+    报告必须精确包含摘要、能力等级、scope、锁模式、技术验收和证据，所有关键列表
+    均不能为空。scope 先按锁模式规范化并检查重复；L5 或 manual 必须已有 Operator
+    明确批准。提交时替换 Planner 派生表、结束预检 execution，并把任务从 DRAFT
+    转为 PENDING。
+    """
     report = read_preflight_report(args.report)
     allowed = {"summary", "capability_level", "scope", "lock_mode", "technical_acceptance", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
@@ -372,6 +409,11 @@ def command_preflight_ready(args: argparse.Namespace) -> None:
 
 
 def command_preflight_needs_review(args: argparse.Namespace) -> None:
+    """保存需要 Operator 决策的预检结论和可选拆分建议。
+
+    该路径清除可执行 scope 与技术验收，保留预检证据，将任务转为 NEEDS_REVIEW，
+    并把问题、选项和拆分建议作为人工输入材料。Planner 只建议，不在这里创建任务。
+    """
     report = read_preflight_report(args.report)
     allowed = {"summary", "question", "options", "split_suggestions", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
@@ -431,6 +473,11 @@ def command_preflight_needs_review(args: argparse.Namespace) -> None:
 
 
 def command_preflight_fail(args: argparse.Namespace) -> None:
+    """记录无法形成有效预检结论的失败，并把修正权交回 Operator。
+
+    FAILED 报告必须提供摘要、错误和至少一条证据。任务转为 NEEDS_REVIEW，清空可执行
+    范围和能力等级，预检 execution 记录失败原因；后续只能修正定义后重新预检或取消。
+    """
     report = read_preflight_report(args.report)
     allowed = {"summary", "error", "evidence"}
     if not isinstance(report, dict) or set(report) != allowed:
@@ -483,6 +530,5 @@ def command_preflight_fail(args: argparse.Namespace) -> None:
         raise
     finally:
         database.close()
-
 
 

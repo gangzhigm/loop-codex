@@ -1,8 +1,7 @@
-"""Stable state, routing, and schema constants.
+"""稳定的状态、执行路由和 Schema 常量。
 
-These values form contracts shared by configuration validation, SQLite
-constraints, Planner preflight, Worker claim, and the Dashboard. Change them
-only together with the schema, prompts, migrations, and regression tests.
+这些值是配置校验、SQLite 约束、Planner 预检、Worker 领取和 Dashboard 共同依赖的契约。
+修改时必须同步调整 Schema、提示词、迁移和回归测试。
 """
 
 # 中文排查：这里的状态、优先级、能力等级和 Schema 版本是跨模块公共契约。
@@ -30,8 +29,8 @@ EXECUTION_POLICIES = ("automatic", "manual")
 CANONICAL_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "self_hosted_agent")
 LEGACY_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "deepseek")
 
-# ``deepseek`` remains an accepted input alias until every old launcher has
-# switched to ``self_hosted_agent`` plus an explicit provider id.
+# 在所有旧启动器都改为 ``self_hosted_agent`` 并显式提供 Provider ID 之前，
+# ``deepseek`` 继续作为兼容输入别名接受。
 RUNTIME_ENVIRONMENTS = CANONICAL_RUNTIME_ENVIRONMENTS + ("deepseek",)
 CLAIM_RUNTIME_ENVIRONMENTS = RUNTIME_ENVIRONMENTS
 LEGACY_PROFILE_TO_CAPABILITY = {

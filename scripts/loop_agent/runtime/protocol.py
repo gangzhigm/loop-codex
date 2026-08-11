@@ -1,10 +1,8 @@
-"""Validate model envelopes, tool arguments, and final task reports.
+"""校验模型 envelope、工具参数和最终任务报告。
 
-Provider adapters are untrusted at this boundary. A response must first match
-the neutral envelope, then each tool call is checked for exact argument names
-and types. Final results are normalized into the smaller payload accepted by
-``loopctl finish``. Provider-supplied diagnostic hints never bypass these
-structural checks.
+在该边界不信任 Provider 适配器。响应必须先匹配中立 envelope，再逐个校验工具调用的精确
+参数名和类型。最终结果会被规范化为 ``loopctl finish`` 接受的精简 payload。Provider 提供的
+诊断提示绝不能绕过这些结构校验。
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ from loop_agent.runtime.sandbox import ToolSandbox
 
 
 def approved_actions(task: dict[str, Any]) -> set[str]:
-    """Parse the explicit high-risk approval marker from task-owned text."""
+    """从任务自有文本中解析显式高风险操作批准标记。"""
     text = "\n".join(
         [
             str(task.get("description") or ""),
@@ -51,7 +49,7 @@ def approved_actions(task: dict[str, Any]) -> set[str]:
 
 
 def validate_model_response(raw: Any) -> dict[str, Any]:
-    """Validate and normalize one Provider response envelope."""
+    """校验并规范化一个 Provider 响应 envelope。"""
     if not isinstance(raw, dict) or raw.get("type") not in {
         "tool_calls",
         "final",
@@ -102,10 +100,10 @@ def validate_model_response(raw: Any) -> dict[str, Any]:
 
 
 def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> None:
-    """Reject extra or malformed arguments before the sandbox sees a call.
+    """在工具调用进入沙箱前拒绝多余或畸形参数。
 
-    High-risk names deliberately reach ``ToolSandbox`` so its approval gate can
-    produce ``WAITING_HUMAN``. There is still no implementation behind them.
+    高风险名称会刻意到达 ``ToolSandbox``，使其批准门禁能够生成 ``WAITING_HUMAN``；这些
+    名称背后目前仍没有实际操作实现。
     """
     if name in HIGH_RISK_ACTIONS:
         return
@@ -143,7 +141,7 @@ def validate_tool_arguments(name: str, arguments: dict[str, Any]) -> None:
 
 
 def validate_final_result(raw: Any) -> dict[str, Any]:
-    """Normalize a final model result into the control-plane report contract."""
+    """把模型 final 结果规范化为控制面报告契约。"""
     if not isinstance(raw, dict) or raw.get("status") not in FINAL_STATUSES:
         raise AgentRuntimeError("final result status is invalid")
     status = raw["status"]
