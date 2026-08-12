@@ -14,7 +14,7 @@
 ## 单次流程
 
 1. 读取 `E:\code\local-agent-loop\AGENTS.md`、`config\initialization.json` 和 `E:\code\根目录清单.md`。核对入口声明为 `runtime_environment=codex_automation`、`execution_kind=PLANNER`、`sandbox=read-only`；任一缺失或不匹配立即失败。
-2. 生成唯一 execution ID（`planner-` 加 GUID），通过受控通道运行一次：`py -3 E:\code\local-agent-loop\scripts\loopctl.py preflight-claim <execution-id> --runtime-environment codex_automation --sandbox read-only`。
+2. 生成唯一 execution ID（`planner-` 加 GUID），通过受控通道运行一次：`py -3 E:\code\local-agent-loop\control\loopctl.py preflight-claim <execution-id> --runtime-environment codex_automation --sandbox read-only`。
 3. `NO_TASK` 或 `SLOT_FULL` 时报告并结束，不等待、不领取第二项。`CLAIMED` 时核对 `execution_kind=PLANNER`、`client_boundary.sandbox=read-only`、默认工具动作是拒绝、任务为 `DRAFT/INSPECTING`，然后只使用返回的 `operator_definition` 作为业务事实。
 4. 用项目清单定位 `scope_hint` 涉及的登记项目，确认目录存在，完整读取各项目适用的 `AGENTS.md`。检查现有文件、模块边界、依赖关系和只读 Git 状态/差异；不执行任务实现或动态验证。阅读完成后、每个较长只读检查前后及提交结果前运行 `preflight-heartbeat`。
 5. 精确区分 Operator 事实与 Planner 补充。不得改变 description、业务 acceptance、priority、runtime environment、Provider、execution policy、依赖、附件、scope hint 或 estimated capability。Planner 通常提交最终 L1-L4；只有第 6 步的明确批准标记存在时才可提交 L5。所有 READY 都必须同时提交精确 scope、`file|module|project` 锁模式、技术验收和 value-only 静态证据。

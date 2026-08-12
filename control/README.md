@@ -1,8 +1,8 @@
-# Scripts 代码导航
+# Control 代码导航
 
-`scripts/` 根目录只保留跨角色共享的 `loopctl.py`、`loopdb.py` 和本导航。
+`control/` 根目录只保留跨角色共享的 `loopctl.py`、`loopdb.py` 和本导航。
 Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库根目录对应角色目录；
-可复用基础模块位于 `scripts/loop_agent/`。
+可复用基础模块位于 `control/loop_agent/`。
 
 所有文本输入输出使用 UTF-8。SQLite 写入必须经过 `loopctl.py` 暴露的控制面，
 不能从 Dashboard、Provider 或业务脚本直接更新任务表。
@@ -26,7 +26,7 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 ## 目录分区
 
 ```text
-scripts/
+control/
 ├─ deployment_checks/       当前真实部署、配置与前端文件的只读校验
 ├─ tests/                   Python 回归测试与测试路径引导
 ├─ loop_agent/              跨角色可复用内部实现
@@ -100,7 +100,7 @@ operator / planner / worker / supervisor / dispatcher / runner
 1. 检查 `../operator/control.py` 的输入字段和 row version 门禁。
 2. 检查 `tasks/normalization.py` 与 `tasks/scopes.py` 的纯校验错误。
 3. 检查 `database/task_store.py` 的任务与子表写入。
-4. 运行 `python scripts/loopctl.py validate` 查看跨表错误。
+4. 运行 `python control/loopctl.py validate` 查看跨表错误。
 
 Planner 无法把 DRAFT 变为 PENDING：
 
@@ -150,17 +150,17 @@ Dashboard 异常：
 
 ```powershell
 $env:PYTHONUTF8 = '1'
-python scripts/tests/test_loop.py
-python scripts/tests/test_dashboard_server.py
-python scripts/tests/test_agent_runtime.py
-python scripts/tests/test_deepseek_provider.py
-python scripts/tests/test_codex_cli_runner.py
-python scripts/tests/test_codex_cli_dispatcher.py
-python scripts/tests/test_secret_store.py
-python scripts/tests/test_instruction_authority.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deployment_checks/check-initialization.ps1 -SkipCodexCliCheck
-node scripts/deployment_checks/check-dashboard.mjs
-python scripts/loopctl.py validate
+python control/tests/test_loop.py
+python control/tests/test_dashboard_server.py
+python control/tests/test_agent_runtime.py
+python control/tests/test_deepseek_provider.py
+python control/tests/test_codex_cli_runner.py
+python control/tests/test_codex_cli_dispatcher.py
+python control/tests/test_secret_store.py
+python control/tests/test_instruction_authority.py
+powershell -NoProfile -ExecutionPolicy Bypass -File control/deployment_checks/check-initialization.ps1 -SkipCodexCliCheck
+node control/deployment_checks/check-dashboard.mjs
+python control/loopctl.py validate
 ```
 
 运行入口保持稳定；检查、安装和测试路径按用途分区。移动后必须同步更新本文档、

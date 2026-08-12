@@ -36,9 +36,9 @@ from urllib.parse import parse_qs, urlparse
 sys.dont_write_bytecode = True
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_ROOT = REPOSITORY_ROOT / "scripts"
-if str(SCRIPTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_ROOT))
+CONTROL_ROOT = REPOSITORY_ROOT / "control"
+if str(CONTROL_ROOT) not in sys.path:
+    sys.path.insert(0, str(CONTROL_ROOT))
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 

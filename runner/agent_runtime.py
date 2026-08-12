@@ -32,9 +32,9 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 
-SCRIPTS_ROOT = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_ROOT))
+CONTROL_ROOT = Path(__file__).resolve().parents[1] / "control"
+if str(CONTROL_ROOT) not in sys.path:
+    sys.path.insert(0, str(CONTROL_ROOT))
 
 from loop_agent.runtime.agent import SingleTaskAgent
 from loop_agent.runtime.contracts import (

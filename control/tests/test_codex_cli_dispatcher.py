@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import copy
 import json
-import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -164,11 +163,8 @@ class CodexCliDispatcherTests(unittest.TestCase):
             DispatcherSettings.from_config(config)
 
     def test_install_script_dry_run_does_not_touch_task_scheduler(self) -> None:
-        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
-        if not powershell:
-            self.skipTest("PowerShell is unavailable")
         completed = subprocess.run(
-            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(BASE_DIR / "scripts" / "installers" / "install_codex_cli_task.ps1"), "-DryRun"],
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(BASE_DIR / "control" / "installers" / "install_codex_cli_task.ps1"), "-DryRun"],
             capture_output=True,
             text=True,
             encoding="utf-8",

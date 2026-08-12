@@ -2,6 +2,7 @@
 
 Local Agent Loop 是 `E:\code` 下的本地多项目任务控制中心。Operator 管理任务，
 Planner 做只读预检，Worker 在取得 scope 锁后执行，Dashboard 展示状态并提供受控操作。
+系统仅支持 Windows，进程管理、计划任务和系统密钥存储均直接使用 Windows 能力。
 
 > 本文只供人工快速了解和排障，不是 AI 角色的必读提示词，也不是第二份配置源。
 > AI 角色以 `AGENTS.md`、对应角色目录中的提示词、受控入口返回值和目标项目规则为准。
@@ -9,8 +10,8 @@ Planner 做只读预检，Worker 在取得 scope 锁后执行，Dashboard 展示
 ## 快速开始
 
 ```powershell
-py -3 .\scripts\loopctl.py validate
-py -3 .\scripts\loopctl.py state
+py -3 .\control\loopctl.py validate
+py -3 .\control\loopctl.py state
 py -3 .\supervisor\main.py health
 py -3 .\supervisor\main.py serve
 ```
@@ -27,7 +28,7 @@ Dashboard 默认地址、端口及其他部署参数以 `config/initialization.j
 4. Worker 持有有效 scope 锁后实现并验证，最终写回 `SUCCEEDED`、`FAILED` 或 `WAITING_HUMAN`。
 5. 人工复核成功任务后执行 `confirm`；终态任务可独立归档。
 
-任务状态只能通过 `scripts/loopctl.py` 或复用它的受控 Dashboard 操作修改，禁止直接写 SQLite。
+任务状态只能通过 `control/loopctl.py` 或复用它的受控 Dashboard 操作修改，禁止直接写 SQLite。
 
 ## 权威来源
 
@@ -38,10 +39,10 @@ Dashboard 默认地址、端口及其他部署参数以 `config/initialization.j
 | Codex CLI 子进程协议 | `runner/cli-worker.md` |
 | 运行环境、模型、周期、并发和部署参数 | `config/initialization.json` |
 | 任务、预检、execution、依赖和 scope 锁事实 | `data/loop-agent.sqlite3` |
-| Schema 与状态约束 | `schemas/loop-agent.sql`、`scripts/loop_agent/` |
+| Schema 与状态约束 | `schemas/loop-agent.sql`、`control/loop_agent/` |
 | 项目路由 | 实时读取 `E:\code\根目录清单.md` |
 | Dashboard 健康状态 | `runtime/health-state.json` |
-| 脚本职责和回归命令 | `scripts/README.md` |
+| 脚本职责和回归命令 | `control/README.md` |
 
 README 只提供人工导航。若说明与配置、任务事实或控制代码冲突，以表中对应权威来源为准；
 说明文字不得覆盖上述运行时来源。
@@ -50,13 +51,13 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 
 | 场景 | 稳定入口 |
 | --- | --- |
-| 任务管理和状态迁移 | `scripts/loopctl.py` |
-| 数据库公共 API 兼容门面 | `scripts/loopdb.py` |
+| 任务管理和状态迁移 | `control/loopctl.py` |
+| 数据库公共 API 兼容门面 | `control/loopdb.py` |
 | Codex 客户端自动化 | `worker/worker.md` 与受控 `loopctl.py claim/heartbeat/finish` |
 | Codex CLI 周期调度 | `dispatcher/codex_cli_dispatcher.py` |
 | Codex CLI 单任务运行 | `runner/codex_cli_runner.py` |
 | Self-hosted Agent | `runner/agent_runtime.py` |
-| DeepSeek Provider 适配 | `scripts/loop_agent/providers/deepseek.py` |
+| DeepSeek Provider 适配 | `control/loop_agent/providers/deepseek.py` |
 | Dashboard 健康与前台服务 | `supervisor/main.py`、`client/dashboard_server.py` |
 | Supervisor 健康检查实现 | `supervisor/health_run.py` |
 
@@ -66,15 +67,15 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 ## 常用任务命令
 
 ```powershell
-py -3 .\scripts\loopctl.py enqueue .\new-task.json
-py -3 .\scripts\loopctl.py update TASK-ID .\task-patch.json
-py -3 .\scripts\loopctl.py requeue TASK-ID --reason "重新预检或执行"
-py -3 .\scripts\loopctl.py cancel TASK-ID --reason "不再需要"
-py -3 .\scripts\loopctl.py confirm TASK-ID --reason "人工复核通过"
-py -3 .\scripts\loopctl.py archive TASK-ID --reason "终态任务归档"
-py -3 .\scripts\loopctl.py unarchive TASK-ID --reason "取消归档"
-py -3 .\scripts\loopctl.py resolve-human TASK-ID --response "人工答复"
-py -3 .\scripts\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action requeue
+py -3 .\control\loopctl.py enqueue .\new-task.json
+py -3 .\control\loopctl.py update TASK-ID .\task-patch.json
+py -3 .\control\loopctl.py requeue TASK-ID --reason "重新预检或执行"
+py -3 .\control\loopctl.py cancel TASK-ID --reason "不再需要"
+py -3 .\control\loopctl.py confirm TASK-ID --reason "人工复核通过"
+py -3 .\control\loopctl.py archive TASK-ID --reason "终态任务归档"
+py -3 .\control\loopctl.py unarchive TASK-ID --reason "取消归档"
+py -3 .\control\loopctl.py resolve-human TASK-ID --response "人工答复"
+py -3 .\control\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action requeue
 ```
 
 `cancel` 保留审计历史，不物理删除任务。`migrate` 只升级已有 SQLite Schema；
@@ -84,11 +85,11 @@ py -3 .\scripts\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action 
 
 ```powershell
 $env:PYTHONUTF8 = '1'
-py -3 -m unittest discover -s scripts/tests -p "test_*.py"
-py -3 .\scripts\loopctl.py validate
+py -3 -m unittest discover -s control/tests -p "test_*.py"
+py -3 .\control\loopctl.py validate
 ```
 
-控制面测试的职责拆分、专项命令和部署检查见 `scripts/README.md`。
+控制面测试的职责拆分、专项命令和部署检查见 `control/README.md`。
 
 ## 目录导航
 
@@ -102,19 +103,19 @@ py -3 .\scripts\loopctl.py validate
 | `runner/` | Codex CLI 与 Self-hosted Runner 入口及 CLI 提示词 |
 | `config/initialization.json` | 唯一部署配置源 |
 | `schemas/loop-agent.sql` | 当前数据库 Schema |
-| `scripts/loopctl.py` | 任务控制 CLI |
-| `scripts/loop_agent/` | 控制面、数据库、运行时、Provider 和 Dashboard 内部实现 |
+| `control/loopctl.py` | 任务控制 CLI |
+| `control/loop_agent/` | 控制面、数据库、运行时、Provider 和 Dashboard 内部实现 |
 | `supervisor/` | Supervisor 主进程、健康检查与 Windows 计划任务安装器 |
-| `scripts/tests/` | Python 回归测试 |
+| `control/tests/` | Python 回归测试 |
 | `client/` | Dashboard 前端静态资源与本机 HTTP/API 服务 |
 | `runtime/` | PID、日志和健康状态，不是任务事实源 |
 | `data/loop-agent.sqlite3` | 唯一任务事实源 |
 
 ## 排障顺序
 
-1. 运行 `py -3 scripts/loopctl.py validate` 检查任务库和配置一致性。
+1. 运行 `py -3 control/loopctl.py validate` 检查任务库和配置一致性。
 2. 查看 `runtime/health-state.json`，必要时运行 Supervisor `health`。
-3. 根据失败角色读取对应角色目录中的提示词和 `scripts/README.md` 的职责导航。
+3. 根据失败角色读取对应角色目录中的提示词和 `control/README.md` 的职责导航。
 4. 使用 `loopctl.py state` 或 Dashboard 查看任务、execution、依赖和 scope 阻塞事实。
 
 敏感值不进入 README、任务数据库、配置文件或日志。SecretStore 的人工入口是

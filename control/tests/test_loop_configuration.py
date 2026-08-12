@@ -92,12 +92,11 @@ class LoopConfigurationTests(LoopTestCase):
             {"deepseek-v4-flash", "deepseek-v4-pro"},
         )
 
-    @unittest.skipUnless(os.name == "nt", "PowerShell initialization check is Windows-specific")
     def test_initialization_check_validates_planner_and_workers(self) -> None:
         completed = subprocess.run(
             [
                 "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                str(BASE_DIR / "scripts" / "deployment_checks" / "check-initialization.ps1"), "-SkipCodexCliCheck",
+                str(BASE_DIR / "control" / "deployment_checks" / "check-initialization.ps1"), "-SkipCodexCliCheck",
             ],
             cwd=BASE_DIR,
             text=True,
@@ -187,7 +186,7 @@ class LoopConfigurationTests(LoopTestCase):
                     "priority": "medium",
                     "execution_profile": "standard",
                     "runtime_environment": "codex_cli",
-                    "scope": ["local-agent-loop/scripts/loopctl.py"],
+                    "scope": ["local-agent-loop/control/loopctl.py"],
                     "acceptance": ["test"],
                 },
                 ensure_ascii=False,
@@ -230,7 +229,7 @@ class LoopConfigurationTests(LoopTestCase):
         task_path = Path(self.temporary.name) / "provider-task.json"
         base = {
             "id": "PROVIDER-RULE", "title": "provider", "capability_level": "L2",
-            "scope": ["local-agent-loop/scripts/loopctl.py"], "acceptance": ["test"],
+            "scope": ["local-agent-loop/control/loopctl.py"], "acceptance": ["test"],
         }
         task_path.write_text(
             json.dumps({**base, "runtime_environment": "self_hosted_agent"}), encoding="utf-8"

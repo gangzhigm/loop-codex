@@ -43,7 +43,7 @@ from loopdb import (
 
 
 BASE_DIR = REPOSITORY_ROOT
-LOOPCTL = BASE_DIR / "scripts" / "loopctl.py"
+LOOPCTL = BASE_DIR / "control" / "loopctl.py"
 
 
 class LoopTestCase(unittest.TestCase):
@@ -204,7 +204,7 @@ class LoopTestCase(unittest.TestCase):
                     "runtime_environment": "codex_automation",
                     "estimated_capability_level": capability,
                     "execution_policy": execution_policy,
-                    "scope_hint": ["local-agent-loop/scripts/loopctl.py"],
+                    "scope_hint": ["local-agent-loop/control/loopctl.py"],
                     "acceptance": ["business acceptance"],
                 },
                 ensure_ascii=False,
@@ -231,7 +231,7 @@ class LoopTestCase(unittest.TestCase):
             {
                 "summary": "静态检查通过",
                 "capability_level": capability,
-                "scope": scope or ["local-agent-loop/scripts/loopctl.py"],
+                "scope": scope or ["local-agent-loop/control/loopctl.py"],
                 "lock_mode": lock_mode,
                 "technical_acceptance": ["运行聚焦回归测试"],
                 "evidence": ["已核对范围和依赖关系"],

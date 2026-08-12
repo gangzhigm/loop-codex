@@ -218,7 +218,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner_writeback.get("transport") == "host_controlled_loopctl_stdin"
         and planner_writeback.get("payload_encoding") == "utf-8"
         and planner_writeback.get("integrity_policy") == "reject_suspicious_question_mark_corruption"
-        and planner_writeback.get("controller") == str(BASE_DIR / "scripts" / "loopctl.py")
+        and planner_writeback.get("controller") == str(BASE_DIR / "control" / "loopctl.py")
         and planner_writeback.get("allowed_commands") == [
             "preflight-claim", "preflight-heartbeat", "preflight-ready",
             "preflight-needs-review", "preflight-fail",

@@ -423,7 +423,7 @@ def operations_config_payload(
                 "title": "Dispatcher 管理",
                 "items": [
                     item("dispatcher-service", "常驻 Dispatcher", "尚未部署", "部署设计", "负责生成可执行队列并按容量、依赖与锁状态路由任务。", "受保护", "尚未实现", "planned"),
-                    item("cli-dispatcher", "Codex CLI 单次调度", f"每 {_config_value(cli if isinstance(cli, Mapping) else {}, 'dispatcher', 'interval_minutes')} 分钟", "config/initialization.json", "当前仅提供 Codex CLI 的单次 Dispatcher 入口，不是常驻跨平台 Dispatcher。", "需计划任务部署", "配置加载时校验"),
+                    item("cli-dispatcher", "Codex CLI 单次调度", f"每 {_config_value(cli if isinstance(cli, Mapping) else {}, 'dispatcher', 'interval_minutes')} 分钟", "config/initialization.json", "Codex CLI Dispatcher 由 Windows 计划任务周期启动，每次只执行一轮调度。", "需计划任务部署", "配置加载时校验"),
                 ],
             },
             {

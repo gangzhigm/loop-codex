@@ -2,14 +2,14 @@
 
 > 本文件只定义所有角色共同遵守的不可绕过边界，不保存某个角色的具体工作步骤。
 > 排查权限或职责冲突时，先读本文件确认全局上限，再进入对应角色目录的提示词，
-> 最后沿 `scripts/loopctl.py` 绑定的 handler 检查控制代码；下层规则不得扩大这里的权限。
+> 最后沿 `control/loopctl.py` 绑定的 handler 检查控制代码；下层规则不得扩大这里的权限。
 
 ## 全局边界
 
 1. 所有文本文件按 UTF-8 读写；时间统一使用带时区的 Asia/Shanghai ISO 8601。
 2. 保留用户已有改动，遵守目标项目及 scope 路径适用的全部 `AGENTS.md`，只修改当前任务 scope。扩大范围前必须先通过当前执行入口取得有效 scope 锁。
 3. 禁止读取或输出 `.env`、凭据、密钥、`$CODEX_HOME` 和 `.reasonix`。
-4. 不直接写 SQLite 表。任务状态变更必须通过 `scripts/loopctl.py`；不物理删除任务，使用 `cancel` 保留审计历史；自动执行不得生成 `CONFIRMED`。
+4. 不直接写 SQLite 表。任务状态变更必须通过 `control/loopctl.py`；不物理删除任务，使用 `cancel` 保留审计历史；自动执行不得生成 `CONFIRMED`。
 5. 不得绕过入口声明的运行环境、执行身份、能力等级、执行策略、状态机、scope 锁、租约、超时或隔离边界。入口事实缺失、冲突或凭证无效时停止并按对应角色协议报告。
 6. 正常流程通过 UTF-8 stdin 提交 Planner 或 Worker 结构化结果，不创建持久化 report。
 

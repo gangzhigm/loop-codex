@@ -42,7 +42,7 @@ class LoopMigrationTests(LoopTestCase):
                     "runtime_environment": "codex_automation",
                     "execution_policy": "automatic",
                     "created_at": now_shanghai(),
-                    "scope": ["local-agent-loop/scripts/loopdb.py"],
+                    "scope": ["local-agent-loop/control/loopdb.py"],
                     "acceptance": ["legacy acceptance"],
                 },
                 project_paths=["local-agent-loop"],
@@ -92,7 +92,7 @@ class LoopMigrationTests(LoopTestCase):
                 "updated_at": stamp,
                 "heartbeat_at": stamp,
                 "attempt": 1,
-                "scope": ["local-agent-loop/scripts/loopctl.py"],
+                "scope": ["local-agent-loop/control/loopctl.py"],
             },
             project_paths=["local-agent-loop"],
         )
@@ -150,7 +150,7 @@ class LoopMigrationTests(LoopTestCase):
         )
         database.execute(
             "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) "
-            "VALUES('ACTIVE-34', 0, 'local-agent-loop/scripts/loopctl.py', 'project:local-agent-loop')"
+            "VALUES('ACTIVE-34', 0, 'local-agent-loop/control/loopctl.py', 'project:local-agent-loop')"
         )
         database.execute(
             """INSERT INTO executions(
@@ -272,7 +272,7 @@ class LoopMigrationTests(LoopTestCase):
         )
         database.execute(
             "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) "
-            "VALUES('SCHEMA-32-ROUTED', 0, 'local-agent-loop/scripts/loopdb.py', 'project:local-agent-loop')"
+            "VALUES('SCHEMA-32-ROUTED', 0, 'local-agent-loop/control/loopdb.py', 'project:local-agent-loop')"
         )
         database.execute(
             "INSERT INTO task_acceptance(task_id, ordinal, text) VALUES('SCHEMA-32-ROUTED', 0, 'kept acceptance')"
@@ -341,7 +341,7 @@ class LoopMigrationTests(LoopTestCase):
             self.assertEqual(failure is None, has_scope)
             self.assertEqual(
                 json.loads(after.pop("scope_hint_json")),
-                ["local-agent-loop/scripts/loopdb.py"] if has_scope else [],
+                ["local-agent-loop/control/loopdb.py"] if has_scope else [],
             )
             self.assertEqual(after.pop("lock_mode"), "project" if has_scope else None)
             self.assertEqual(after.pop("split_suggestions_json"), "[]")
@@ -409,7 +409,7 @@ class LoopMigrationTests(LoopTestCase):
                     "status": "PENDING",
                     "priority": priority,
                     "runtime_environment": "codex_automation",
-                    "scope": ["local-agent-loop/scripts/loopctl.py"],
+                    "scope": ["local-agent-loop/control/loopctl.py"],
                     "acceptance": ["test"],
                 },
                 project_paths=["local-agent-loop"],
@@ -422,7 +422,7 @@ class LoopMigrationTests(LoopTestCase):
                 "status": "PENDING",
                 "priority": "medium",
                 "runtime_environment": "codex_automation",
-                "scope": ["local-agent-loop/scripts/loopctl.py"],
+                "scope": ["local-agent-loop/control/loopctl.py"],
                 "acceptance": ["test"],
             },
             project_paths=["local-agent-loop"],
@@ -460,7 +460,7 @@ class LoopMigrationTests(LoopTestCase):
         ).fetchone()[0]
         database.execute("UPDATE tasks SET lock_mode='file' WHERE id='LEGACY-WAIT'")
         database.execute(
-            "UPDATE task_scopes SET scope_key='file:local-agent-loop::scripts/loopctl.py' "
+            "UPDATE task_scopes SET scope_key='file:local-agent-loop::control/loopctl.py' "
             "WHERE task_id='LEGACY-WAIT'"
         )
         validation = validate_database(database)

@@ -15,8 +15,8 @@ $ErrorActionPreference = 'Stop'
 $script:Checks = [System.Collections.Generic.List[string]]::new()
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $scriptsRoot = Split-Path -Parent $PSScriptRoot
-    $ConfigPath = Join-Path (Split-Path -Parent $scriptsRoot) 'config\initialization.json'
+    $controlRoot = Split-Path -Parent $PSScriptRoot
+    $ConfigPath = Join-Path (Split-Path -Parent $controlRoot) 'config\initialization.json'
 }
 
 function Assert-Condition {
@@ -119,9 +119,9 @@ $operatorPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.operato
 $plannerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.planner)
 $workerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.worker)
 $cliPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.cli_worker)
-$loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'scripts\loopctl.py')
+$loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'control\loopctl.py')
 $plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'planner\control.py')
-$controlIoSource = Read-Utf8Strict -Path (Join-Path $root 'scripts\loop_agent\control\io.py')
+$controlIoSource = Read-Utf8Strict -Path (Join-Path $root 'control\loop_agent\control\io.py')
 Assert-Condition ($plannerPrompt -match 'preflight-claim') 'Planner 提示词包含单次 claim 协议'
 Assert-Condition ($plannerPrompt -match '--sandbox read-only') 'Planner 提示词核对只读入口'
 Assert-Condition ($plannerPrompt -match 'preflight-needs-review') 'Planner 提示词包含人工复核分支'

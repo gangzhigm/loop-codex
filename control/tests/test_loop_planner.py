@@ -30,7 +30,7 @@ class LoopPlannerTests(LoopTestCase):
         )
         self.assertEqual(
             claimed["task"]["operator_definition"]["scope_hint"],
-            ["local-agent-loop/scripts/loopctl.py"],
+            ["local-agent-loop/control/loopctl.py"],
         )
         self.assertEqual(self.planner_claim("planner-second")["outcome"], "NO_TASK")
         heartbeat = self.run_ctl("preflight-heartbeat", "planner-ready", "PREFLIGHT-READY")
@@ -167,7 +167,7 @@ class LoopPlannerTests(LoopTestCase):
             "preflight-ready", "planner-file", "PREFLIGHT-FILE",
             input_text=self.ready_report(
                 lock_mode="file",
-                scope=["LOCAL-AGENT-LOOP\\scripts\\.\\LoopCtl.py"],
+                scope=["LOCAL-AGENT-LOOP\\control\\.\\LoopCtl.py"],
             ),
         )
         self.assertEqual(ready["outcome"], "READY")
@@ -178,7 +178,7 @@ class LoopPlannerTests(LoopTestCase):
         database.close()
         self.assertEqual(
             tuple(stored),
-            ("local-agent-loop/scripts/LoopCtl.py", "file:local-agent-loop::scripts/loopctl.py"),
+            ("local-agent-loop/control/LoopCtl.py", "file:local-agent-loop::control/loopctl.py"),
         )
 
         self.enqueue_draft("PREFLIGHT-UNSAFE")
@@ -187,7 +187,7 @@ class LoopPlannerTests(LoopTestCase):
             "preflight-ready", "planner-unsafe", "PREFLIGHT-UNSAFE",
             input_text=self.ready_report(
                 lock_mode="file",
-                scope=["local-agent-loop/scripts/../outside.py"],
+                scope=["local-agent-loop/control/../outside.py"],
             ),
         )
         self.assertIn("不安全的 scope", rejected["message"])
@@ -206,12 +206,12 @@ class LoopPlannerTests(LoopTestCase):
             "tasks": [
                 {
                     "id": "PROPOSED-A", "title": "module A", "description": "implement module A",
-                    "scope": ["local-agent-loop/scripts/loopdb.py"], "capability_level": "L4",
+                    "scope": ["local-agent-loop/control/loopdb.py"], "capability_level": "L4",
                     "depends_on": [], "parallel_with": ["PROPOSED-B"],
                 },
                 {
                     "id": "PROPOSED-B", "title": "module B", "description": "implement module B",
-                    "scope": ["local-agent-loop/scripts/loopctl.py"], "capability_level": "L4",
+                    "scope": ["local-agent-loop/control/loopctl.py"], "capability_level": "L4",
                     "depends_on": [], "parallel_with": ["PROPOSED-A"],
                 },
             ],

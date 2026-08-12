@@ -396,22 +396,22 @@ class LoopClaimingTests(LoopTestCase):
     def test_scope_extension_is_atomic_on_conflict_and_returns_updated_credential(self) -> None:
         self.add_task(
             "EXTEND-A", "local-agent-loop", "critical", lock_mode="file",
-            scope=["local-agent-loop/scripts/a.py"],
+            scope=["local-agent-loop/control/a.py"],
         )
         self.add_task(
             "EXTEND-B", "local-agent-loop", "high", lock_mode="file",
-            scope=["local-agent-loop/scripts/b.py"],
+            scope=["local-agent-loop/control/b.py"],
         )
         first = self.claim("exec-extend-a")
         self.claim("exec-extend-b")
-        report = json.dumps({"scope": ["LOCAL-AGENT-LOOP\\scripts\\.\\b.py"]})
+        report = json.dumps({"scope": ["LOCAL-AGENT-LOOP\\control\\.\\b.py"]})
         refused = self.run_ctl(
             "extend-scope", "exec-extend-a", "EXTEND-A", input_text=report
         )
         self.assertEqual(refused["outcome"], "SCOPE_EXTENSION_CONFLICT")
         self.assertEqual(
             refused["scope_lock_credential"]["scope_keys"],
-            ["file:local-agent-loop::scripts/a.py"],
+            ["file:local-agent-loop::control/a.py"],
         )
         database = connect(self.db_path)
         self.assertEqual(
@@ -427,8 +427,8 @@ class LoopClaimingTests(LoopTestCase):
         self.assertEqual(
             extended["scope_lock_credential"]["scope_keys"],
             [
-                "file:local-agent-loop::scripts/a.py",
-                "file:local-agent-loop::scripts/b.py",
+                "file:local-agent-loop::control/a.py",
+                "file:local-agent-loop::control/b.py",
             ],
         )
         self.assertEqual(

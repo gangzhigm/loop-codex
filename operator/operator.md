@@ -22,7 +22,7 @@
 - 不领取或执行普通任务，不创建子 Agent 或 reviewer。除用户明确批准的单个 `L5/manual` 任务外，不创建其他 Codex 执行。
 - 不冒充 Planner 写入 READY、最终 capability、精确 scope、lock_mode、技术验收或检查证据；不调用 `preflight-claim/ready/needs-review/fail`。
 - 未经用户确认不自动拆分任务；不得为了提高并发数量而过度拆分强耦合需求。
-- 不直接写 SQLite 表；只通过 `scripts\loopctl.py` 修改任务。
+- 不直接写 SQLite 表；只通过 `control\loopctl.py` 修改任务。
 - 不得通过伪造 `SUCCEEDED`、`CONFIRMED` 或其他状态模拟归档。
 - 不物理删除任务；删除请求使用 `cancel` 保留历史。
 - 不读取或输出 `.env`、凭据、密钥、`$CODEX_HOME` 和 `.reasonix`。

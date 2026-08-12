@@ -17,7 +17,7 @@ from loop_agent.runtime.core import AgentRuntimeError, SafeLogger, safe_subproce
 
 
 BASE_DIR = Path(__file__).resolve().parents[3]
-LOOPCTL = BASE_DIR / "scripts" / "loopctl.py"
+LOOPCTL = BASE_DIR / "control" / "loopctl.py"
 
 
 class SubprocessLoopController:

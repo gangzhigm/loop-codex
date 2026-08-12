@@ -9,10 +9,8 @@ from __future__ import annotations
 import ctypes
 import getpass
 import hmac
-import importlib
 import os
 import re
-import sys
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -170,11 +168,9 @@ class SecretStore:
     def _account_matches(self) -> bool:
         if not self.expected_account:
             return True
-        expected = self.expected_account
-        current = self.current_account
-        if sys.platform == "win32":
-            expected = expected.rsplit("\\", 1)[-1].casefold()
-            current = current.rsplit("\\", 1)[-1].casefold()
+        # Windows 账户可能带域名前缀，访问判断只比较不区分大小写的用户名部分。
+        expected = self.expected_account.rsplit("\\", 1)[-1].casefold()
+        current = self.current_account.rsplit("\\", 1)[-1].casefold()
         return _constant_time_equal(expected, current)
 
     def _ensure_access(self) -> None:
@@ -387,11 +383,12 @@ class EnvironmentBackend:
 
 
 class PythonKeyringBackend:
-    def __init__(self, keyring_module: Any, *, enforce_platform_backend: bool = True) -> None:
+    """仅供显式注入的兼容适配器使用；生产默认后端固定为 Windows Credential Manager。"""
+
+    def __init__(self, keyring_module: Any) -> None:
         self.keyring = keyring_module
         backend = keyring_module.get_keyring()
         implementation = f"{type(backend).__module__}.{type(backend).__name__}"
-        self._enforce_platform_backend = enforce_platform_backend
         self.capabilities = SecretStoreCapabilities(
             "os_keyring", implementation, True, True, True
         )
@@ -403,16 +400,6 @@ class PythonKeyringBackend:
             raise SecretStoreUnavailable("operating-system keyring backend is unavailable")
         if type(backend).__module__.startswith("keyring.backends.fail"):
             raise SecretStoreUnavailable("operating-system keyring backend is unavailable")
-        if self._enforce_platform_backend:
-            implementation = f"{type(backend).__module__}.{type(backend).__name__}".casefold()
-            if sys.platform == "darwin" and not any(
-                marker in implementation for marker in ("macos", "keychain")
-            ):
-                raise SecretStoreUnavailable("macOS Keychain backend is unavailable")
-            if sys.platform.startswith("linux") and not any(
-                marker in implementation for marker in ("secretservice", "libsecret")
-            ):
-                raise SecretStoreUnavailable("Linux Secret Service backend is unavailable")
 
     def read(self, service: str, secret_ref: str) -> str | None:
         try:
@@ -442,8 +429,6 @@ class WindowsCredentialBackend:
     ERROR_NOT_FOUND = 1168
 
     def __init__(self) -> None:
-        if sys.platform != "win32":
-            raise SecretStoreUnavailable("Windows Credential Manager is unavailable")
         from ctypes import wintypes
 
         class Credential(ctypes.Structure):
@@ -548,16 +533,8 @@ def _windows_error(error_code: int) -> SecretStoreError:
 
 def _os_keyring_backend(keyring_module: Any | None = None) -> SecretBackendAdapter:
     if keyring_module is not None:
-        return PythonKeyringBackend(keyring_module, enforce_platform_backend=False)
-    if sys.platform == "win32":
-        return WindowsCredentialBackend()
-    try:
-        module = importlib.import_module("keyring")
-    except ImportError:
-        raise SecretStoreUnavailable(
-            "the operating-system keyring adapter is not installed for this platform"
-        ) from None
-    return PythonKeyringBackend(module, enforce_platform_backend=True)
+        return PythonKeyringBackend(keyring_module)
+    return WindowsCredentialBackend()
 
 
 def create_secret_store(

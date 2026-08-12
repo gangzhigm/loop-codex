@@ -1014,13 +1014,13 @@
     "dashboard": {
       "component": "dashboard-server",
       "status": "HEALTHY",
-      "checked_at": "2026-08-11T18:11:34.081+08:00",
+      "checked_at": "2026-08-12T15:38:37.066+08:00",
       "message": "Dashboard 服务线程正在运行。"
     },
     "planner": {
       "component": "planner",
       "status": "IDLE",
-      "checked_at": "2026-08-11T18:11:34.081+08:00",
+      "checked_at": "2026-08-12T15:38:37.066+08:00",
       "pending_tasks": 0,
       "active_preflights": 0,
       "message": "没有待预检草稿；Codex 自动化运行状态无法由本机 Supervisor 直接查询。"
@@ -1028,7 +1028,7 @@
     "dispatcher": {
       "component": "codex-cli-dispatcher",
       "status": "UNDEPLOYED",
-      "checked_at": "2026-08-11T18:11:34.081+08:00",
+      "checked_at": "2026-08-12T15:38:37.066+08:00",
       "pending_tasks": 0,
       "task_name": "Local Agent Loop Codex CLI Dispatcher",
       "message": "Dispatcher 计划任务尚未注册，无法自动调度待执行任务。",
@@ -1036,5 +1036,5 @@
       "active_processes": 0
     }
   },
-  "monitor_checked_at": "2026-08-11T18:11:38.710+08:00"
+  "monitor_checked_at": "2026-08-12T15:38:39.606+08:00"
 }

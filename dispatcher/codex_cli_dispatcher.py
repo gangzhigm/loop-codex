@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-SCRIPTS_ROOT = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_ROOT))
+CONTROL_ROOT = Path(__file__).resolve().parents[1] / "control"
+if str(CONTROL_ROOT) not in sys.path:
+    sys.path.insert(0, str(CONTROL_ROOT))
 
 from loopdb import (
     BASE_DIR,

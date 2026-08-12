@@ -18,10 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -36,9 +34,9 @@ from typing import Any, TextIO
 sys.dont_write_bytecode = True
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_ROOT = REPOSITORY_ROOT / "scripts"
-if str(SCRIPTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_ROOT))
+CONTROL_ROOT = REPOSITORY_ROOT / "control"
+if str(CONTROL_ROOT) not in sys.path:
+    sys.path.insert(0, str(CONTROL_ROOT))
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.append(str(REPOSITORY_ROOT))
 
@@ -528,7 +526,7 @@ class CodexCliRunner:
             raise CodexCliAttemptError(str(error), retryable=not side_effects) from error
 
     def _start_process(self, command: list[str]) -> subprocess.Popen[str]:
-        """以 UTF-8 管道和独立进程组启动 Codex CLI，始终禁用 shell 解析。"""
+        """以 UTF-8 管道和 Windows 独立进程组启动 Codex CLI，始终禁用 shell 解析。"""
         kwargs: dict[str, Any] = {
             "stdin": subprocess.PIPE,
             "stdout": subprocess.PIPE,
@@ -537,11 +535,8 @@ class CodexCliRunner:
             "encoding": "utf-8",
             "errors": "replace",
             "shell": False,
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
         }
-        if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            kwargs["start_new_session"] = True
         try:
             return subprocess.Popen(command, **kwargs)
         except OSError as error:
@@ -577,29 +572,24 @@ class CodexCliRunner:
     def _terminate_process_tree(self, process: subprocess.Popen[str]) -> None:
         """终止给定 PID 的进程树，宽限期后升级为强制终止。
 
-        Windows 使用 ``taskkill /PID /T``，其他平台使用独立进程组信号。两轮终止后
-        仍存活会抛错，禁止在后台遗留一个失去心跳和锁续期的写进程。
+        使用 ``taskkill /PID /T /F`` 终止 Windows 进程树；命令失败时再终止精确子进程。
+        两轮终止后仍存活会抛错，禁止遗留失去心跳和锁续期的写进程。
         """
         self.logger.event("codex_cli_terminating", pid=process.pid)
         try:
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=self.settings.termination_grace_seconds,
-                    check=False,
-                )
-            else:
-                os.killpg(process.pid, signal.SIGTERM)
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=self.settings.termination_grace_seconds,
+                check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
             process.wait(timeout=self.settings.termination_grace_seconds)
         except (OSError, subprocess.SubprocessError):
             try:
-                if os.name != "nt":
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
+                process.kill()
                 process.wait(timeout=self.settings.termination_grace_seconds)
             except (OSError, subprocess.SubprocessError):
                 self.logger.event("codex_cli_termination_failed", pid=process.pid)

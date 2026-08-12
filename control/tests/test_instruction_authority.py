@@ -47,9 +47,9 @@ class InstructionAuthorityTests(unittest.TestCase):
         authorities = (
             "runner/codex_cli_runner.py",
             "runner/agent_runtime.py",
-            "scripts/loop_agent/providers/deepseek.py",
-            "scripts/loopdb.py",
-            "scripts/loopctl.py",
+            "control/loop_agent/providers/deepseek.py",
+            "control/loopdb.py",
+            "control/loopctl.py",
             "supervisor/health_run.py",
             "schemas/loop-agent.sql",
             "config/initialization.json",
@@ -129,6 +129,23 @@ class InstructionAuthorityTests(unittest.TestCase):
             with self.subTest(config_reference=relative_path):
                 text = (ROOT / relative_path).read_text(encoding="utf-8")
                 self.assertIn("config/initialization.json", text.replace("\\", "/"))
+
+    def test_workers_record_only_safe_rejected_test_temporary_cleanup(self) -> None:
+        for relative_path, actor in (
+            ("worker/worker.md", "execution"),
+            ("runner/cli-worker.md", "attempt"),
+        ):
+            with self.subTest(role_prompt=relative_path):
+                text = (ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertIn("普通测试日志或可丢弃测试临时文件", text)
+                self.assertIn("宿主策略或工具权限拒绝", text)
+                self.assertIn("只记录精确路径、生成命令和拒绝原因到 verification", text)
+                self.assertIn("不得仅因此返回 `WAITING_HUMAN`", text)
+                self.assertIn(
+                    f"{actor} 前已存在、归属不明、已跟踪、源码、配置、凭据、数据库、用户数据、目录、符号链接/重解析点或可能影响其他任务的文件",
+                    text,
+                )
+                self.assertIn("任一条件无法确认时仍不得删除并返回 `WAITING_HUMAN`", text)
 
 
 if __name__ == "__main__":

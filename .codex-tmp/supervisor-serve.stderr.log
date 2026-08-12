@@ -1,0 +1,45 @@
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 64673)
+Traceback (most recent call last):
+  File "E:\code\local-agent-loop\client\dashboard_server.py", line 584, in do_GET
+    self.send_json(HTTPStatus.OK, payload)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\code\local-agent-loop\client\dashboard_server.py", line 248, in send_json
+    json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\json\__init__.py", line 242, in dumps
+    **kw).encode(obj)
+          ~~~~~~^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\json\encoder.py", line 202, in encode
+    chunks = self.iterencode(o, _one_shot=True)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\json\encoder.py", line 263, in iterencode
+    return _iterencode(o, 0)
+MemoryError
+when serializing list item 1
+when serializing dict item 'acceptance'
+when serializing list item 67
+when serializing dict item 'tasks'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 500, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python314\Lib\http\server.py", line 488, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "E:\code\local-agent-loop\client\dashboard_server.py", line 587, in do_GET
+    except (sqlite3.Error, OSError, ValueError) as error:
+            ^^^^^^^
+NameError: name 'sqlite3' is not defined. Did you forget to import 'sqlite3'?
+----------------------------------------

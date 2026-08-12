@@ -50,7 +50,7 @@ def run_loopctl(
         completed = subprocess.run(
             [
                 sys.executable,
-                str(BASE_DIR / "scripts" / "loopctl.py"),
+                str(BASE_DIR / "control" / "loopctl.py"),
                 "--db",
                 str(database_path),
                 *arguments,
