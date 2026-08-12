@@ -19,7 +19,7 @@ sys.dont_write_bytecode = True
 from _bootstrap import REPOSITORY_ROOT
 
 from runner import codex_cli_runner
-from runner.agent_runtime import ExecutionProfile, SafeLogger
+from loop_agent.runtime.core import ExecutionProfile, SafeLogger
 from runner.codex_cli_runner import (
     CodexCliRunner,
     CodexCliRunnerError,
@@ -387,7 +387,7 @@ class CodexCliRunnerTests(unittest.TestCase):
                 "description": "Use the fake CLI.",
                 "status": "PENDING",
                 "priority": "medium",
-                "execution_profile": "standard",
+                "capability_level": "L2",
                 "runtime_environment": "codex_cli",
                 "created_at": now_shanghai(),
                 "scope": ["project-one/file.txt"],

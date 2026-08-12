@@ -172,14 +172,7 @@
     "retry_backoff_seconds": 1,
     "max_retry_backoff_seconds": 8,
     "secret_ref": "DEEPSEEK_API_KEY",
-    "api_key_environment_variable": "DEEPSEEK_API_KEY",
-    "supported_execution_profiles": [
-      "routine",
-      "standard",
-      "advanced",
-      "deep",
-      "complex"
-    ]
+    "api_key_environment_variable": "DEEPSEEK_API_KEY"
   },
   "priority_policy": {
     "levels": [
@@ -206,7 +199,7 @@
   "automations": {
     "worker_interval_minutes": 20,
     "runtime_environment": "codex_automation",
-    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\worker\\worker.md，并严格执行；runtime_environment=codex_automation，capability_level={capability_level}，execution_policy=automatic；过渡期 legacy_profile={profile}。",
+    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\worker\\worker.md，并严格执行；runtime_environment=codex_automation，capability_level={capability_level}，execution_policy=automatic。",
     "planner": {
       "automation_id": "loop-agent-planner",
       "name": "Loop Agent Planner",
@@ -221,101 +214,18 @@
       "entry_prompt": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\planner\\planner.md，并严格执行；runtime_environment=codex_automation，execution_kind=PLANNER，sandbox=read-only。"
     },
     "capabilities": {
-      "L1": { "name": "Loop Agent Worker · L1", "model": "gpt-5.6-luna", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-routine", "scheduled": true, "offset_minutes": 0, "legacy_profile": "routine" },
-      "L2": { "name": "Loop Agent Worker · L2", "model": "gpt-5.6-terra", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-standard", "scheduled": true, "offset_minutes": 2, "legacy_profile": "standard" },
-      "L3": { "name": "Loop Agent Worker · L3", "model": "gpt-5.6-terra", "reasoning_effort": "high", "execution_policy": "automatic", "automation_id": "loop-agent-worker-advanced", "scheduled": true, "offset_minutes": 4, "legacy_profile": "advanced" },
-      "L4": { "name": "Loop Agent Worker · L4", "model": "gpt-5.6-sol", "reasoning_effort": "high", "execution_policy": "automatic", "automation_id": "loop-agent-worker-deep", "scheduled": true, "offset_minutes": 6, "legacy_profile": "deep" },
-      "L5": { "name": "Loop Agent Worker · L5", "model": "gpt-5.6-sol", "reasoning_effort": "xhigh", "execution_policy": "automatic", "automation_id": "loop-agent-worker-complex", "scheduled": true, "offset_minutes": 8, "legacy_profile": "complex" }
-    },
-    "legacy_profile_compatibility": {
-      "routine": "L1",
-      "standard": "L2",
-      "advanced": "L3",
-      "deep": "L4",
-      "complex": "L5",
-      "exceptional": { "capability_level": "L5", "execution_policy": "manual", "scheduled": false }
-    },
-    "production_switch": {
-      "operator_required": true,
-      "status": "active",
-      "rollback": {
-        "schema_from": "3.3.0",
-        "schema_to": "3.4.0",
-        "backup_directory": "backups/production-cutover-20260804T175423236+0800",
-        "database_backup": "backups/production-cutover-20260804T175423236+0800/loop-agent-schema-3.3.0-before-3.4.0.sqlite3",
-        "database_sha256": "8aede6847bd2e3d6034fd3c0500f313c114992c5be6f63e71477c6e22b290860",
-        "configuration_backup": "backups/production-cutover-20260804T175423236+0800/initialization.json",
-        "configuration_sha256": "d1d451a777e0cb0eb43aaa10ba7f525d4650e67f23775af9190d4d0e96d136d3",
-        "requirements": [
-          "Pause all five Codex Worker automations before rollback.",
-          "Confirm active_executions=0 and that no old client session can still edit.",
-          "Restore both the database and initialization configuration from this backup set.",
-          "Restart Supervisor through supervisor/main.py health and validate Schema, API, task count, and database integrity before reactivating Workers.",
-          "Only Operator may reactivate or modify the five real Codex automations."
-        ]
-      },
-      "checklist": [
-        "Confirm old Codex client executions have ended and no stalled session owns the same scope.",
-        "Operator updates and verifies the five real automation entries with capability_level parameters.",
-        "Keep the 20-minute cadence and 0, 2, 4, 6, 8 minute offsets unchanged.",
-        "Confirm every new entry claims once and keep the legacy mapping until Operator closes the transition."
-      ]
-    },
-    "profiles": {
-      "routine": {
-        "automation_id": "loop-agent-worker-routine",
-        "name": "Loop Agent Worker · Routine",
-        "model": "gpt-5.6-luna",
-        "reasoning_effort": "medium",
-        "scheduled": true,
-        "offset_minutes": 0
-      },
-      "standard": {
-        "automation_id": "loop-agent-worker-standard",
-        "name": "Loop Agent Worker · Standard",
-        "model": "gpt-5.6-terra",
-        "reasoning_effort": "medium",
-        "scheduled": true,
-        "offset_minutes": 2
-      },
-      "advanced": {
-        "automation_id": "loop-agent-worker-advanced",
-        "name": "Loop Agent Worker · Advanced",
-        "model": "gpt-5.6-terra",
-        "reasoning_effort": "high",
-        "scheduled": true,
-        "offset_minutes": 4
-      },
-      "deep": {
-        "automation_id": "loop-agent-worker-deep",
-        "name": "Loop Agent Worker · Deep",
-        "model": "gpt-5.6-terra",
-        "reasoning_effort": "xhigh",
-        "scheduled": true,
-        "offset_minutes": 6
-      },
-      "complex": {
-        "automation_id": "loop-agent-worker-complex",
-        "name": "Loop Agent Worker · Complex",
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "high",
-        "scheduled": true,
-        "offset_minutes": 8
-      },
-      "exceptional": {
-        "automation_id": null,
-        "name": "Loop Agent Worker · Exceptional",
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "xhigh",
-        "scheduled": false,
-        "offset_minutes": null
-      }
+      "L1": { "name": "Loop Agent Worker · L1", "model": "gpt-5.6-luna", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-routine", "scheduled": true, "offset_minutes": 0 },
+      "L2": { "name": "Loop Agent Worker · L2", "model": "gpt-5.6-terra", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-standard", "scheduled": true, "offset_minutes": 2 },
+      "L3": { "name": "Loop Agent Worker · L3", "model": "gpt-5.6-terra", "reasoning_effort": "high", "execution_policy": "automatic", "automation_id": "loop-agent-worker-advanced", "scheduled": true, "offset_minutes": 4 },
+      "L4": { "name": "Loop Agent Worker · L4", "model": "gpt-5.6-sol", "reasoning_effort": "high", "execution_policy": "automatic", "automation_id": "loop-agent-worker-deep", "scheduled": true, "offset_minutes": 6 },
+      "L5": { "name": "Loop Agent Worker · L5", "model": "gpt-5.6-sol", "reasoning_effort": "xhigh", "execution_policy": "automatic", "automation_id": "loop-agent-worker-complex", "scheduled": true, "offset_minutes": 8 }
     }
   },
   "health": {
     "scheduler": "windows_task_scheduler",
     "task_name": "Local Agent Loop Health",
     "interval_minutes": 30,
-    "failure_threshold": 3
+    "failure_threshold": 3,
+    "heartbeat_timeout_seconds": 120
   }
 }

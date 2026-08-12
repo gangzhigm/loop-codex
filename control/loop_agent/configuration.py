@@ -17,8 +17,6 @@ from typing import Any
 from .constants import (
     CAPABILITY_LEVELS,
     CANONICAL_RUNTIME_ENVIRONMENTS,
-    EXECUTION_POLICIES,
-    EXECUTION_PROFILES,
     PRIORITIES,
     SCHEMA_VERSION,
 )
@@ -26,24 +24,10 @@ from .errors import LoopError
 from .paths import BASE_DIR, CONFIG_PATH
 
 
-def legacy_profile_for(capability_level: str, execution_policy: str = "automatic") -> str:
-    if capability_level not in CAPABILITY_LEVELS:
-        raise LoopError(f"任务能力等级无效: {capability_level}")
-    if execution_policy not in EXECUTION_POLICIES:
-        raise LoopError(f"执行策略无效: {execution_policy}")
-    if capability_level == "L5":
-        return "exceptional" if execution_policy == "manual" else "complex"
-    return {"L1": "routine", "L2": "standard", "L3": "advanced", "L4": "deep"}[capability_level]
-
-
 def normalize_execution_target(
     runtime_environment: str,
     provider_id: str | None = None,
 ) -> tuple[str, str | None]:
-    if runtime_environment == "deepseek":
-        if provider_id not in {None, "deepseek"}:
-            raise LoopError("旧 deepseek 路由只能映射到 provider_id=deepseek")
-        return "self_hosted_agent", "deepseek"
     if runtime_environment not in CANONICAL_RUNTIME_ENVIRONMENTS:
         raise LoopError(f"运行环境无效: {runtime_environment}")
     if runtime_environment == "self_hosted_agent":
@@ -110,22 +94,19 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     planner_automation = automations.get("planner") or {}
     health = config.get("health") or {}
     platform_limits = execution.get("platform_max_active_executions") or {}
-    profiles = automations.get("profiles") or {}
+    automation_capabilities = automations.get("capabilities") or {}
     runtime_environments = config.get("runtime_environments") or {}
     project_defaults = priority_policy.get("project_defaults") or {}
-    valid_profile_config = set(profiles) == set(EXECUTION_PROFILES) and all(
-        isinstance(profiles[profile], dict)
-        and isinstance(profiles[profile].get("name"), str)
-        and isinstance(profiles[profile].get("model"), str)
-        and profiles[profile].get("reasoning_effort") in {"low", "medium", "high", "xhigh"}
-        and isinstance(profiles[profile].get("scheduled"), bool)
-        and (
-            (profiles[profile]["scheduled"] and isinstance(profiles[profile].get("automation_id"), str)
-             and isinstance(profiles[profile].get("offset_minutes"), int))
-            or (not profiles[profile]["scheduled"] and profiles[profile].get("automation_id") is None
-                and profiles[profile].get("offset_minutes") is None)
-        )
-        for profile in EXECUTION_PROFILES
+    valid_automation_capabilities = set(automation_capabilities) == set(CAPABILITY_LEVELS) and all(
+        isinstance(automation_capabilities[level], dict)
+        and isinstance(automation_capabilities[level].get("name"), str)
+        and isinstance(automation_capabilities[level].get("model"), str)
+        and automation_capabilities[level].get("reasoning_effort") in {"medium", "high", "xhigh"}
+        and automation_capabilities[level].get("execution_policy") == "automatic"
+        and isinstance(automation_capabilities[level].get("automation_id"), str)
+        and automation_capabilities[level].get("scheduled") is True
+        and isinstance(automation_capabilities[level].get("offset_minutes"), int)
+        for level in CAPABILITY_LEVELS
     )
     valid_runtime_environment_config = set(runtime_environments) == set(CANONICAL_RUNTIME_ENVIRONMENTS) and all(
         isinstance(runtime_environments[environment], dict)
@@ -251,9 +232,6 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and deepseek["max_retry_backoff_seconds"] >= deepseek["retry_backoff_seconds"]
         and isinstance(deepseek.get("api_key_environment_variable"), str)
         and bool(deepseek["api_key_environment_variable"].strip())
-        and isinstance(deepseek.get("supported_execution_profiles"), list)
-        and bool(deepseek["supported_execution_profiles"])
-        and all(profile in EXECUTION_PROFILES for profile in deepseek["supported_execution_profiles"])
         and priority_policy.get("levels") == list(PRIORITIES)
         and all(priority in PRIORITIES for priority in project_defaults.values())
         and isinstance(dashboard.get("host"), str)
@@ -264,7 +242,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and isinstance(automations.get("worker_interval_minutes"), int)
         and automations["worker_interval_minutes"] >= 1
         and isinstance(automations.get("entry_prompt_template"), str)
-        and "{profile}" in automations["entry_prompt_template"]
+        and "{capability_level}" in automations["entry_prompt_template"]
         and automations.get("runtime_environment") == "codex_automation"
         and "codex_automation" in automations["entry_prompt_template"]
         and planner_automation.get("automation_id") == "loop-agent-planner"
@@ -282,7 +260,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and "runtime_environment=codex_automation" in planner_automation["entry_prompt"]
         and "execution_kind=PLANNER" in planner_automation["entry_prompt"]
         and "sandbox=read-only" in planner_automation["entry_prompt"]
-        and valid_profile_config
+        and valid_automation_capabilities
         and valid_runtime_environment_config
         and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
         and direct_profiles_valid
@@ -294,6 +272,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and health["interval_minutes"] >= 1
         and isinstance(health.get("failure_threshold"), int)
         and health["failure_threshold"] >= 1
+        and isinstance(health.get("heartbeat_timeout_seconds"), int)
+        and health["heartbeat_timeout_seconds"] >= 1
     )
     if not valid:
         raise LoopError(f"初始化配置字段或取值无效: {config_path}")

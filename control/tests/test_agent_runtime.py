@@ -20,18 +20,19 @@ from unittest.mock import patch
 from _bootstrap import REPOSITORY_ROOT
 
 from runner import agent_runtime
-from runner.agent_runtime import (
+from loop_agent.runtime import sandbox as runtime_sandbox
+from loop_agent.runtime.agent import SingleTaskAgent
+from loop_agent.runtime.controller import SubprocessLoopController
+from loop_agent.runtime.core import (
+    ExecutionProfile,
     RuntimeSettings,
     SafeLogger,
-    ScopePolicy,
-    SingleTaskAgent,
-    SubprocessLoopController,
-    ProviderDiagnostic,
-    TrustedDiagnosticError,
     ToolRejected,
-    ToolSandbox,
-    validate_final_result,
+    safe_subprocess_environment,
 )
+from loop_agent.runtime.diagnostics import ProviderDiagnostic, TrustedDiagnosticError
+from loop_agent.runtime.protocol import validate_final_result
+from loop_agent.runtime.sandbox import ScopePolicy, ToolSandbox
 from loopdb import connect, initialize_schema, insert_task, load_initialization_config, now_shanghai
 from loop_agent.secrets.store import EnvironmentBackend, SecretStore
 
@@ -134,7 +135,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(settings.max_file_bytes, 524_288)
         self.assertEqual(settings.max_tool_output_chars, 50_000)
         self.assertEqual(settings.provider_termination_grace_seconds, 5)
-        profile = agent_runtime.ExecutionProfile.resolve(
+        profile = ExecutionProfile.resolve(
             config, "self_hosted_agent", "deepseek", "L2"
         )
         self.assertEqual(profile.max_retries, 2)
@@ -172,7 +173,7 @@ class AgentRuntimeTests(unittest.TestCase):
             },
             clear=True,
         ):
-            environment = agent_runtime.safe_subprocess_environment()
+            environment = safe_subprocess_environment()
         self.assertEqual(environment["PATH"], "safe-path")
         self.assertEqual(environment["NORMAL_SETTING"], "visible")
         self.assertNotIn("DEEPSEEK_API_KEY", environment)
@@ -508,7 +509,7 @@ class AgentRuntimeTests(unittest.TestCase):
     def test_command_timeout_is_reported_as_tool_failure(self) -> None:
         policy = ScopePolicy(self.workspace, ["project/"])
         sandbox = ToolSandbox(policy, self.settings, set())
-        with patch.object(agent_runtime.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 2)):
+        with patch.object(runtime_sandbox.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 2)):
             with self.assertRaisesRegex(ToolRejected, "timed out"):
                 sandbox.execute("run_command", {"cwd": "project", "argv": ["git", "status", "--short"]})
 
@@ -524,8 +525,9 @@ class AgentRuntimeTests(unittest.TestCase):
                 "description": "Read the scoped file.",
                 "status": "PENDING",
                 "priority": "medium",
-                "execution_profile": "standard",
-                "runtime_environment": "deepseek",
+                "capability_level": "L2",
+                "runtime_environment": "self_hosted_agent",
+                "provider_id": "deepseek",
                 "created_at": now_shanghai(),
                 "scope": ["project/file.txt"],
                 "acceptance": ["read verified"],

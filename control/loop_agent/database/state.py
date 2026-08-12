@@ -13,9 +13,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from loop_agent.configuration import legacy_profile_for, load_initialization_config
-from loop_agent.constants import LEGACY_PROFILE_TO_CAPABILITY
+from loop_agent.configuration import load_initialization_config
 from loop_agent.database.compatibility import (
+    LEGACY_PROFILE_TO_CAPABILITY,
     uses_capability_schema,
     uses_preflight_schema,
     uses_recovery_schema,
@@ -73,9 +73,6 @@ def state_payload(
                 "last_seen_at": row["heartbeat_at"],
                 "capability_level": row["capability_level"],
                 "execution_policy": row["execution_policy"],
-                "execution_profile": legacy_profile_for(
-                    row["capability_level"], row["execution_policy"]
-                ),
                 "runtime_environment": row["runtime_environment"],
                 "provider_id": row["provider_id"],
                 "execution_config": {
@@ -120,7 +117,6 @@ def state_payload(
                         if row["execution_profile"] == "exceptional"
                         else "automatic"
                     ),
-                    "execution_profile": row["execution_profile"],
                     "runtime_environment": runtime_environment,
                     "provider_id": (
                         "deepseek"

@@ -9,7 +9,7 @@ from _loop_support import *  # noqa: F403
 class LoopPlannerTests(LoopTestCase):
     def test_planner_ready_contract_gates_worker_claim_and_preserves_operator_facts(self) -> None:
         self.enqueue_draft("PREFLIGHT-READY")
-        before = self.claim("worker-before-ready", "advanced")
+        before = self.claim("worker-before-ready", "L3")
         self.assertEqual(before["outcome"], "NO_TASK")
 
         claimed = self.planner_claim("planner-ready")
@@ -53,7 +53,7 @@ class LoopPlannerTests(LoopTestCase):
         self.assertEqual(task["capability_level"], "L3")
         self.assertEqual(task["technical_acceptance"], ["运行聚焦回归测试"])
         self.assertEqual(task["preflight_evidence"], ["已核对范围和依赖关系"])
-        worker = self.claim("worker-after-ready", "advanced")
+        worker = self.claim("worker-after-ready", "L3")
         self.assertEqual(worker["task"]["id"], "PREFLIGHT-READY")
 
     def test_planner_ready_rejects_suspicious_question_mark_corruption(self) -> None:
@@ -274,7 +274,7 @@ class LoopPlannerTests(LoopTestCase):
             ),
         )
         self.assertEqual((result["status"], result["preflight_status"]), ("NEEDS_REVIEW", "FAILED"))
-        self.assertEqual(self.claim("worker-skips-failed", "advanced")["outcome"], "NO_TASK")
+        self.assertEqual(self.claim("worker-skips-failed", "L3")["outcome"], "NO_TASK")
 
     def test_finish_round_trips_safe_diagnostic_and_requeue_clears_it(self) -> None:
         self.add_task("DIAGNOSTIC-ROUNDTRIP", "project-1")

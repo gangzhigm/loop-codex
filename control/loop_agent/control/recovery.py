@@ -32,17 +32,13 @@ from loopdb import (
     now_shanghai,
     rollback,
     transaction,
-    uses_capability_schema,
-    uses_recovery_schema,
-    uses_result_diagnostic_schema,
 )
 
 
 def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
     """投影已经不满足存活规则的 execution。
 
-    本函数不修改数据库。保持只读后，claim 前的清理和诊断命令都可以复用它。旧 Schema
-    版本仍可读取，使迁移能够检查升级前数据库，而不会因为引用新列失败。
+    本函数不修改数据库。保持只读后，claim 前的清理和诊断命令都可以复用它。
     """
     stamp = now_shanghai()
     current = datetime.fromisoformat(stamp)
@@ -50,28 +46,12 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
         current
         - timedelta(seconds=int(execution_setting("stalled_after_seconds", 300)))
     ).isoformat(timespec="milliseconds")
-    capability_schema = uses_capability_schema(database)
-    recovery_schema = uses_recovery_schema(database)
-    if capability_schema:
-        statuses = "('RUNNING','STALLED','TIMED_OUT')" if recovery_schema else "('RUNNING')"
-        rows = database.execute(
-            "SELECT execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, "
-            "runtime_environment, provider_id, capability_level, execution_policy, "
-            "attempt_timeout_seconds, "
-            + (
-                "termination_reason, recovery_required "
-                if recovery_schema
-                else "NULL AS termination_reason, 0 AS recovery_required "
-            )
-            + f"FROM executions WHERE status IN {statuses}"
-        ).fetchall()
-    else:
-        rows = database.execute(
-            "SELECT e.execution_id, e.task_id, e.status, e.started_at, e.heartbeat_at, e.lease_expires_at, "
-            "t.runtime_environment, NULL AS provider_id, NULL AS capability_level, NULL AS execution_policy, "
-            "NULL AS attempt_timeout_seconds, NULL AS termination_reason, 0 AS recovery_required FROM executions e "
-            "JOIN tasks t ON t.id=e.task_id WHERE e.status='RUNNING'"
-        ).fetchall()
+    rows = database.execute(
+        "SELECT execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, "
+        "runtime_environment, provider_id, capability_level, execution_policy, "
+        "attempt_timeout_seconds, termination_reason, recovery_required "
+        "FROM executions WHERE status IN ('RUNNING','STALLED','TIMED_OUT')"
+    ).fetchall()
     stalled: list[dict[str, Any]] = []
     for execution in rows:
         heartbeat_stalled = execution["heartbeat_at"] <= stalled_cutoff
@@ -91,8 +71,6 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
         ):
             continue
         runtime_environment = execution["runtime_environment"]
-        if runtime_environment == "deepseek":
-            runtime_environment = "self_hosted_agent"
         stalled.append(
             {
                 "execution_id": execution["execution_id"],
@@ -141,8 +119,6 @@ def transition_recovery_states(
     ``WAITING_HUMAN``，在不声称旧写入者安全的前提下释放容量。之后发生的超时可以把已经
     stalled 的 execution 升级为 ``TIMED_OUT``，同时继续保留隔离。
     """
-    if not uses_recovery_schema(database):
-        return
     stamp = now_shanghai()
     for recovery in recoveries:
         old_status = recovery["execution_status"]
@@ -237,8 +213,6 @@ def transition_recovery_states(
 
 def recovery_required_records(database: sqlite3.Connection) -> list[dict[str, Any]]:
     """按 execution 汇总隔离 scope，每个 execution 生成一条 Operator 记录。"""
-    if not uses_recovery_schema(database):
-        return stalled_executions(database)
     rows = database.execute(
         "SELECT e.execution_id, e.task_id, e.status, e.runtime_environment, e.provider_id, "
         "e.capability_level, e.execution_policy, e.termination_reason, e.recovery_action, "
@@ -398,15 +372,10 @@ def command_recover(args: argparse.Namespace) -> None:
             "UPDATE executions SET recovery_required=0, recovered_at=?, recovery_action=? WHERE execution_id=?",
             (stamp, action, args.execution_id),
         )
-        diagnostic_reset = (
-            "result_diagnostic_json=NULL, "
-            if uses_result_diagnostic_schema(database)
-            else ""
-        )
         database.execute(
             f"UPDATE tasks SET status=?, assigned_agent=NULL, heartbeat_at=NULL, updated_at=?, "
             "completed_at=?, progress_percent=?, progress_summary=?, progress_next_step=?, result_error=?, "
-            f"{diagnostic_reset}human_required=0, human_question=NULL, "
+            "result_diagnostic_json=NULL, human_required=0, human_question=NULL, "
             "human_options_json='[]', human_requested_at=NULL, "
             "human_responded_at=?, human_response=?, row_version=row_version+1 WHERE id=?",
             (

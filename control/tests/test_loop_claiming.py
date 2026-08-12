@@ -9,21 +9,24 @@ from _loop_support import *  # noqa: F403
 class LoopClaimingTests(LoopTestCase):
     def test_global_eight_parallel_claims_and_ninth_slot_full(self) -> None:
         targets = [
-            ("routine", "codex_automation"), ("standard", "codex_automation"),
-            ("advanced", "codex_automation"), ("deep", "codex_automation"),
-            ("routine", "codex_cli"), ("standard", "codex_cli"),
-            ("advanced", "deepseek"), ("complex", "deepseek"),
-            ("complex", "codex_cli"),
+            ("L1", "codex_automation", None), ("L2", "codex_automation", None),
+            ("L3", "codex_automation", None), ("L4", "codex_automation", None),
+            ("L1", "codex_cli", None), ("L2", "codex_cli", None),
+            ("L3", "self_hosted_agent", "deepseek"),
+            ("L5", "self_hosted_agent", "deepseek"),
+            ("L5", "codex_cli", None),
         ]
-        for index, (profile, environment) in enumerate(targets, start=1):
+        for index, (level, environment, provider_id) in enumerate(targets, start=1):
             self.add_task(
-                f"TASK-{index}", f"project-{index}", execution_profile=profile,
-                runtime_environment=environment,
+                f"TASK-{index}", f"project-{index}", capability_level=level,
+                runtime_environment=environment, provider_id=provider_id,
             )
         with ThreadPoolExecutor(max_workers=9) as pool:
             results = list(
                 pool.map(
-                    lambda item: self.claim(f"exec-{item[0]}", item[1][0], item[1][1]),
+                    lambda item: self.claim(
+                        f"exec-{item[0]}", item[1][0], item[1][1], item[1][2]
+                    ),
                     enumerate(targets, start=1),
                 )
             )
@@ -35,26 +38,26 @@ class LoopClaimingTests(LoopTestCase):
         self.assertEqual(full["maximum"], 8)
 
     def test_platform_parallel_limit_is_enforced_without_capability_pool(self) -> None:
-        profiles = ["routine", "standard", "advanced", "deep", "complex", "routine"]
-        for index, profile in enumerate(profiles, start=1):
-            self.add_task(f"ROUTINE-{index}", f"project-{index}", execution_profile=profile)
-        for index, profile in enumerate(profiles[:5], start=1):
-            self.assertEqual(self.claim(f"platform-{index}", profile)["outcome"], "CLAIMED")
-        full = self.claim("platform-6", profiles[5])
+        levels = ["L1", "L2", "L3", "L4", "L5", "L1"]
+        for index, level in enumerate(levels, start=1):
+            self.add_task(f"TASK-{index}", f"project-{index}", capability_level=level)
+        for index, level in enumerate(levels[:5], start=1):
+            self.assertEqual(self.claim(f"platform-{index}", level)["outcome"], "CLAIMED")
+        full = self.claim("platform-6", levels[5])
         self.assertEqual(full["outcome"], "SLOT_FULL")
         self.assertEqual(full["limit_scope"], "platform")
         self.assertEqual(full["platform_active"], 5)
         self.assertEqual(full["platform_maximum"], 5)
 
-    def test_claim_isolated_by_execution_profile(self) -> None:
-        self.add_task("STANDARD-BLOCKER", "project-1", "blocker", "standard")
-        self.add_task("ROUTINE-LOW", "project-2", "low", "routine")
-        result = self.claim("routine-only", "routine")
-        self.assertEqual(result["task"]["id"], "ROUTINE-LOW")
-        self.assertEqual(result["task"]["execution_profile"], "routine")
+    def test_claim_isolated_by_capability_level(self) -> None:
+        self.add_task("L2-BLOCKER", "project-1", "blocker", "L2")
+        self.add_task("L1-LOW", "project-2", "low", "L1")
+        result = self.claim("l1-only", "L1")
+        self.assertEqual(result["task"]["id"], "L1-LOW")
+        self.assertEqual(result["task"]["capability_level"], "L1")
 
     def test_capability_claim_snapshots_resolved_configuration(self) -> None:
-        self.add_task("CAPABILITY-SNAPSHOT", "project-1", execution_profile="advanced")
+        self.add_task("CAPABILITY-SNAPSHOT", "project-1", capability_level="L3")
         result = self.run_ctl(
             "claim", "capability-snapshot", "--capability-level", "L3",
             "--runtime-environment", "codex_automation",
@@ -101,7 +104,7 @@ class LoopClaimingTests(LoopTestCase):
     def test_claim_requires_explicit_runtime_environment(self) -> None:
         self.add_task("EXPLICIT-ENV", "project-1")
         completed = subprocess.run(
-            [sys.executable, str(LOOPCTL), "--db", str(self.db_path), "claim", "missing-env", "--profile", "standard"],
+            [sys.executable, str(LOOPCTL), "--db", str(self.db_path), "claim", "missing-env", "--capability-level", "L2"],
             cwd=BASE_DIR,
             check=False,
             capture_output=True,
@@ -114,35 +117,6 @@ class LoopClaimingTests(LoopTestCase):
         status = database.execute("SELECT status FROM tasks WHERE id='EXPLICIT-ENV'").fetchone()[0]
         database.close()
         self.assertEqual(status, "PENDING")
-
-    def test_schema_33_accepts_legacy_claim_and_finish_parameters(self) -> None:
-        legacy_path = Path(self.temporary.name) / "schema-33-claim.sqlite3"
-        database = connect(legacy_path)
-        database.executescript(self.schema_33())
-        stamp = "2026-08-04T10:00:00.000+08:00"
-        database.execute(
-            "INSERT INTO tasks(id, title, description, status, priority, execution_profile, "
-            "runtime_environment, created_at, updated_at) "
-            "VALUES('LEGACY-CLAIM', 'legacy', '', 'PENDING', 'critical', 'complex', "
-            "'codex_automation', ?, ?)",
-            (stamp, stamp),
-        )
-        database.execute(
-            "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) "
-            "VALUES('LEGACY-CLAIM', 0, 'project-1/file.txt', 'project:project-1')"
-        )
-        database.close()
-        claimed = self.run_ctl(
-            "claim", "legacy-claim", "--profile", "complex",
-            "--runtime-environment", "codex_automation", db_path=legacy_path,
-        )
-        self.assertEqual(claimed["outcome"], "CLAIMED")
-        self.assertEqual(claimed["task"]["capability_level"], "L5")
-        finished = self.run_ctl(
-            "finish", "legacy-claim", "LEGACY-CLAIM", db_path=legacy_path,
-            input_text=json.dumps({"status": "SUCCEEDED", "summary": "done", "verification": ["ok"]}),
-        )
-        self.assertEqual(finished["outcome"], "FINISHED")
 
     def test_capability_level_does_not_create_a_shared_capacity_pool(self) -> None:
         environments = ["codex_automation", "codex_cli", "deepseek"]
@@ -185,7 +159,7 @@ class LoopClaimingTests(LoopTestCase):
         self.add_task("DUPLICATE", "project-1")
         self.assertEqual(self.claim("same-execution")["outcome"], "CLAIMED")
         error = self.run_ctl_error(
-            "claim", "same-execution", "--profile", "standard",
+            "claim", "same-execution", "--capability-level", "L2",
             "--runtime-environment", "codex_automation",
         )
         self.assertIn("execution-id 已存在", error["message"])

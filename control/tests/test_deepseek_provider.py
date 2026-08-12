@@ -17,13 +17,9 @@ from unittest.mock import Mock
 
 from _bootstrap import REPOSITORY_ROOT
 
-from runner.agent_runtime import (
-    ExecutionProfile,
-    RuntimeSettings,
-    SafeLogger,
-    SingleTaskAgent,
-    ToolSandbox,
-)
+from loop_agent.runtime.agent import SingleTaskAgent
+from loop_agent.runtime.core import ExecutionProfile, RuntimeSettings, SafeLogger
+from loop_agent.runtime.sandbox import ToolSandbox
 from loop_agent.providers.deepseek import (
     DeepSeekProvider,
     DeepSeekProviderError,

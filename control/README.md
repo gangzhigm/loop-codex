@@ -12,13 +12,13 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 | 文件 | 职责 | 不负责 |
 | --- | --- | --- |
 | `loopctl.py` | CLI 参数、命令分发、`validate/state` | 具体任务状态机实现 |
-| `loopdb.py` | 兼容导出数据库公共 API | SQL 业务实现 |
+| `loopdb.py` | 导出当前数据库公共 API | SQL 业务实现 |
 | `../operator/secretctl.py` | 系统密钥库的人工管理入口 | 任务数据库 |
 | `../planner/control.py` | Planner 的只读静态预检状态机 | 业务实现与 scope 写锁 |
 | `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
 | `../dispatcher/codex_cli_dispatcher.py` | 只读选择一个 Codex CLI 能力等级并启动一次 Runner | 原子 claim 与业务实现 |
 | `../runner/codex_cli_runner.py` | 单任务 Codex CLI 进程、heartbeat、finish | 周期调度 |
-| `../runner/agent_runtime.py` | Self-hosted Agent 启动、Provider 工厂、兼容导出 | 工具循环具体实现 |
+| `../runner/agent_runtime.py` | Self-hosted Agent 启动和 Provider 工厂 | 工具循环具体实现 |
 | `../supervisor/main.py` | Supervisor 统一入口：一次健康检查或启动常驻 Client 服务 | 任务调度与任务表写入 |
 | `../client/dashboard_server.py` | 本机 HTTP 路由、Secret API、静态资源服务 | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
@@ -31,7 +31,7 @@ control/
 ├─ tests/                   Python 回归测试与测试路径引导
 ├─ loop_agent/              跨角色可复用内部实现
 ├─ loopctl.py               共享任务控制 CLI
-└─ loopdb.py                共享数据库兼容门面
+└─ loopdb.py                共享数据库公共 API
 ```
 
 ## 内部模块
@@ -89,7 +89,7 @@ operator / planner / worker / supervisor / dispatcher / runner
 根目录共享入口
 ```
 
-`loopdb.py` 是兼容门面，不应成为内部模块的新依赖。新增内部代码应直接导入实际
+`loopdb.py` 是运行入口使用的数据库公共 API。数据层内部模块应直接导入实际
 职责模块。当前少量控制面和运行时模块仍从 `loopdb.py` 导入，是为了分阶段保持公共
 契约；后续可以机械替换，但不能改变外部导入路径。
 
@@ -107,7 +107,7 @@ Planner 无法把 DRAFT 变为 PENDING：
 1. 检查 `../planner/control.py` 的 execution fencing 和 UTF-8 stdin 契约。
 2. 检查最终 capability、scope、lock mode、技术验收和 evidence 是否齐全。
 3. 检查 L5/manual 是否具有 Operator 明确批准标记。
-4. 运行 Planner 专项测试或完整 `test_loop.py`。
+4. 运行 Planner 专项测试或标准 unittest discovery。
 
 Worker 无法领取任务：
 
@@ -133,9 +133,15 @@ Dashboard 异常：
 4. Client 的运维配置走 `client/service/operations.py`，与任务 SQLite 分离。
 5. Secret API 只允许本机同源请求，失败时检查 Host、Origin、CSRF 和一次性 UUID。
 
+Supervisor 异常：
+
+1. `runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
+2. `runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
+3. 外部 `health` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
+
 ## 回归测试
 
-`test_loop.py` 是兼容入口，直接执行时会发现并运行全部 `test_loop_*.py` 控制面回归。
+控制面回归通过标准 unittest discovery 发现各 `test_loop_*.py` 模块。
 控制面测试按职责拆分：
 
 | 文件 | 职责 |
@@ -150,7 +156,7 @@ Dashboard 异常：
 
 ```powershell
 $env:PYTHONUTF8 = '1'
-python control/tests/test_loop.py
+python -m unittest discover -s control/tests -p "test_loop_*.py"
 python control/tests/test_dashboard_server.py
 python control/tests/test_agent_runtime.py
 python control/tests/test_deepseek_provider.py

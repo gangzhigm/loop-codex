@@ -24,7 +24,6 @@ from loop_agent.configuration import (
 from loop_agent.constants import (
     ARCHIVE_SCHEMA_USER_VERSION,
     DIAGNOSTIC_SCHEMA_USER_VERSION,
-    LEGACY_PROFILE_TO_CAPABILITY,
     LEGACY_SCHEMA_USER_VERSION,
     LOCK_MODES,
     PREFLIGHT_SCHEMA_USER_VERSION,
@@ -34,6 +33,7 @@ from loop_agent.constants import (
     SCHEMA_USER_VERSION,
     SCHEMA_VERSION,
 )
+from loop_agent.database.compatibility import LEGACY_PROFILE_TO_CAPABILITY
 from loop_agent.database.sql import (
     EXECUTIONS_TABLE_SQL,
     PREFLIGHT_EXECUTIONS_TABLE_SQL,
@@ -457,7 +457,10 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
         for row in task_rows:
             legacy_profile = row.get("execution_profile", "standard")
             legacy_environment = row.get("runtime_environment", "codex_automation")
-            runtime_environment, provider_id = normalize_execution_target(legacy_environment)
+            if legacy_environment == "deepseek":
+                runtime_environment, provider_id = "self_hosted_agent", "deepseek"
+            else:
+                runtime_environment, provider_id = normalize_execution_target(legacy_environment)
             normalized_tasks[row["id"]] = {
                 "capability_level": LEGACY_PROFILE_TO_CAPABILITY[legacy_profile],
                 "runtime_environment": runtime_environment,
@@ -618,5 +621,3 @@ def commit(database: sqlite3.Connection) -> None:
 def rollback(database: sqlite3.Connection) -> None:
     if database.in_transaction:
         database.execute("ROLLBACK")
-
-

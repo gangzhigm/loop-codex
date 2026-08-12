@@ -12,6 +12,7 @@ from __future__ import annotations
 # 计划任务调用 health；由 health 恢复的常驻主进程调用 serve。
 # 本文件只组织 Supervisor 命令边界，任务状态写入仍只能经过 control/loopctl.py。
 import argparse
+import os
 import signal
 import subprocess
 import sys
@@ -36,7 +37,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 # 统一复用控制面的配置加载、数据库连接和上海时区时间函数。
 from loopdb import CONFIG_PATH, DEFAULT_DB, connect, load_initialization_config, now_shanghai
 
-# 同时兼容 ``python -m supervisor.main`` 和 ``python supervisor/main.py`` 两种入口。
+# 根据当前启动方式导入同一目录的健康模块和项目根目录的 Dashboard 模块。
 if __package__:
     from . import health_run
     from client import dashboard_server
@@ -313,18 +314,31 @@ def serve_supervisor(args: argparse.Namespace) -> None:
     config = load_initialization_config(config_path)
     shutdown_event = threading.Event()
     dashboard = DashboardThread(command_arguments(args))
+    pid = os.getpid()
+    health_run.RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(
+            health_run.PID_PATH,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+        )
+    except FileExistsError:
+        raise SystemExit(
+            "Supervisor PID 文件已存在；请通过 health 命令检查或恢复现有主进程"
+        ) from None
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write(str(pid))
 
     def stop(signum: int, frame: object) -> None:
         # 信号处理器只设置事件，实际资源清理由主循环 finally 完成。
         del signum, frame
         shutdown_event.set()
 
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-    dashboard.start()
-    print(f"{now_shanghai()} supervisor monitoring started", flush=True)
-
     try:
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+        dashboard.start()
+        print(f"{now_shanghai()} supervisor monitoring started", flush=True)
+
         while not shutdown_event.is_set():
             # Dashboard 线程意外退出时，在下一轮监控开始前立即重新拉起。
             if not dashboard.is_running():
@@ -337,11 +351,20 @@ def serve_supervisor(args: argparse.Namespace) -> None:
                 dashboard_error=dashboard.last_error,
             )
             health_run.record_monitor_state(monitors)
+            health_run.write_supervisor_heartbeat(pid)
 
             # 使用事件等待，使终止信号可以提前唤醒主循环，而不是固定休眠。
             shutdown_event.wait(args.monitor_interval_seconds)
     finally:
         dashboard.stop()
+        if (
+            health_run.PID_PATH.exists()
+            and health_run.PID_PATH.read_text(encoding="utf-8").strip() == str(pid)
+        ):
+            health_run.PID_PATH.unlink()
+        heartbeat = health_run.read_supervisor_heartbeat()
+        if heartbeat is not None and heartbeat["pid"] == pid:
+            health_run.HEARTBEAT_PATH.unlink(missing_ok=True)
 
 
 def main(argv: Sequence[str] | None = None) -> None:

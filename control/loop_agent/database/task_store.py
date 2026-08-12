@@ -19,7 +19,6 @@ import sqlite3
 from typing import Any, Iterable
 
 from loop_agent.configuration import (
-    legacy_profile_for,
     load_initialization_config,
     normalize_execution_target,
     resolve_execution_profile,
@@ -27,17 +26,12 @@ from loop_agent.configuration import (
 from loop_agent.constants import (
     CAPABILITY_LEVELS,
     EXECUTION_POLICIES,
-    EXECUTION_PROFILES,
-    LEGACY_PROFILE_TO_CAPABILITY,
     LOCK_MODES,
     PREFLIGHT_STATUSES,
     PRIORITIES,
+    SCHEMA_USER_VERSION,
 )
-from loop_agent.database.compatibility import (
-    uses_capability_schema,
-    uses_preflight_schema,
-    uses_result_diagnostic_schema,
-)
+from loop_agent.database.compatibility import LEGACY_PROFILE_TO_CAPABILITY
 from loop_agent.errors import LoopError
 from loop_agent.serialization import json_dump, json_load, now_shanghai
 from loop_agent.tasks.normalization import (
@@ -206,8 +200,7 @@ def insert_task(
 ) -> None:
     """校验并插入一个任务及其全部从属子记录。
 
-    事务由调用方管理。兼容分支允许迁移向旧 Schema 导入数据，当前 Schema 则强制执行
-    Planner 就绪约束。
+    事务由调用方管理。写入只支持当前 Schema，并强制执行 Planner 就绪约束。
     """
     task_id = task.get("id")
     if not isinstance(task_id, str) or not re.fullmatch(
@@ -218,14 +211,17 @@ def insert_task(
         raise LoopError(f"任务 id 已存在: {task_id}")
     status = task.get("status", "PENDING")
     priority = task.get("priority", "medium")
-    execution_profile = task.get("execution_profile")
+    if "execution_profile" in task:
+        raise LoopError("当前任务输入不支持 execution_profile，请使用 capability_level")
     capability_level = task.get("capability_level")
     estimated_capability_level = task.get("estimated_capability_level")
     execution_policy = task.get("execution_policy")
-    preflight_schema = uses_preflight_schema(database)
+    current_schema = int(database.execute("PRAGMA user_version").fetchone()[0])
+    if current_schema != SCHEMA_USER_VERSION:
+        raise LoopError("当前任务写入要求先把数据库迁移到最新 Schema")
     config = load_initialization_config()
     runtime_environment = task.get("runtime_environment")
-    if runtime_environment is None and preflight_schema:
+    if runtime_environment is None:
         runtime_environment = config["planner"]["default_runtime_environment"]
     provider_id = task.get("provider_id")
     valid_statuses = {
@@ -240,25 +236,16 @@ def insert_task(
         "FAILED",
         "CANCELLED",
     }
-    if status not in valid_statuses or (
-        not preflight_schema and status == "NEEDS_REVIEW"
-    ):
+    if status not in valid_statuses:
         raise LoopError(f"任务状态无效: {status}")
     if priority not in PRIORITIES:
         raise LoopError(f"任务优先级无效: {priority}")
-    if execution_profile is not None and execution_profile not in EXECUTION_PROFILES:
-        raise LoopError(f"执行档位无效: {execution_profile}")
     if estimated_capability_level is None:
         estimated_capability_level = capability_level
-    if capability_level is None and execution_profile is not None:
-        capability_level = LEGACY_PROFILE_TO_CAPABILITY[execution_profile]
     if (
-        preflight_schema
-        and status not in {"DRAFT", "NEEDS_REVIEW"}
+        status not in {"DRAFT", "NEEDS_REVIEW"}
         and capability_level is None
     ):
-        capability_level = "L2"
-    if not preflight_schema and capability_level is None:
         capability_level = "L2"
     if estimated_capability_level is None:
         estimated_capability_level = capability_level
@@ -272,20 +259,9 @@ def insert_task(
     if capability_level is not None and capability_level not in CAPABILITY_LEVELS:
         raise LoopError(f"任务能力等级无效: {capability_level}")
     if execution_policy is None:
-        execution_policy = (
-            "manual" if execution_profile == "exceptional" else "automatic"
-        )
+        execution_policy = "automatic"
     if execution_policy not in EXECUTION_POLICIES:
         raise LoopError(f"执行策略无效: {execution_policy}")
-    comparison_level = capability_level or estimated_capability_level
-    if execution_profile is not None and (
-        comparison_level is None
-        or legacy_profile_for(comparison_level, execution_policy)
-        != execution_profile
-    ):
-        raise LoopError(
-            "旧 execution_profile 与 capability_level/execution_policy 不一致"
-        )
     runtime_environment, provider_id = normalize_execution_target(
         runtime_environment, provider_id
     )
@@ -321,180 +297,99 @@ def insert_task(
         human.get("response"),
         int(task.get("row_version", 1)),
     )
-    if preflight_schema:
-        if status == "DRAFT":
-            preflight_status = task.get("preflight_status", "UNINSPECTED")
-        elif status == "NEEDS_REVIEW":
-            preflight_status = task.get("preflight_status", "FAILED")
-        else:
-            preflight_status = task.get("preflight_status", "READY")
-        if preflight_status not in PREFLIGHT_STATUSES:
-            raise LoopError(f"preflight_status 无效: {preflight_status}")
-        if status == "DRAFT" and preflight_status not in {
-            "UNINSPECTED",
-            "INSPECTING",
-        }:
-            raise LoopError("DRAFT 只能处于 UNINSPECTED 或 INSPECTING")
-        if status == "NEEDS_REVIEW" and preflight_status != "FAILED":
-            raise LoopError("NEEDS_REVIEW 必须处于 FAILED preflight")
-        if status not in {"DRAFT", "NEEDS_REVIEW"} and preflight_status != "READY":
-            raise LoopError(f"{status} 任务必须处于 READY preflight")
-        scope_input = normalize_string_list(task.get("scope") or [], "scope")
-        scope_hint = normalize_string_list(
-            task.get("scope_hint", scope_input), "scope_hint"
-        )
-        exact_scopes = scope_input if preflight_status == "READY" else []
-        technical_acceptance = normalize_string_list(
-            task.get("technical_acceptance")
-            or (
-                (
-                    task.get("acceptance")
-                    or ["既有任务按兼容契约进入 READY。"]
-                )
-                if preflight_status == "READY"
-                else []
-            ),
-            "technical_acceptance",
-        )
-        evidence = normalize_string_list(
-            task.get("preflight_evidence")
-            or (
-                ["任务由受控导入路径按 READY 建立。"]
-                if preflight_status == "READY"
-                else []
-            ),
-            "preflight_evidence",
-        )
-        lock_mode = task.get(
-            "lock_mode", "project" if preflight_status == "READY" else None
-        )
-        if lock_mode is not None and lock_mode not in LOCK_MODES:
-            raise LoopError(f"lock_mode 无效: {lock_mode}")
-        split_suggestions = normalize_split_suggestions(
-            task.get("split_suggestions")
-        )
-        if preflight_status == "READY":
-            if capability_level is None or not exact_scopes or lock_mode is None:
-                raise LoopError(
-                    "READY 任务必须具备最终 capability_level、scope 和 lock_mode"
-                )
-            if not technical_acceptance or not evidence:
-                raise LoopError("READY 任务必须具备技术验收补充和检查证据")
-            if split_suggestions:
-                raise LoopError("READY 任务不得保留拆分建议")
-        elif status in {"DRAFT", "NEEDS_REVIEW"}:
-            capability_level = None
-            lock_mode = None
-        columns = (
-            "id, title, description, status, priority, estimated_capability_level, capability_level, "
-            "runtime_environment, provider_id, execution_policy, preflight_status, preflight_execution_id, "
-            "preflight_started_at, preflight_completed_at, preflight_failure, scope_hint_json, lock_mode, "
-            "split_suggestions_json, assigned_agent, created_at, started_at, updated_at, heartbeat_at, "
-            "completed_at, archived_at, attempt, progress_percent, progress_summary, progress_next_step, "
-            "result_summary, result_error, result_diagnostic_json, human_required, human_question, "
-            "human_options_json, human_requested_at, human_responded_at, human_response, row_version"
-        )
-        values = (
-            task_id,
-            str(task.get("title") or task_id),
-            str(task.get("description") or ""),
-            status,
-            priority,
-            estimated_capability_level,
-            capability_level,
-            runtime_environment,
-            provider_id,
-            execution_policy,
-            preflight_status,
-            task.get("preflight_execution_id"),
-            task.get("preflight_started_at"),
-            task.get("preflight_completed_at"),
-            task.get("preflight_failure"),
-            json_dump(scope_hint),
-            lock_mode,
-            json_dump(split_suggestions),
-            *common_tail[:13],
-            diagnostic_json,
-            *common_tail[13:],
-        )
-        placeholders = ", ".join("?" for _ in values)
-        database.execute(
-            f"INSERT INTO tasks({columns}) VALUES({placeholders})", values
-        )
-    elif uses_capability_schema(database):
-        if capability_level is None:
-            raise LoopError("当前 Schema 的任务能力等级不能为空")
-        columns = (
-            "id, title, description, status, priority, capability_level, runtime_environment, provider_id, "
-            "execution_policy, assigned_agent, created_at, started_at, updated_at, heartbeat_at, "
-            "completed_at, archived_at, attempt, progress_percent, progress_summary, progress_next_step, "
-            "result_summary, result_error"
-        )
-        values = (
-            task_id,
-            str(task.get("title") or task_id),
-            str(task.get("description") or ""),
-            status,
-            priority,
-            capability_level,
-            runtime_environment,
-            provider_id,
-            execution_policy,
-            *common_tail[:13],
-        )
-        if uses_result_diagnostic_schema(database):
-            columns += ", result_diagnostic_json"
-            values += (diagnostic_json,)
-        columns += (
-            ", human_required, human_question, human_options_json, human_requested_at, "
-            "human_responded_at, human_response, row_version"
-        )
-        values += common_tail[13:]
-        placeholders = ", ".join("?" for _ in values)
-        database.execute(
-            f"INSERT INTO tasks({columns}) VALUES({placeholders})", values
-        )
+    if status == "DRAFT":
+        preflight_status = task.get("preflight_status", "UNINSPECTED")
+    elif status == "NEEDS_REVIEW":
+        preflight_status = task.get("preflight_status", "FAILED")
     else:
-        if execution_policy == "manual" and capability_level != "L5":
+        preflight_status = task.get("preflight_status", "READY")
+    if preflight_status not in PREFLIGHT_STATUSES:
+        raise LoopError(f"preflight_status 无效: {preflight_status}")
+    if status == "DRAFT" and preflight_status not in {
+        "UNINSPECTED",
+        "INSPECTING",
+    }:
+        raise LoopError("DRAFT 只能处于 UNINSPECTED 或 INSPECTING")
+    if status == "NEEDS_REVIEW" and preflight_status != "FAILED":
+        raise LoopError("NEEDS_REVIEW 必须处于 FAILED preflight")
+    if status not in {"DRAFT", "NEEDS_REVIEW"} and preflight_status != "READY":
+        raise LoopError(f"{status} 任务必须处于 READY preflight")
+    scope_input = normalize_string_list(task.get("scope") or [], "scope")
+    scope_hint = normalize_string_list(
+        task.get("scope_hint", scope_input), "scope_hint"
+    )
+    exact_scopes = scope_input if preflight_status == "READY" else []
+    technical_acceptance = normalize_string_list(
+        task.get("technical_acceptance")
+        or (task.get("acceptance") if preflight_status == "READY" else [])
+        or [],
+        "technical_acceptance",
+    )
+    evidence = normalize_string_list(
+        task.get("preflight_evidence")
+        or (["任务由当前受控写入路径建立。"] if preflight_status == "READY" else []),
+        "preflight_evidence",
+    )
+    lock_mode = task.get(
+        "lock_mode", "project" if preflight_status == "READY" else None
+    )
+    if lock_mode is not None and lock_mode not in LOCK_MODES:
+        raise LoopError(f"lock_mode 无效: {lock_mode}")
+    split_suggestions = normalize_split_suggestions(
+        task.get("split_suggestions")
+    )
+    if preflight_status == "READY":
+        if capability_level is None or not exact_scopes or lock_mode is None:
             raise LoopError(
-                "Schema 3.3.0 兼容层无法表示 L1-L4 manual execution_policy"
+                "READY 任务必须具备最终 capability_level、scope 和 lock_mode"
             )
-        if runtime_environment == "self_hosted_agent":
-            if provider_id != "deepseek":
-                raise LoopError(
-                    "Schema 3.3.0 兼容层只支持 self_hosted_agent/deepseek"
-                )
-            legacy_environment = "deepseek"
-        else:
-            legacy_environment = runtime_environment
-        legacy_profile = legacy_profile_for(capability_level, execution_policy)
-        database.execute(
-            """INSERT INTO tasks(
-              id, title, description, status, priority, execution_profile, runtime_environment, assigned_agent,
-              created_at, started_at, updated_at, heartbeat_at, completed_at, archived_at, attempt,
-              progress_percent, progress_summary, progress_next_step, result_summary, result_error,
-              human_required, human_question, human_options_json, human_requested_at,
-              human_responded_at, human_response, row_version
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task_id,
-                str(task.get("title") or task_id),
-                str(task.get("description") or ""),
-                status,
-                priority,
-                legacy_profile,
-                legacy_environment,
-                *common_tail,
-            ),
-        )
+        if not technical_acceptance or not evidence:
+            raise LoopError("READY 任务必须具备技术验收补充和检查证据")
+        if split_suggestions:
+            raise LoopError("READY 任务不得保留拆分建议")
+    elif status in {"DRAFT", "NEEDS_REVIEW"}:
+        capability_level = None
+        lock_mode = None
+    columns = (
+        "id, title, description, status, priority, estimated_capability_level, capability_level, "
+        "runtime_environment, provider_id, execution_policy, preflight_status, preflight_execution_id, "
+        "preflight_started_at, preflight_completed_at, preflight_failure, scope_hint_json, lock_mode, "
+        "split_suggestions_json, assigned_agent, created_at, started_at, updated_at, heartbeat_at, "
+        "completed_at, archived_at, attempt, progress_percent, progress_summary, progress_next_step, "
+        "result_summary, result_error, result_diagnostic_json, human_required, human_question, "
+        "human_options_json, human_requested_at, human_responded_at, human_response, row_version"
+    )
+    values = (
+        task_id,
+        str(task.get("title") or task_id),
+        str(task.get("description") or ""),
+        status,
+        priority,
+        estimated_capability_level,
+        capability_level,
+        runtime_environment,
+        provider_id,
+        execution_policy,
+        preflight_status,
+        task.get("preflight_execution_id"),
+        task.get("preflight_started_at"),
+        task.get("preflight_completed_at"),
+        task.get("preflight_failure"),
+        json_dump(scope_hint),
+        lock_mode,
+        json_dump(split_suggestions),
+        *common_tail[:13],
+        diagnostic_json,
+        *common_tail[13:],
+    )
+    placeholders = ", ".join("?" for _ in values)
+    database.execute(
+        f"INSERT INTO tasks({columns}) VALUES({placeholders})", values
+    )
 
     set_task_dependencies(database, task_id, task.get("depends_on") or [])
-    scopes_to_store = (
-        exact_scopes
-        if preflight_schema
-        else normalize_string_list(task.get("scope") or [], "scope")
-    )
-    stored_lock_mode = lock_mode if preflight_schema else "project"
+    scopes_to_store = exact_scopes
+    stored_lock_mode = lock_mode
     normalized_scopes = [
         normalize_scope(scope, stored_lock_mode, project_paths)
         for scope in scopes_to_store
@@ -513,16 +408,15 @@ def insert_task(
     replace_ordered_text(
         database, "task_acceptance", task_id, task.get("acceptance") or []
     )
-    if preflight_schema:
-        replace_ordered_text(
-            database,
-            "task_technical_acceptance",
-            task_id,
-            technical_acceptance,
-        )
-        replace_ordered_text(
-            database, "task_preflight_evidence", task_id, evidence
-        )
+    replace_ordered_text(
+        database,
+        "task_technical_acceptance",
+        task_id,
+        technical_acceptance,
+    )
+    replace_ordered_text(
+        database, "task_preflight_evidence", task_id, evidence
+    )
     replace_ordered_text(
         database,
         "task_completed_items",
@@ -623,11 +517,6 @@ def task_dict(
         execution_policy = row["execution_policy"]
         provider_id = row["provider_id"]
         runtime_environment = row["runtime_environment"]
-        execution_profile = (
-            legacy_profile_for(capability_level, execution_policy)
-            if capability_level is not None
-            else None
-        )
     else:
         execution_profile = row["execution_profile"]
         capability_level = LEGACY_PROFILE_TO_CAPABILITY[execution_profile]
@@ -744,7 +633,6 @@ def task_dict(
         "execution_policy": execution_policy,
         "provider_id": provider_id,
         "runtime_environment": runtime_environment,
-        "execution_profile": execution_profile,
         "assigned_agent": row["assigned_agent"],
         "created_at": row["created_at"],
         "started_at": row["started_at"],

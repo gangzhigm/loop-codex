@@ -35,8 +35,8 @@ from loopdb import (
     CLAIM_RUNTIME_ENVIRONMENTS,
     CONFIG_PATH,
     DEFAULT_DB,
-    EXECUTION_PROFILES,
     LoopError,
+    SCHEMA_USER_VERSION,
     connect,
     state_payload,
     validate_database,
@@ -48,26 +48,12 @@ repository_path = str(BASE_DIR)
 if repository_path not in sys.path:
     sys.path.append(repository_path)
 
-# 控制面通用工具：JSON/stdin 读取、统一输出、UTF-8 完整性和乐观并发检查。
-# 这些名字继续从 loopctl 导出，是为了兼容已有测试和人工诊断脚本。
-from loop_agent.control.io import (
-    output,
-    read_json,
-    read_json_source,
-    read_preflight_report,
-    require_expected_row_version,
-    validate_preflight_text_integrity,
-)
+# loopctl 自身只需要统一 JSON 输出；各角色直接导入其余输入与校验工具。
+from loop_agent.control.io import output
 
-# 不属于单一角色的控制能力：旧数据迁移、失联恢复和依赖队列兼容。
-from loop_agent.control.migration import command_migrate, command_migrate_legacy
-from loop_agent.control.recovery import (
-    command_recover,
-    recovery_required_records,
-    stalled_executions,
-    transition_recovery_states,
-)
-from loop_agent.control.queue import dependencies_ready, requeue_resolved_conflicts
+# 不属于单一角色的控制能力：SQLite Schema 迁移和失联恢复。
+from loop_agent.control.migration import command_migrate
+from loop_agent.control.recovery import command_recover
 
 # Planner 子命令只处理独立静态预检 execution，不占用 Worker execution 容量。
 from planner.control import (
@@ -80,14 +66,10 @@ from planner.control import (
 
 # Worker 子命令负责原子领取、租约心跳、动态扩锁和最终回写。
 from worker.control import (
-    claim_target,
     command_claim,
     command_extend_scope,
     command_finish,
     command_heartbeat,
-    describe_conflicting_task,
-    scope_lock_credential,
-    task_scopes_and_conflicts,
 )
 
 # Operator 位于仓库根目录 ``operator/``，该目录名与 Python 标准库 operator 冲突。
@@ -146,20 +128,7 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
 
     # 一、迁移与只读检查。
-    # migrate-legacy 处理旧 JSON 导入；migrate 只升级已有 SQLite Schema。
-    # 两者都不是空环境初始化，因此 legacy 导入要求显式输入路径和备份位置。
-    legacy_migrate = commands.add_parser(
-        "migrate-legacy",
-        help="将旧 TASKS.json 和 INBOX.json 导入 SQLite；不是空系统初始化入口",
-    )
-    legacy_migrate.add_argument("--tasks", required=True, help="旧 TASKS.json 的 UTF-8 路径")
-    legacy_migrate.add_argument("--inbox", required=True, help="旧 INBOX.json 的 UTF-8 路径")
-    legacy_migrate.add_argument("--registry", default=str(BASE_DIR.parent / "根目录清单.md"))
-    legacy_migrate.add_argument("--config", default=str(CONFIG_PATH))
-    legacy_migrate.add_argument("--backup-dir", default=str(BASE_DIR / "backups"))
-    legacy_migrate.add_argument("--force", action="store_true")
-    legacy_migrate.set_defaults(handler=command_migrate_legacy)
-
+    # migrate 只升级已有 SQLite Schema，并保留数据库中的历史任务数据。
     migrate = commands.add_parser("migrate")
     migrate.set_defaults(handler=command_migrate)
 
@@ -200,12 +169,9 @@ def parser() -> argparse.ArgumentParser:
         preflight_finish.set_defaults(handler=handler)
 
     # 三、Worker execution 协议。
-    # --profile 仅用于旧调用兼容；新入口应显式传 --capability-level。
     claim = commands.add_parser("claim")
     claim.add_argument("execution_id")
-    claim_level = claim.add_mutually_exclusive_group(required=True)
-    claim_level.add_argument("--profile", choices=EXECUTION_PROFILES)
-    claim_level.add_argument("--capability-level", choices=CAPABILITY_LEVELS)
+    claim.add_argument("--capability-level", required=True, choices=CAPABILITY_LEVELS)
     claim.add_argument("--runtime-environment", required=True, choices=CLAIM_RUNTIME_ENVIRONMENTS)
     claim.add_argument("--provider-id")
     claim.add_argument("--execution-policy", choices=("automatic", "manual"))
@@ -258,8 +224,7 @@ def parser() -> argparse.ArgumentParser:
     resolve_human.add_argument("--expected-row-version", type=int)
     resolve_human.set_defaults(handler=command_resolve_human)
 
-    # 归档和取消归档保留原终态。unarchive 不要求 row_version 是为了兼容既有人工入口；
-    # 真正的状态与终态限制仍由 Operator handler 校验。
+    # 归档和取消归档都要求当前 row_version，避免覆盖较新的人工操作。
     archive = commands.add_parser("archive")
     archive.add_argument("task_id")
     archive.add_argument("--reason")
@@ -268,6 +233,7 @@ def parser() -> argparse.ArgumentParser:
     unarchive = commands.add_parser("unarchive")
     unarchive.add_argument("task_id")
     unarchive.add_argument("--reason")
+    unarchive.add_argument("--expected-row-version", type=int, required=True)
     unarchive.set_defaults(handler=command_unarchive)
 
     # enqueue/update 的任务定义通过 UTF-8 JSON 文件传入。
@@ -295,9 +261,20 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """解析一次命令并执行一次 handler；loopctl 本身不是常驻调度循环。"""
+    """解析一次命令并执行 handler；除迁移和只读检查外都要求当前 Schema。"""
     args = parser().parse_args()
     try:
+        if args.command not in {"migrate", "validate", "state"}:
+            database = connect(args.db)
+            try:
+                current = int(database.execute("PRAGMA user_version").fetchone()[0])
+            finally:
+                database.close()
+            if current != SCHEMA_USER_VERSION:
+                raise LoopError(
+                    f"数据库 Schema 不是当前版本: user_version={current}；"
+                    "请先运行 loopctl.py migrate"
+                )
         args.handler(args)
     except (LoopError, sqlite3.Error, OSError, ValueError) as error:
         # 这里只公开经过约束的业务、SQLite、文件和输入错误。

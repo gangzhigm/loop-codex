@@ -1,7 +1,7 @@
-"""Self-hosted 单任务 Agent Runtime 的稳定入口与兼容导出层。
+"""Self-hosted 单任务 Agent Runtime 的启动入口。
 
-真正实现已拆到 ``loop_agent.runtime``，以便按安全边界逐层排查；旧集成仍可从本文件
-导入原有公开名称。目录职责如下：
+真正实现位于 ``loop_agent.runtime``，本文件只负责解析启动参数、装配 Provider 和运行
+单个 Agent execution。目录职责如下：
 
 * ``contracts``：Provider 协议、敏感名称模式和高风险动作清单；
 * ``core``：运行设置、路由快照、异常、安全日志与子进程环境；
@@ -17,15 +17,13 @@
 
 from __future__ import annotations
 
-# 中文排查：这是 Self-hosted Agent 的稳定入口和兼容导出层，具体工具循环位于 loop_agent/runtime。
+# 中文排查：这是 Self-hosted Agent 的启动入口，具体工具循环位于 loop_agent/runtime。
 # 启动失败先检查运行环境、Provider 工厂签名和 SecretStore；执行失败再进入 runtime/agent.py。
-# 本文件保留部分导出供测试和外部调用，移动名称前必须先检索所有兼容引用。
 
 import argparse
 import importlib
 import inspect
 import json
-import subprocess  # 兼容旧诊断和测试：它们会从本模块替换 subprocess.run。
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,51 +35,9 @@ if str(CONTROL_ROOT) not in sys.path:
     sys.path.insert(0, str(CONTROL_ROOT))
 
 from loop_agent.runtime.agent import SingleTaskAgent
-from loop_agent.runtime.contracts import (
-    FINAL_RESULT_SCHEMA,
-    FINAL_STATUSES,
-    HIGH_RISK_ACTIONS,
-    SENSITIVE_COMPONENT,
-    SENSITIVE_ENVIRONMENT_NAME,
-    SHELL_META,
-)
-from loop_agent.runtime.controller import (
-    BASE_DIR,
-    LOOPCTL,
-    HeartbeatGuard,
-    SubprocessLoopController,
-)
-from loop_agent.runtime.core import (
-    AgentAttemptTimeout,
-    ApprovalRequired,
-    ExecutionProfile,
-    ModelProvider,
-    ModelRequestTimeout,
-    OwnedWorkStillRunning,
-    RuntimeSettings,
-    SafeLogger,
-    ToolRejected,
-    safe_subprocess_environment,
-)
-from loop_agent.runtime.diagnostics import (
-    AgentRuntimeError,
-    DIAGNOSTIC_CATEGORIES,
-    FINAL_SHAPE_FIELD_NAMES,
-    FINAL_SHAPE_PARSE_STATES,
-    FINAL_SHAPE_TYPE_TAGS,
-    TRANSIENT_DIAGNOSTIC_CATEGORIES,
-    FinalShapeDiagnostic,
-    ProviderDiagnostic,
-    TrustedDiagnosticError,
-    final_shape_diagnostic,
-)
-from loop_agent.runtime.protocol import (
-    approved_actions,
-    validate_final_result,
-    validate_model_response,
-    validate_tool_arguments,
-)
-from loop_agent.runtime.sandbox import ScopePolicy, ToolSandbox
+from loop_agent.runtime.controller import SubprocessLoopController
+from loop_agent.runtime.core import ModelProvider, RuntimeSettings
+from loop_agent.runtime.diagnostics import AgentRuntimeError
 from loopdb import (
     CAPABILITY_LEVELS,
     CANONICAL_RUNTIME_ENVIRONMENTS,
@@ -99,7 +55,7 @@ def load_provider(
     """加载 Provider 工厂，并显式注入 SecretStore。
 
     工厂必须接受具名参数 ``config`` 和 ``secret_store``。签名预绑定可在真正调用前
-    拒绝不兼容适配器，避免其绕过密钥边界读取环境凭据，或依赖命令行包装器内部对象。
+    拒绝不符合当前协议的适配器，避免其绕过密钥边界读取环境凭据。
     返回对象还必须实现可调用的 ``complete`` 方法。
     """
     if ":" not in specification:
@@ -120,7 +76,7 @@ def load_provider(
 
 
 def parser() -> argparse.ArgumentParser:
-    """构建保持兼容的单次 Runtime 命令行，并限制合法环境、等级和策略。"""
+    """构建单次 Runtime 命令行，并限制合法环境、等级和策略。"""
     root = argparse.ArgumentParser(
         description="Single-run self-hosted Local Agent Loop runtime"
     )

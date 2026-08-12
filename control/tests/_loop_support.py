@@ -24,7 +24,6 @@ from loopdb import (
     CAPABILITY_LEVELS,
     CANONICAL_RUNTIME_ENVIRONMENTS,
     DEFAULT_DB,
-    EXECUTION_PROFILES,
     RUNTIME_ENVIRONMENTS,
     SCHEMA_PATH,
     SCHEMA_USER_VERSION,
@@ -63,9 +62,10 @@ class LoopTestCase(unittest.TestCase):
         task_id: str,
         project: str,
         priority: str = "medium",
-        execution_profile: str = "standard",
+        capability_level: str = "L2",
         runtime_environment: str = "codex_automation",
         *,
+        provider_id: str | None = None,
         lock_mode: str = "project",
         scope: list[str] | None = None,
     ) -> None:
@@ -78,8 +78,9 @@ class LoopTestCase(unittest.TestCase):
                 "description": "test",
                 "status": "PENDING",
                 "priority": priority,
-                "execution_profile": execution_profile,
+                "capability_level": capability_level,
                 "runtime_environment": runtime_environment,
+                "provider_id": provider_id,
                 "created_at": now_shanghai(),
                 "scope": scope or [f"{project}/file.txt"],
                 "lock_mode": lock_mode,
@@ -114,17 +115,21 @@ class LoopTestCase(unittest.TestCase):
     def claim(
         self,
         execution_id: str,
-        profile: str = "standard",
+        capability_level: str = "L2",
         runtime_environment: str = "codex_automation",
+        provider_id: str | None = None,
     ) -> dict[str, object]:
-        return self.run_ctl(
+        arguments = [
             "claim",
             execution_id,
-            "--profile",
-            profile,
+            "--capability-level",
+            capability_level,
             "--runtime-environment",
             runtime_environment,
-        )
+        ]
+        if provider_id is not None:
+            arguments.extend(["--provider-id", provider_id])
+        return self.run_ctl(*arguments)
 
     def run_ctl_error(
         self,

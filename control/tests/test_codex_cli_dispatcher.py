@@ -115,7 +115,6 @@ class CodexCliDispatcherTests(unittest.TestCase):
         self.assertEqual(len(self.launches), 1)
         command, cwd, timeout = self.launches[0]
         self.assertEqual(command[command.index("--capability-level") + 1], "L3")
-        self.assertNotIn("--profile", command)
         self.assertIn("--config", command)
         self.assertIn("--db", command)
         self.assertEqual(cwd, BASE_DIR)

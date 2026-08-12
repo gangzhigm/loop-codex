@@ -70,14 +70,14 @@
 - `L4`：边界明确的复杂排障、状态逻辑，或一次真实实现失败后的升级。
 - `L5`：跨项目、数据库迁移、并发锁、权限、支付、架构或高风险任务；也可配合 `execution_policy=manual` 用于人工批准的一次性执行。
 - 心跳停滞、租约回收、客户端中断、工具故障和缺少人工信息不属于实现失败，不得据此升级。首次真实实现失败可提高一个等级；连续两次真实实现失败必须先评估拆分。
-- `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED；只有 Planner READY 能重新写最终等级。旧入口兼容别名及其能力等级、执行策略映射只从初始化配置读取。
+- `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED；只有 Planner READY 能重新写最终等级。
 - Planner 与 Worker 的模型、推理参数、轮询周期、入口数量和偏移量只从初始化配置读取。Planner 和 Worker 无任务时都返回 `NO_TASK` 并结束本轮，不自动暂停。真实自动化入口由 Operator 在维护窗口创建或更新并复核，Planner 和 Worker 都不管理自动化状态。
 
 ## 运行环境规则
 
 - `codex_automation`：由 Codex 客户端定时自动化或人工批准的一次性 Codex 执行领取。登记的普通 Codex Worker 仅领取此环境。
 - `codex_cli`：只由 Codex CLI Runner 显式领取；不得通过 Codex 客户端自动化兜底领取。
-- `self_hosted_agent`：只由指定 Provider 的自建 Agent 显式领取；不得通过 Codex 或 CLI 入口兜底领取。旧 `deepseek` 仅是过渡期路由别名，必须显式解析为 `self_hosted_agent/deepseek`。
+- `self_hosted_agent`：只由指定 Provider 的自建 Agent 显式领取；不得通过 Codex 或 CLI 入口兜底领取。使用 DeepSeek 时必须显式设置 `provider_id=deepseek`。
 - 用户没有明确指定运行环境时，默认选择 `codex_automation`，并使用 `config/initialization.json` 中对应的 Codex 客户端配置；用户明确指定 `codex_cli` 或 `self_hosted_agent` 时以用户选择为准，不得擅自改回或让其他入口兜底领取。
 - 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。用户未指定时允许 `enqueue` 使用 `planner.default_runtime_environment`；Operator 必须在结果中说明采用了该默认值。Planner 不得改变已保存的环境。
 - 环境已登记不等于对应 Runner 已可用。创建任务时只保存路由事实；任务必须先完成 Planner 预检。进入 `PENDING/READY` 后再依据可核对的配置或运行状态判断入口是否可用，缺少证据时不得伪称 Runner 已启动。

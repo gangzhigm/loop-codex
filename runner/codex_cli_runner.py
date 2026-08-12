@@ -40,15 +40,11 @@ if str(CONTROL_ROOT) not in sys.path:
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.append(str(REPOSITORY_ROOT))
 
-from runner.agent_runtime import (
-    AgentRuntimeError,
-    ExecutionProfile,
-    HeartbeatGuard,
-    SafeLogger,
-    ScopePolicy,
-    SubprocessLoopController,
-    validate_final_result,
-)
+from loop_agent.runtime.controller import HeartbeatGuard, SubprocessLoopController
+from loop_agent.runtime.core import ExecutionProfile, SafeLogger
+from loop_agent.runtime.diagnostics import AgentRuntimeError
+from loop_agent.runtime.protocol import validate_final_result
+from loop_agent.runtime.sandbox import ScopePolicy
 from loopdb import (
     BASE_DIR,
     CAPABILITY_LEVELS,

@@ -1,51 +1,34 @@
 from __future__ import annotations
 
-# 中文排查：旧 JSON、SQLite Schema 与混合锁迁移回归。
+# 中文排查：SQLite Schema 与混合锁迁移回归。
 # 公共 fixture 位于 _loop_support.py；业务行为断言保留在各职责模块中。
 
 from _loop_support import *  # noqa: F403
 
 
 class LoopMigrationTests(LoopTestCase):
-    def test_legacy_json_import_uses_explicit_migration_command(self) -> None:
-        environment = os.environ.copy()
-        environment["PYTHONUTF8"] = "1"
-        completed = subprocess.run(
-            [sys.executable, str(LOOPCTL), "--help"],
-            cwd=BASE_DIR,
-            text=True,
-            encoding="utf-8",
-            errors="strict",
-            capture_output=True,
-            check=False,
-            timeout=30,
-            env=environment,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("migrate-legacy", completed.stdout)
-        self.assertNotIn("{init,", completed.stdout)
-
     def test_migrate_schema_36_moves_old_draft_to_review_and_keeps_pending_ready(self) -> None:
         legacy_path = Path(self.temporary.name) / "schema-36.sqlite3"
         database = connect(legacy_path)
         database.executescript(self.schema_36())
+        stamp = now_shanghai()
         for task_id, status in (("OLD-DRAFT", "DRAFT"), ("OLD-PENDING", "PENDING")):
-            insert_task(
-                database,
-                {
-                    "id": task_id,
-                    "title": task_id,
-                    "description": "legacy business fact",
-                    "status": status,
-                    "priority": "critical",
-                    "capability_level": "L4",
-                    "runtime_environment": "codex_automation",
-                    "execution_policy": "automatic",
-                    "created_at": now_shanghai(),
-                    "scope": ["local-agent-loop/control/loopdb.py"],
-                    "acceptance": ["legacy acceptance"],
-                },
-                project_paths=["local-agent-loop"],
+            database.execute(
+                "INSERT INTO tasks(id, title, description, status, priority, capability_level, "
+                "runtime_environment, provider_id, execution_policy, created_at, updated_at) "
+                "VALUES(?, ?, 'legacy business fact', ?, 'critical', 'L4', "
+                "'codex_automation', NULL, 'automatic', ?, ?)",
+                (task_id, task_id, status, stamp, stamp),
+            )
+            database.execute(
+                "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) "
+                "VALUES(?, 0, 'local-agent-loop/control/loopdb.py', 'project:local-agent-loop')",
+                (task_id,),
+            )
+            database.execute(
+                "INSERT INTO task_acceptance(task_id, ordinal, text) "
+                "VALUES(?, 0, 'legacy acceptance')",
+                (task_id,),
             )
         database.close()
 
@@ -76,25 +59,17 @@ class LoopMigrationTests(LoopTestCase):
         database = connect(legacy_path)
         database.executescript(self.schema_35())
         stamp = now_shanghai()
-        insert_task(
-            database,
-            {
-                "id": "ACTIVE-35",
-                "title": "active",
-                "status": "RUNNING",
-                "priority": "blocker",
-                "capability_level": "L5",
-                "runtime_environment": "codex_automation",
-                "execution_policy": "automatic",
-                "assigned_agent": "active-35-execution",
-                "created_at": stamp,
-                "started_at": stamp,
-                "updated_at": stamp,
-                "heartbeat_at": stamp,
-                "attempt": 1,
-                "scope": ["local-agent-loop/control/loopctl.py"],
-            },
-            project_paths=["local-agent-loop"],
+        database.execute(
+            "INSERT INTO tasks(id, title, status, priority, capability_level, runtime_environment, "
+            "provider_id, execution_policy, assigned_agent, created_at, started_at, updated_at, "
+            "heartbeat_at, attempt) VALUES('ACTIVE-35', 'active', 'RUNNING', 'blocker', 'L5', "
+            "'codex_automation', NULL, 'automatic', 'active-35-execution', ?, ?, ?, ?, 1)",
+            (stamp, stamp, stamp, stamp),
+        )
+        database.execute(
+            "INSERT INTO task_scopes(task_id, ordinal, scope, scope_key) "
+            "VALUES('ACTIVE-35', 0, 'local-agent-loop/control/loopctl.py', "
+            "'project:local-agent-loop')"
         )
         database.execute(
             """INSERT INTO executions(

@@ -41,7 +41,6 @@ from loopdb import (
     rollback,
     task_dict,
     transaction,
-    uses_preflight_schema,
 )
 
 
@@ -58,8 +57,6 @@ def recover_timed_out_preflights(database: sqlite3.Connection) -> list[str]:
     fenced 且保持 DRAFT/INSPECTING 时，才把任务恢复为 UNINSPECTED 并写历史。调用方
     必须已开启事务，本函数不自行提交。
     """
-    if not uses_preflight_schema(database):
-        return []
     settings = load_initialization_config()["planner"]
     stamp = now_shanghai()
     current = datetime.fromisoformat(stamp)
@@ -155,8 +152,6 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        if not uses_preflight_schema(database):
-            raise LoopError("当前 Schema 不支持 Planner 预检")
         if database.execute(
             "SELECT 1 FROM preflight_executions WHERE execution_id=?", (args.execution_id,)
         ).fetchone() or database.execute(
@@ -530,5 +525,4 @@ def command_preflight_fail(args: argparse.Namespace) -> None:
         raise
     finally:
         database.close()
-
 

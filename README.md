@@ -52,7 +52,7 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | 场景 | 稳定入口 |
 | --- | --- |
 | 任务管理和状态迁移 | `control/loopctl.py` |
-| 数据库公共 API 兼容门面 | `control/loopdb.py` |
+| 数据库公共 API | `control/loopdb.py` |
 | Codex 客户端自动化 | `worker/worker.md` 与受控 `loopctl.py claim/heartbeat/finish` |
 | Codex CLI 周期调度 | `dispatcher/codex_cli_dispatcher.py` |
 | Codex CLI 单任务运行 | `runner/codex_cli_runner.py` |
@@ -78,8 +78,8 @@ py -3 .\control\loopctl.py resolve-human TASK-ID --response "人工答复"
 py -3 .\control\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action requeue
 ```
 
-`cancel` 保留审计历史，不物理删除任务。`migrate` 只升级已有 SQLite Schema；
-`migrate-legacy` 只用于显式导入旧 `TASKS.json` 和 `INBOX.json`。
+`cancel` 保留审计历史，不物理删除任务。`migrate` 只升级已有 SQLite Schema，
+并保留数据库中的任务、执行、锁和审计数据。
 
 ## 回归测试
 
@@ -114,7 +114,7 @@ py -3 .\control\loopctl.py validate
 ## 排障顺序
 
 1. 运行 `py -3 control/loopctl.py validate` 检查任务库和配置一致性。
-2. 查看 `runtime/health-state.json`，必要时运行 Supervisor `health`。
+2. 查看 `runtime/supervisor-heartbeat.json` 和 `runtime/health-state.json`，必要时运行 Supervisor `health`。
 3. 根据失败角色读取对应角色目录中的提示词和 `control/README.md` 的职责导航。
 4. 使用 `loopctl.py state` 或 Dashboard 查看任务、execution、依赖和 scope 阻塞事实。
 

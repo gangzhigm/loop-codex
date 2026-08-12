@@ -383,7 +383,7 @@ class EnvironmentBackend:
 
 
 class PythonKeyringBackend:
-    """仅供显式注入的兼容适配器使用；生产默认后端固定为 Windows Credential Manager。"""
+    """仅供显式测试注入；生产默认后端固定为 Windows Credential Manager。"""
 
     def __init__(self, keyring_module: Any) -> None:
         self.keyring = keyring_module

@@ -1,8 +1,7 @@
-"""Local Agent Loop 数据层的稳定兼容门面。
+"""Local Agent Loop 数据层的公共 API。
 
 这个文件没有自己的 SQL、状态迁移或任务写入逻辑。它只把分散在
-``loop_agent`` 内的公共 API 重新导出，使旧脚本、自动化和测试仍可使用
-``from loopdb import ...``，而不必知道内部模块怎样拆分。
+``loop_agent`` 内的当前数据库、配置和序列化 API 集中导出，供各运行入口使用。
 
 手工排查时按导入分组进入权威实现：
 
@@ -22,10 +21,9 @@
 from __future__ import annotations
 
 # 一、配置与执行路由。
-# legacy_profile_for 只负责旧 profile 兼容；新任务路由由 runtime_environment、
-# provider_id、capability_level 和 execution_policy 共同决定。
+# 新任务路由由 runtime_environment、provider_id、capability_level 和
+# execution_policy 共同决定。
 from loop_agent.configuration import (
-    legacy_profile_for,
     load_initialization_config,
     normalize_execution_target,
     resolve_execution_profile,
@@ -43,11 +41,8 @@ from loop_agent.constants import (
     DEPENDENCY_COMPLETE_STATUSES,
     DIAGNOSTIC_SCHEMA_USER_VERSION,
     EXECUTION_POLICIES,
-    EXECUTION_PROFILES,
     FINAL_EXECUTION_STATUSES,
     FORBIDDEN_SCOPE_ROOTS,
-    LEGACY_PROFILE_TO_CAPABILITY,
-    LEGACY_RUNTIME_ENVIRONMENTS,
     LEGACY_SCHEMA_USER_VERSION,
     LOCK_MODES,
     PREFLIGHT_SCHEMA_USER_VERSION,
@@ -102,7 +97,7 @@ from loop_agent.database.sql import (
 )
 
 # 七、Dashboard 全量状态和派生 revision。
-# state_payload 是只读聚合出口；bump_revision/current_revision 保留兼容调用。
+# state_payload 是只读聚合出口；bump_revision/current_revision 管理派生修订号。
 from loop_agent.database.state import (
     bump_revision,
     current_revision,
@@ -172,7 +167,5 @@ from loop_agent.tasks.scopes import (
 )
 
 
-# 兼容门面的公开 API 就是上面所有不以下划线开头的导入名。
-# 使用动态列表可以避免拆分时维护第二份长名单；因此新增内部辅助名时必须以下划线开头，
-# 否则会被意外暴露为公共 API。排查导出污染时直接打印 loopdb.__all__ 对照本文件。
+# 数据公共 API 是上面所有不以下划线开头的导入名。
 __all__ = [name for name in globals() if not name.startswith("_")]

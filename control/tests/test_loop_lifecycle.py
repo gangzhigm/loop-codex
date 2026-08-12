@@ -103,42 +103,7 @@ class LoopLifecycleTests(LoopTestCase):
             "--summary",
             "done",
         )
-        self.assertIn("刚从 WAITING_HUMAN 误重排", error["message"])
-
-    def test_just_requeued_human_task_can_be_resolved_before_new_claim(self) -> None:
-        self.add_task("REQUEUED-RESOLVE", "project-1")
-        self.claim("exec-requeued-resolve")
-        self.run_ctl(
-            "finish",
-            "exec-requeued-resolve",
-            "REQUEUED-RESOLVE",
-            input_text=json.dumps(
-                {
-                    "status": "WAITING_HUMAN",
-                    "summary": "build complete",
-                    "verification": ["artifact verified"],
-                    "question": "is endpoint approved?",
-                }
-            ),
-        )
-        self.run_ctl("requeue", "REQUEUED-RESOLVE", "--reason", "answer supplied")
-        result = self.run_ctl(
-            "resolve-human",
-            "REQUEUED-RESOLVE",
-            "--response",
-            "endpoint approved",
-            "--summary",
-            "Production build completed and configuration was approved.",
-        )
-        self.assertEqual(result["status"], "SUCCEEDED")
-        database = connect(self.db_path)
-        task = database.execute(
-            "SELECT status, attempt, result_summary FROM tasks WHERE id='REQUEUED-RESOLVE'"
-        ).fetchone()
-        database.close()
-        self.assertEqual(tuple(task), (
-            "SUCCEEDED", 1, "Production build completed and configuration was approved."
-        ))
+        self.assertIn("只有等待人工的任务", error["message"])
 
     def test_archive_and_unarchive_are_idempotent_and_preserve_task_data(self) -> None:
         for status in sorted(ARCHIVABLE_STATUSES):
@@ -177,13 +142,27 @@ class LoopLifecycleTests(LoopTestCase):
             database.execute("SELECT count(*) FROM task_history WHERE task_id=?", (task_id,)).fetchone()[0],
             history_before_repeat,
         )
-        unarchived = self.run_ctl("unarchive", task_id, "--reason", "return to current view")
+        row_version = database.execute(
+            "SELECT row_version FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()[0]
+        database.close()
+        unarchived = self.run_ctl(
+            "unarchive", task_id, "--reason", "return to current view",
+            "--expected-row-version", str(row_version),
+        )
         self.assertEqual(unarchived["outcome"], "UNARCHIVED")
+        database = connect(self.db_path)
         history_after_unarchive = database.execute(
             "SELECT count(*) FROM task_history WHERE task_id=?", (task_id,)
         ).fetchone()[0]
+        row_version = database.execute(
+            "SELECT row_version FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()[0]
         database.close()
-        repeated_unarchive = self.run_ctl("unarchive", task_id, "--reason", "must not duplicate")
+        repeated_unarchive = self.run_ctl(
+            "unarchive", task_id, "--reason", "must not duplicate",
+            "--expected-row-version", str(row_version),
+        )
         self.assertEqual(repeated_unarchive["outcome"], "ALREADY_UNARCHIVED")
 
         database = connect(self.db_path)

@@ -20,7 +20,7 @@ class LoopConfigurationTests(LoopTestCase):
         self.assertEqual(config["dashboard"]["port"], 4178)
         self.assertEqual(config["health"]["failure_threshold"], 3)
         self.assertEqual(config["priority_policy"]["levels"], ["blocker", "critical", "high", "medium", "low"])
-        self.assertEqual(set(config["automations"]["profiles"]), set(EXECUTION_PROFILES))
+        self.assertEqual(set(config["automations"]["capabilities"]), set(CAPABILITY_LEVELS))
         self.assertEqual(set(config["runtime_environments"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
         self.assertEqual(config["automations"]["runtime_environment"], "codex_automation")
         self.assertEqual(config["task_execution"]["global_max_active_executions"], 8)
@@ -164,17 +164,6 @@ class LoopConfigurationTests(LoopTestCase):
         )
         self.assertEqual(version, SCHEMA_USER_VERSION)
 
-    def test_update_profile_is_exposed_by_state(self) -> None:
-        self.add_task("PROFILE-UPDATE", "project-1")
-        patch_path = Path(self.temporary.name) / "profile-patch.json"
-        patch_path.write_text('{"execution_profile":"advanced"}', encoding="utf-8")
-        self.run_ctl("update", "PROFILE-UPDATE", str(patch_path))
-        state = self.run_ctl("state")
-        task = next(item for item in state["tasks"] if item["id"] == "PROFILE-UPDATE")
-        self.assertIsNone(task["execution_profile"])
-        self.assertEqual(task["estimated_capability_level"], "L3")
-        self.assertEqual((task["status"], task["preflight_status"]), ("DRAFT", "UNINSPECTED"))
-
     def test_enqueue_and_update_runtime_environment_are_exposed_by_state(self) -> None:
         task_path = Path(self.temporary.name) / "runtime-task.json"
         task_path.write_text(
@@ -184,7 +173,7 @@ class LoopConfigurationTests(LoopTestCase):
                     "title": "runtime update",
                     "description": "test",
                     "priority": "medium",
-                    "execution_profile": "standard",
+                    "estimated_capability_level": "L2",
                     "runtime_environment": "codex_cli",
                     "scope": ["local-agent-loop/control/loopctl.py"],
                     "acceptance": ["test"],
@@ -195,7 +184,10 @@ class LoopConfigurationTests(LoopTestCase):
         )
         self.run_ctl("enqueue", str(task_path))
         patch_path = Path(self.temporary.name) / "runtime-patch.json"
-        patch_path.write_text('{"runtime_environment":"deepseek"}', encoding="utf-8")
+        patch_path.write_text(
+            '{"runtime_environment":"self_hosted_agent","provider_id":"deepseek"}',
+            encoding="utf-8",
+        )
         self.run_ctl("update", "RUNTIME-UPDATE", str(patch_path))
         state = self.run_ctl("state")
         task = next(item for item in state["tasks"] if item["id"] == "RUNTIME-UPDATE")

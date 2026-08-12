@@ -24,8 +24,6 @@ from loop_agent.control.io import output, read_json, require_expected_row_versio
 from loopdb import (
     ARCHIVABLE_STATUSES,
     CAPABILITY_LEVELS,
-    EXECUTION_PROFILES,
-    LEGACY_PROFILE_TO_CAPABILITY,
     PRIORITIES,
     LoopError,
     bump_revision,
@@ -34,7 +32,6 @@ from loopdb import (
     connect,
     insert_task,
     json_dump,
-    legacy_profile_for,
     normalize_execution_target,
     normalize_string_list,
     now_shanghai,
@@ -45,8 +42,6 @@ from loopdb import (
     set_task_dependencies,
     task_dict,
     transaction,
-    uses_preflight_schema,
-    uses_result_diagnostic_schema,
 )
 
 
@@ -102,10 +97,9 @@ def command_confirm(args: argparse.Namespace) -> None:
 def command_resolve_human(args: argparse.Namespace) -> None:
     """用最终人工答复结束 Worker 留下的最后一个人工阻塞项。
 
-    正常入口是 ``WAITING_HUMAN``；仅当任务刚被误排回 ``PENDING`` 且尚未再次领取
-    时才兼容直接完成。任务不能存在活动 execution 或 scope 锁，并且必须已经保存
-    至少一条 Worker 验证记录。成功后写入人工答复、结果摘要和状态历史，状态变为
-    ``SUCCEEDED``，但仍需后续人工确认或归档。
+    任务必须处于 ``WAITING_HUMAN``，不能存在活动 execution 或 scope 锁，并且必须
+    已保存至少一条 Worker 验证记录。成功后写入人工答复、结果摘要和状态历史，状态
+    变为 ``SUCCEEDED``，但仍需后续人工确认或归档。
     """
     response = str(args.response or "").strip()
     if not response:
@@ -121,7 +115,7 @@ def command_resolve_human(args: argparse.Namespace) -> None:
         require_expected_row_version(args, task["row_version"])
         if task["archived_at"] is not None:
             raise LoopError("已归档任务必须先取消归档")
-        if task["status"] not in {"WAITING_HUMAN", "PENDING"}:
+        if task["status"] != "WAITING_HUMAN":
             raise LoopError("只有等待人工的任务可以由人工答复直接完成")
         if database.execute(
             "SELECT 1 FROM executions WHERE task_id=? AND status='RUNNING'",
@@ -133,23 +127,7 @@ def command_resolve_human(args: argparse.Namespace) -> None:
         ).fetchone():
             raise LoopError("任务仍持有 scope 锁，不能由人工答复直接完成")
 
-        # 这里只兼容一种 PENDING：WAITING_HUMAN 被误操作重新排队，且还没有再次被领取。
-        # 通过检查最新历史记录收窄入口，避免普通待执行任务绕过 Worker 直接完成。
-        if task["status"] == "PENDING":
-            latest_history = database.execute(
-                "SELECT from_status, to_status FROM task_history WHERE task_id=? ORDER BY id DESC LIMIT 1",
-                (args.task_id,),
-            ).fetchone()
-            if not latest_history or tuple(latest_history) != (
-                "WAITING_HUMAN",
-                "PENDING",
-            ):
-                raise LoopError(
-                    "PENDING 任务仅可在刚从 WAITING_HUMAN 误重排且尚未再次领取时直接完成"
-                )
-            if not str(args.summary or "").strip():
-                raise LoopError("已重新排队的任务直接完成时必须提供 summary")
-        elif not task["human_required"]:
+        if not task["human_required"]:
             raise LoopError("任务没有待解决的人工问题")
 
         verification_count = database.execute(
@@ -163,16 +141,11 @@ def command_resolve_human(args: argparse.Namespace) -> None:
             raise LoopError("完成摘要不能为空")
         stamp = now_shanghai()
         previous_status = task["status"]
-        diagnostic_reset = (
-            "result_diagnostic_json=NULL, "
-            if uses_result_diagnostic_schema(database)
-            else ""
-        )
         database.execute(
-            f"""
+            """
             UPDATE tasks SET status='SUCCEEDED', updated_at=?, completed_at=?,
               progress_percent=100, progress_summary=?, progress_next_step=NULL,
-              result_summary=?, result_error=NULL, {diagnostic_reset}human_required=0,
+              result_summary=?, result_error=NULL, result_diagnostic_json=NULL, human_required=0,
               human_responded_at=?, human_response=?, row_version=row_version+1
             WHERE id=?
             """,
@@ -269,16 +242,17 @@ def command_unarchive(args: argparse.Namespace) -> None:
     """清除 ``archived_at`` 并保留任务原有工作流状态。
 
     未归档任务会幂等返回；已归档任务只清除归档时间并记录操作历史，不会自动重排、
-    重开或回退任务。注意该兼容命令当前不执行 row_version 乐观锁校验。
+    重开或回退任务。写入前必须核对当前 row_version。
     """
     database = connect(args.db)
     try:
         transaction(database)
         task = database.execute(
-            "SELECT status, archived_at FROM tasks WHERE id=?", (args.task_id,)
+            "SELECT status, archived_at, row_version FROM tasks WHERE id=?", (args.task_id,)
         ).fetchone()
         if not task:
             raise LoopError("任务不存在")
+        require_expected_row_version(args, task["row_version"])
         if task["archived_at"] is None:
             commit(database)
             output(
@@ -337,6 +311,7 @@ def command_enqueue(args: argparse.Namespace) -> None:
             if requested_status != "DRAFT":
                 raise LoopError("新任务必须以 DRAFT/UNINSPECTED 创建并经过 Planner 预检")
             forbidden = {
+                "execution_profile",
                 "preflight_status",
                 "preflight_execution_id",
                 "preflight_started_at",
@@ -401,7 +376,6 @@ def command_update(args: argparse.Namespace) -> None:
         "title",
         "description",
         "priority",
-        "execution_profile",
         "capability_level",
         "estimated_capability_level",
         "runtime_environment",
@@ -418,11 +392,6 @@ def command_update(args: argparse.Namespace) -> None:
         raise LoopError("不支持的更新字段: " + ", ".join(sorted(unknown)))
     if not patch:
         raise LoopError("任务更新不能为空")
-    if "capability_level" in patch and "estimated_capability_level" in patch:
-        if patch["capability_level"] != patch["estimated_capability_level"]:
-            raise LoopError(
-                "capability_level 兼容输入与 estimated_capability_level 不一致"
-            )
     database = connect(args.db)
     try:
         transaction(database)
@@ -433,33 +402,21 @@ def command_update(args: argparse.Namespace) -> None:
             raise LoopError("任务不存在")
         if task["status"] in {"RUNNING", "CONFIRMED", "CANCELLED"}:
             raise LoopError(f"{task['status']} 任务不能修改")
-        if uses_preflight_schema(database) and task["preflight_status"] == "INSPECTING":
+        if task["preflight_status"] == "INSPECTING":
             raise LoopError("Planner 正在预检，任务不能并发修改")
         if task["archived_at"] is not None:
             raise LoopError("已归档任务必须先取消归档")
         require_expected_row_version(args, task["row_version"])
         if "priority" in patch and patch["priority"] not in PRIORITIES:
             raise LoopError(f"任务优先级无效: {patch['priority']}")
-        if not uses_preflight_schema(database):
-            raise LoopError("当前 Schema 不支持 Planner 任务更新契约")
         current_payload = task_dict(database, task)
-        execution_profile = patch.get("execution_profile")
-        if execution_profile is not None and execution_profile not in EXECUTION_PROFILES:
-            raise LoopError(f"执行档位无效: {execution_profile}")
         estimated_capability_level = patch.get(
             "estimated_capability_level",
-            patch.get(
-                "capability_level",
-                LEGACY_PROFILE_TO_CAPABILITY[execution_profile]
-                if execution_profile
-                else current_payload["estimated_capability_level"],
-            ),
+            patch.get("capability_level", current_payload["estimated_capability_level"]),
         )
         execution_policy = patch.get(
             "execution_policy",
-            ("manual" if execution_profile == "exceptional" else "automatic")
-            if execution_profile
-            else current_payload["execution_policy"],
+            current_payload["execution_policy"],
         )
         if (
             estimated_capability_level is not None
@@ -468,12 +425,6 @@ def command_update(args: argparse.Namespace) -> None:
             raise LoopError("estimated_capability_level 无效")
         if execution_policy not in {"automatic", "manual"}:
             raise LoopError("execution_policy 无效")
-        if execution_profile and legacy_profile_for(
-            estimated_capability_level, execution_policy
-        ) != execution_profile:
-            raise LoopError(
-                "旧 execution_profile 与 capability_level/execution_policy 不一致"
-            )
         if execution_policy == "manual" and estimated_capability_level not in {
             None,
             "L5",
@@ -483,11 +434,8 @@ def command_update(args: argparse.Namespace) -> None:
             "runtime_environment", current_payload["runtime_environment"]
         )
         provider_id = patch.get("provider_id", current_payload["provider_id"])
-        if patch.get("runtime_environment") == "deepseek" and "provider_id" not in patch:
-            provider_id = "deepseek"
         if (
             runtime_environment != "self_hosted_agent"
-            and runtime_environment != "deepseek"
             and "provider_id" not in patch
         ):
             provider_id = None
@@ -607,16 +555,11 @@ def command_requeue(args: argparse.Namespace) -> None:
         if row["archived_at"] is not None:
             raise LoopError("已归档任务必须先取消归档")
         require_expected_row_version(args, row["row_version"])
-        if uses_preflight_schema(database) and row["preflight_status"] == "INSPECTING":
+        if row["preflight_status"] == "INSPECTING":
             raise LoopError("Planner 正在预检，任务不能重新排队")
         stamp = now_shanghai()
         database.execute("DELETE FROM task_conflicts WHERE task_id=?", (args.task_id,))
-        diagnostic_reset = (
-            "result_diagnostic_json=NULL, "
-            if uses_result_diagnostic_schema(database)
-            else ""
-        )
-        needs_preflight = uses_preflight_schema(database) and row["status"] in {
+        needs_preflight = row["status"] in {
             "DRAFT",
             "NEEDS_REVIEW",
         }
@@ -627,12 +570,12 @@ def command_requeue(args: argparse.Namespace) -> None:
             )
             replace_ordered_text(database, "task_preflight_evidence", args.task_id, [])
             database.execute(
-                f"UPDATE tasks SET status='DRAFT', preflight_status='UNINSPECTED', "
+                "UPDATE tasks SET status='DRAFT', preflight_status='UNINSPECTED', "
                 "preflight_execution_id=NULL, preflight_started_at=NULL, preflight_completed_at=NULL, "
                 "preflight_failure=NULL, capability_level=NULL, lock_mode=NULL, split_suggestions_json='[]', "
                 "assigned_agent=NULL, heartbeat_at=NULL, completed_at=NULL, updated_at=?, progress_percent=0, "
                 "progress_summary='任务已人工送回 Planner 预检。', progress_next_step='等待 Planner 原子预留。', "
-                f"{diagnostic_reset}human_required=0, human_question=NULL, human_options_json='[]', "
+                "result_diagnostic_json=NULL, human_required=0, human_question=NULL, human_options_json='[]', "
                 "human_requested_at=NULL, human_responded_at=NULL, human_response=NULL, "
                 "row_version=row_version+1 WHERE id=?",
                 (stamp, args.task_id),
@@ -640,12 +583,13 @@ def command_requeue(args: argparse.Namespace) -> None:
             new_status = "DRAFT"
             next_preflight = "UNINSPECTED"
         else:
-            if uses_preflight_schema(database) and row["preflight_status"] != "READY":
+            if row["preflight_status"] != "READY":
                 raise LoopError("任务尚未 READY，不能直接重新排入 Worker 队列")
             database.execute(
-                f"UPDATE tasks SET status='PENDING', assigned_agent=NULL, heartbeat_at=NULL, completed_at=NULL, "
+                "UPDATE tasks SET status='PENDING', assigned_agent=NULL, heartbeat_at=NULL, completed_at=NULL, "
                 "updated_at=?, progress_percent=0, progress_summary='任务已人工重新排队。', "
-                f"progress_next_step='等待并发 Worker 领取。', {diagnostic_reset}human_required=0, human_question=NULL, "
+                "progress_next_step='等待并发 Worker 领取。', result_diagnostic_json=NULL, "
+                "human_required=0, human_question=NULL, "
                 "human_options_json='[]', human_requested_at=NULL, human_responded_at=NULL, human_response=NULL, "
                 "row_version=row_version+1 WHERE id=?",
                 (stamp, args.task_id),
@@ -697,7 +641,7 @@ def command_cancel(args: argparse.Namespace) -> None:
             raise LoopError("任务不存在")
         if row["status"] == "RUNNING":
             raise LoopError("RUNNING 任务不能取消")
-        if uses_preflight_schema(database) and row["preflight_status"] == "INSPECTING":
+        if row["preflight_status"] == "INSPECTING":
             raise LoopError("Planner 正在预检，任务不能取消")
         if row["archived_at"] is not None:
             raise LoopError("已归档任务必须先取消归档")

@@ -35,7 +35,6 @@ from loop_agent.control.recovery import (
 )
 from loopdb import (
     FINAL_EXECUTION_STATUSES,
-    LEGACY_PROFILE_TO_CAPABILITY,
     LOCK_MODES,
     LoopError,
     bump_revision,
@@ -45,7 +44,6 @@ from loopdb import (
     expires_at,
     global_parallel_limit,
     json_dump,
-    legacy_profile_for,
     normalize_execution_target,
     normalize_result_diagnostic,
     normalize_scope,
@@ -58,10 +56,6 @@ from loopdb import (
     scope_conflicts_for_keys,
     task_dict,
     transaction,
-    uses_capability_schema,
-    uses_preflight_schema,
-    uses_recovery_schema,
-    uses_result_diagnostic_schema,
 )
 
 
@@ -93,49 +87,30 @@ def scope_lock_credential(
 ) -> dict[str, Any]:
     """返回 Worker 活动期间必须保留并核对的 scope 锁凭证。
 
-    函数先探测 Schema 列，保证迁移中的旧数据库仍可读取。凭证仅包含 execution/task
-    身份、锁模式、scope_key、状态和租约元数据；它不是授权密钥，脱离数据库中的
-    execution fencing 不能单独获得写权限。
+    凭证仅包含 execution/task 身份、锁模式、scope_key、状态和租约元数据；它不是
+    授权密钥，脱离数据库中的 execution fencing 不能单独获得写权限。
     """
-    task_columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)")}
-    task = (
-        database.execute("SELECT lock_mode FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if "lock_mode" in task_columns
-        else None
-    )
-    lock_columns = {
-        row[1] for row in database.execute("PRAGMA table_info(scope_locks)")
-    }
-    status_projection = "status" if "status" in lock_columns else "'ACTIVE' AS status"
+    task = database.execute(
+        "SELECT lock_mode FROM tasks WHERE id=?", (task_id,)
+    ).fetchone()
     locks = database.execute(
-        f"SELECT scope_key, {status_projection}, acquired_at, lease_expires_at FROM scope_locks "
+        "SELECT scope_key, status, acquired_at, lease_expires_at FROM scope_locks "
         "WHERE execution_id=? AND task_id=? ORDER BY scope_key",
         (execution_id, task_id),
     ).fetchall()
     return {
         "execution_id": execution_id,
         "task_id": task_id,
-        "lock_mode": task["lock_mode"] if task is not None else "project",
+        "lock_mode": task["lock_mode"] if task is not None else None,
         "scope_keys": [row["scope_key"] for row in locks],
         "locks": [dict(row) for row in locks],
     }
 
 
 def claim_target(args: argparse.Namespace) -> dict[str, Any]:
-    """把旧 ``--profile`` 参数规范化为当前环境、Provider、等级和策略维度。
-
-    兼容参数与显式 execution_policy 冲突时立即拒绝；规范化后解析固定的模型、推理
-    程度、单次超时与重试次数快照，确保 execution 启动后不受配置热变更影响。
-    """
-    if args.profile:
-        capability_level = LEGACY_PROFILE_TO_CAPABILITY[args.profile]
-        inferred_policy = "manual" if args.profile == "exceptional" else "automatic"
-        if args.execution_policy and args.execution_policy != inferred_policy:
-            raise LoopError("旧 --profile 与 --execution-policy 不一致")
-        execution_policy = inferred_policy
-    else:
-        capability_level = args.capability_level
-        execution_policy = args.execution_policy or "automatic"
+    """解析当前环境、Provider、能力等级和策略的固定执行快照。"""
+    capability_level = args.capability_level
+    execution_policy = args.execution_policy or "automatic"
     runtime_environment, provider_id = normalize_execution_target(
         args.runtime_environment, args.provider_id
     )
@@ -145,7 +120,6 @@ def claim_target(args: argparse.Namespace) -> dict[str, Any]:
     return {
         **snapshot,
         "execution_policy": execution_policy,
-        "execution_profile": legacy_profile_for(capability_level, execution_policy),
         "requested_runtime_environment": args.runtime_environment,
     }
 
@@ -164,8 +138,6 @@ def command_claim(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        capability_schema = uses_capability_schema(database)
-        preflight_schema = uses_preflight_schema(database)
         if database.execute(
             "SELECT 1 FROM executions WHERE execution_id=?", (args.execution_id,)
         ).fetchone():
@@ -194,7 +166,6 @@ def command_claim(args: argparse.Namespace) -> None:
                 {
                     "outcome": "SLOT_FULL",
                     "limit_scope": "global",
-                    "profile": target["execution_profile"],
                     "capability_level": target["capability_level"],
                     "runtime_environment": target["runtime_environment"],
                     "provider_id": target["provider_id"],
@@ -204,22 +175,10 @@ def command_claim(args: argparse.Namespace) -> None:
                 }
             )
             return
-        if capability_schema:
-            platform_active = database.execute(
-                "SELECT count(*) FROM executions WHERE status='RUNNING' AND runtime_environment=?",
-                (target["runtime_environment"],),
-            ).fetchone()[0]
-        else:
-            legacy_environment = (
-                "deepseek"
-                if target["runtime_environment"] == "self_hosted_agent"
-                else target["runtime_environment"]
-            )
-            platform_active = database.execute(
-                "SELECT count(*) FROM executions e JOIN tasks t ON t.id=e.task_id "
-                "WHERE e.status='RUNNING' AND t.runtime_environment=?",
-                (legacy_environment,),
-            ).fetchone()[0]
+        platform_active = database.execute(
+            "SELECT count(*) FROM executions WHERE status='RUNNING' AND runtime_environment=?",
+            (target["runtime_environment"],),
+        ).fetchone()[0]
         platform_maximum = platform_parallel_limit(target["runtime_environment"])
         if platform_active >= platform_maximum:
             commit(database)
@@ -227,7 +186,6 @@ def command_claim(args: argparse.Namespace) -> None:
                 {
                     "outcome": "SLOT_FULL",
                     "limit_scope": "platform",
-                    "profile": target["execution_profile"],
                     "capability_level": target["capability_level"],
                     "runtime_environment": target["runtime_environment"],
                     "provider_id": target["provider_id"],
@@ -240,58 +198,23 @@ def command_claim(args: argparse.Namespace) -> None:
             )
             return
 
-        # 新 Schema 只允许带完整 Planner 契约的 READY 任务进入 Worker 队列。后两条
-        # 兼容分支仅用于检查或升级旧数据库，不能作为新任务绕过预检的入口。
-        if preflight_schema:
-            candidates = database.execute(
-                "SELECT * FROM tasks WHERE status='PENDING' AND preflight_status='READY' "
-                "AND runtime_environment=? AND provider_id IS ? AND capability_level=? AND execution_policy=? "
-                "AND lock_mode IS NOT NULL "
-                "AND EXISTS (SELECT 1 FROM task_scopes s WHERE s.task_id=tasks.id) "
-                "AND EXISTS (SELECT 1 FROM task_technical_acceptance a WHERE a.task_id=tasks.id) "
-                "AND EXISTS (SELECT 1 FROM task_preflight_evidence e WHERE e.task_id=tasks.id) ORDER BY "
-                "CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
-                "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id",
-                (
-                    target["runtime_environment"],
-                    target["provider_id"],
-                    target["capability_level"],
-                    target["execution_policy"],
-                ),
-            ).fetchall()
-        elif capability_schema:
-            candidates = database.execute(
-                "SELECT * FROM tasks WHERE status='PENDING' AND runtime_environment=? AND provider_id IS ? "
-                "AND capability_level=? AND execution_policy=? ORDER BY "
-                "CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
-                "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id",
-                (
-                    target["runtime_environment"],
-                    target["provider_id"],
-                    target["capability_level"],
-                    target["execution_policy"],
-                ),
-            ).fetchall()
-        else:
-            if target["execution_policy"] == "manual" and target["capability_level"] != "L5":
-                raise LoopError("Schema 3.3.0 兼容层无法表示 L1-L4 manual execution_policy")
-            legacy_environment = (
-                "deepseek"
-                if target["runtime_environment"] == "self_hosted_agent"
-                else target["runtime_environment"]
-            )
-            if (
-                target["runtime_environment"] == "self_hosted_agent"
-                and target["provider_id"] != "deepseek"
-            ):
-                candidates = []
-            else:
-                candidates = database.execute(
-                    "SELECT * FROM tasks WHERE status='PENDING' AND runtime_environment=? AND execution_profile=? "
-                    "ORDER BY CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
-                    "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id",
-                    (legacy_environment, target["execution_profile"]),
-                ).fetchall()
+        # 只有带完整 Planner 契约的 READY 任务可以进入 Worker 队列。
+        candidates = database.execute(
+            "SELECT * FROM tasks WHERE status='PENDING' AND preflight_status='READY' "
+            "AND runtime_environment=? AND provider_id IS ? AND capability_level=? AND execution_policy=? "
+            "AND lock_mode IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM task_scopes s WHERE s.task_id=tasks.id) "
+            "AND EXISTS (SELECT 1 FROM task_technical_acceptance a WHERE a.task_id=tasks.id) "
+            "AND EXISTS (SELECT 1 FROM task_preflight_evidence e WHERE e.task_id=tasks.id) ORDER BY "
+            "CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
+            "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id",
+            (
+                target["runtime_environment"],
+                target["provider_id"],
+                target["capability_level"],
+                target["execution_policy"],
+            ),
+        ).fetchall()
 
         task_row = None
         scopes: list[sqlite3.Row] = []
@@ -318,7 +241,6 @@ def command_claim(args: argparse.Namespace) -> None:
                 output(
                     {
                         "outcome": "CONFLICT",
-                        "profile": target["execution_profile"],
                         "capability_level": target["capability_level"],
                         "runtime_environment": target["runtime_environment"],
                         "provider_id": target["provider_id"],
@@ -341,7 +263,6 @@ def command_claim(args: argparse.Namespace) -> None:
             output(
                 {
                     "outcome": outcome,
-                    "profile": target["execution_profile"],
                     "capability_level": target["capability_level"],
                     "runtime_environment": target["runtime_environment"],
                     "provider_id": target["provider_id"],
@@ -356,35 +277,28 @@ def command_claim(args: argparse.Namespace) -> None:
         # 都不会观察到“任务已运行但尚未持锁”的中间状态。
         lease_seconds = int(execution_setting("task_lease_seconds", 3600))
         expiry = expires_at(lease_seconds)
-        if capability_schema:
-            database.execute(
-                """INSERT INTO executions(
-                  execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at,
-                  runtime_environment, provider_id, capability_level, execution_policy, model, reasoning,
-                  attempt_timeout_seconds, max_retries
-                ) VALUES(?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    args.execution_id,
-                    task_row["id"],
-                    stamp,
-                    stamp,
-                    expiry,
-                    target["runtime_environment"],
-                    target["provider_id"],
-                    target["capability_level"],
-                    target["execution_policy"],
-                    target["model"],
-                    target["reasoning"],
-                    target["attempt_timeout_seconds"],
-                    target["max_retries"],
-                ),
-            )
-        else:
-            database.execute(
-                "INSERT INTO executions(execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at) "
-                "VALUES(?, ?, 'RUNNING', ?, ?, ?)",
-                (args.execution_id, task_row["id"], stamp, stamp, expiry),
-            )
+        database.execute(
+            """INSERT INTO executions(
+              execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at,
+              runtime_environment, provider_id, capability_level, execution_policy, model, reasoning,
+              attempt_timeout_seconds, max_retries
+            ) VALUES(?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                args.execution_id,
+                task_row["id"],
+                stamp,
+                stamp,
+                expiry,
+                target["runtime_environment"],
+                target["provider_id"],
+                target["capability_level"],
+                target["execution_policy"],
+                target["model"],
+                target["reasoning"],
+                target["attempt_timeout_seconds"],
+                target["max_retries"],
+            ),
+        )
         for scope in scopes:
             database.execute(
                 "INSERT INTO scope_locks(scope_key, task_id, execution_id, acquired_at, lease_expires_at) "
@@ -397,15 +311,11 @@ def command_claim(args: argparse.Namespace) -> None:
                     expiry,
                 ),
             )
-        diagnostic_reset = (
-            "result_diagnostic_json=NULL, "
-            if uses_result_diagnostic_schema(database)
-            else ""
-        )
         database.execute(
             f"UPDATE tasks SET status='RUNNING', assigned_agent=?, started_at=?, updated_at=?, heartbeat_at=?, "
             "completed_at=NULL, attempt=attempt+1, progress_summary=?, progress_next_step=?, "
-            f"result_summary=NULL, result_error=NULL, {diagnostic_reset}human_required=0, human_question=NULL, "
+            "result_summary=NULL, result_error=NULL, result_diagnostic_json=NULL, "
+            "human_required=0, human_question=NULL, "
             "human_options_json='[]', human_requested_at=NULL, human_responded_at=NULL, human_response=NULL, "
             "row_version=row_version+1 WHERE id=?",
             (
@@ -434,9 +344,6 @@ def command_claim(args: argparse.Namespace) -> None:
         lock_credential = scope_lock_credential(
             database, args.execution_id, task_row["id"]
         )
-        if target["requested_runtime_environment"] == "deepseek":
-            payload["canonical_runtime_environment"] = payload["runtime_environment"]
-            payload["runtime_environment"] = "deepseek"
         commit(database)
         output(
             {
@@ -445,7 +352,6 @@ def command_claim(args: argparse.Namespace) -> None:
                 "lease_expires_at": expiry,
                 "active": active + 1,
                 "maximum": maximum,
-                "profile": target["execution_profile"],
                 "capability_level": target["capability_level"],
                 "execution_policy": target["execution_policy"],
                 "runtime_environment": target["runtime_environment"],
@@ -488,12 +394,11 @@ def command_heartbeat(args: argparse.Namespace) -> None:
             "UPDATE executions SET heartbeat_at=?, lease_expires_at=? WHERE execution_id=?",
             (stamp, expiry, args.execution_id),
         )
-        lock_update = (
-            "UPDATE scope_locks SET lease_expires_at=? WHERE execution_id=? AND status='ACTIVE'"
-            if uses_recovery_schema(database)
-            else "UPDATE scope_locks SET lease_expires_at=? WHERE execution_id=?"
+        database.execute(
+            "UPDATE scope_locks SET lease_expires_at=? "
+            "WHERE execution_id=? AND status='ACTIVE'",
+            (expiry, args.execution_id),
         )
-        database.execute(lock_update, (expiry, args.execution_id))
         database.execute(
             "UPDATE tasks SET heartbeat_at=?, updated_at=?, row_version=row_version+1 WHERE id=? AND status='RUNNING'",
             (stamp, stamp, args.task_id),
@@ -703,11 +608,6 @@ def command_finish(args: argparse.Namespace) -> None:
             raise LoopError("任务不处于 RUNNING")
         stamp = now_shanghai()
         waiting = status == "WAITING_HUMAN"
-        diagnostic_column = (
-            "result_diagnostic_json=?, "
-            if uses_result_diagnostic_schema(database)
-            else ""
-        )
         values: list[Any] = [
             status,
             stamp,
@@ -718,9 +618,8 @@ def command_finish(args: argparse.Namespace) -> None:
             report.get("next_step", "等待人工答复。") if waiting else None,
             report["summary"] if status == "SUCCEEDED" else None,
             report.get("error") if status == "FAILED" else None,
+            diagnostic_json,
         ]
-        if diagnostic_column:
-            values.append(diagnostic_json)
         values.extend(
             [
                 int(waiting),
@@ -734,7 +633,8 @@ def command_finish(args: argparse.Namespace) -> None:
             f"""
             UPDATE tasks SET status=?, updated_at=?, heartbeat_at=?, completed_at=?,
               progress_percent=?, progress_summary=?, progress_next_step=?,
-              result_summary=?, result_error=?, {diagnostic_column}human_required=?, human_question=?,
+              result_summary=?, result_error=?, result_diagnostic_json=?,
+              human_required=?, human_question=?,
               human_options_json=?, human_requested_at=?, human_responded_at=NULL,
               human_response=NULL, row_version=row_version+1
             WHERE id=?

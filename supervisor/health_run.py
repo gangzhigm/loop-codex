@@ -1,7 +1,7 @@
 """仅支持 Windows 的 Supervisor 单次健康检查与受控恢复程序。
 
-脚本由计划任务周期调用，不常驻轮询。每次运行先取得文件锁，探测 ``/healthz`` 并
-核对端口监听者、PID 文件与实际进程身份；只有健康或拓扑异常时才尝试清理旧实例并
+脚本由计划任务周期调用，不常驻轮询。每次运行先取得文件锁，再核对 Supervisor PID、
+实际进程身份和主循环 heartbeat；主进程缺失或 heartbeat 过期时才尝试清理旧实例并
 启动新的 Supervisor 主进程。检查结果写入有限长度的健康状态文件，写入失败则退化到文本日志。
 
 本程序只管理 Supervisor 主进程（其承载 Dashboard 并运行组件监控），不领取任务、不回收 Worker execution，
@@ -19,10 +19,9 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
-from urllib.request import urlopen
 
 
 # 运行健康检查和后台服务时不生成 __pycache__，避免产生无关运行文件。
@@ -50,12 +49,14 @@ RUNTIME_DIR = BASE_DIR / "runtime"
 HEALTH_LOCK = RUNTIME_DIR / "health-supervisor.lock"
 # 健康快照是 Dashboard 展示服务状态的文件来源。
 HEALTH_STATE = RUNTIME_DIR / "health-state.json"
-# PID 文件用于把监听端口与本项目 Supervisor 进程交叉核对。
-PID_PATH = RUNTIME_DIR / "dashboard-server.pid"
+# PID 文件记录当前 Supervisor 主进程，不借用 Dashboard 线程的运行文件。
+PID_PATH = RUNTIME_DIR / "supervisor.pid"
+# 主循环每完成一轮组件监控就刷新 heartbeat，供外部健康任务判断是否仍在推进。
+HEARTBEAT_PATH = RUNTIME_DIR / "supervisor-heartbeat.json"
 # 健康快照写入失败时，只把诊断信息追加到后备日志。
 FALLBACK_LOG = RUNTIME_DIR / "health-fallback.log"
-# 恢复出的常驻进程将标准输出和错误输出追加到该日志。
-SERVER_LOG = RUNTIME_DIR / "dashboard-server.log"
+# 恢复出的常驻 Supervisor 将标准输出和错误输出追加到该日志。
+SERVER_LOG = RUNTIME_DIR / "supervisor.log"
 
 
 def output(payload: dict[str, Any], exit_code: int = 0) -> None:
@@ -112,6 +113,19 @@ def record_monitor_state(monitors: dict[str, dict[str, Any]]) -> None:
         append_fallback(f"MONITOR_STATE_WRITE_FAILED {type(error).__name__}")
 
 
+def write_supervisor_heartbeat(pid: int) -> dict[str, Any]:
+    """原子记录 Supervisor 主循环最近一次完成监控的时间和进程身份。"""
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    value = {"pid": pid, "checked_at": now_shanghai()}
+    temporary = HEARTBEAT_PATH.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(HEARTBEAT_PATH)
+    return value
+
+
 def acquire_lock() -> None:
     """建立健康检查互斥锁，并清理超过 120 秒的遗留锁。"""
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -136,16 +150,6 @@ def release_lock() -> None:
     except FileNotFoundError:
         # 所有退出路径都会进入 finally，因此容忍锁已被清理。
         pass
-
-
-def health_request(url: str, timeout: float = 3.0) -> dict[str, Any] | None:
-    """请求 healthz 并解析 JSON；网络、系统或格式错误统一返回 ``None``。"""
-    try:
-        with urlopen(url, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except (URLError, OSError, json.JSONDecodeError):
-        # 调用方只关心是否得到可信响应，具体网络异常不进入长期状态。
-        return None
 
 
 def process_alive(pid: int) -> bool:
@@ -217,7 +221,7 @@ def listener_pids(port: int) -> set[int]:
     return result
 
 
-def is_dashboard_process(pid: int) -> bool:
+def is_supervisor_process(pid: int) -> bool:
     """确认 PID 存活且 Windows 命令行确实指向本项目 Supervisor 主入口。"""
     # PID 文件可能过期，先确认系统中仍存在该进程。
     if not process_alive(pid):
@@ -235,23 +239,6 @@ def is_dashboard_process(pid: int) -> bool:
     )
 
 
-def is_recoverable_dashboard_process(pid: int) -> bool:
-    """确认端口进程属于本项目的当前或旧版 Dashboard 实现。"""
-    if is_dashboard_process(pid):
-        return True
-    if not process_alive(pid):
-        return False
-
-    # 升级兼容：恢复流程可以识别并停止旧版直接运行的 Dashboard 入口。
-    command_line = windows_powershell(
-        f'(Get-CimInstance Win32_Process -Filter "ProcessId = {pid}").CommandLine'
-    )
-    legacy_entry = str(
-        BASE_DIR / "control" / "roles" / "supervisor" / "dashboard_server.py"
-    )
-    return legacy_entry.casefold() in command_line.casefold()
-
-
 def recorded_pid() -> int | None:
     """读取 PID 文件；缺失、不可读或非整数内容都视为没有可信记录。"""
     if not PID_PATH.exists():
@@ -263,22 +250,49 @@ def recorded_pid() -> int | None:
         return None
 
 
-def dashboard_topology_is_clean(port: int) -> bool:
-    """确认端口只有一个监听者，且它与 PID 文件及 Dashboard 身份一致。"""
-    listeners = listener_pids(port)
+def read_supervisor_heartbeat() -> dict[str, Any] | None:
+    """读取主循环 heartbeat；文件缺失、损坏或字段非法时返回 ``None``。"""
+    try:
+        value = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            return None
+        return {"pid": int(value["pid"]), "checked_at": str(value["checked_at"])}
+    except (FileNotFoundError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def supervisor_health(
+    heartbeat_timeout_seconds: int,
+    expected_pid: int | None = None,
+) -> tuple[int | None, dict[str, Any] | None]:
+    """核对 PID、进程身份及 heartbeat 新鲜度，返回可信进程和 heartbeat。"""
     pid = recorded_pid()
-    # 必须同时满足单监听者、PID 文件一致和进程身份属于本项目。
-    return len(listeners) == 1 and pid in listeners and all(
-        is_dashboard_process(item) for item in listeners
-    )
+    if pid is None or (expected_pid is not None and pid != expected_pid):
+        return None, None
+    if not is_supervisor_process(pid):
+        return None, None
+    heartbeat = read_supervisor_heartbeat()
+    if heartbeat is None or heartbeat["pid"] != pid:
+        return None, heartbeat
+    try:
+        checked_at = datetime.fromisoformat(heartbeat["checked_at"])
+        current = datetime.fromisoformat(now_shanghai())
+        if checked_at.tzinfo is None or current.tzinfo is None:
+            return None, heartbeat
+    except (TypeError, ValueError):
+        return None, heartbeat
+    age = (current - checked_at).total_seconds()
+    if age < 0 or age > heartbeat_timeout_seconds:
+        return None, heartbeat
+    return pid, heartbeat
 
 
 def stop_previous_process(port: int) -> None:
-    """停止本项目占用端口的旧 Dashboard，并拒绝终止外部进程。"""
-    # PID 文件和监听列表从两个独立角度收集可能需要停止的实例。
+    """停止本项目的旧 Supervisor，并拒绝终止占用 Dashboard 端口的外部进程。"""
+    # Supervisor PID 和监听列表从两个独立角度收集可能需要停止的实例。
     pid = recorded_pid()
     listeners = listener_pids(port)
-    targets = {item for item in listeners if is_recoverable_dashboard_process(item)}
+    targets = {item for item in listeners if is_supervisor_process(item)}
     foreign_listeners = listeners - targets
     if foreign_listeners:
         # 端口存在外部进程时禁止恢复，避免误杀其他应用。
@@ -286,7 +300,7 @@ def stop_previous_process(port: int) -> None:
             "Dashboard 端口被非本项目进程占用: "
             + ", ".join(str(item) for item in sorted(foreign_listeners))
         )
-    if pid is not None and is_recoverable_dashboard_process(pid):
+    if pid is not None and is_supervisor_process(pid):
         targets.add(pid)
 
     # 只向已验证属于本项目的进程发送正常终止信号。
@@ -304,18 +318,20 @@ def stop_previous_process(port: int) -> None:
     remaining = sorted(target for target in targets if process_alive(target))
     if remaining:
         raise RuntimeError(
-            "Dashboard Server 进程未在停止信号后退出: "
+            "Supervisor 主进程未在停止信号后退出: "
             + ", ".join(str(item) for item in remaining)
         )
 
-    # Windows 可能短暂占用 PID 文件，有限重试后再做最终删除。
+    # Windows 可能短暂占用运行文件，有限重试后再做最终删除。
     for _ in range(20):
         try:
             PID_PATH.unlink(missing_ok=True)
+            HEARTBEAT_PATH.unlink(missing_ok=True)
             return
         except PermissionError:
             time.sleep(0.1)
     PID_PATH.unlink(missing_ok=True)
+    HEARTBEAT_PATH.unlink(missing_ok=True)
 
 
 def start_server(database_path: Path, config_path: Path, port: int) -> int:
@@ -368,14 +384,14 @@ def record(status: str, message: str, failures: int, pid: int | None = None) -> 
             0,
             {
                 "at": checked_at,
-                "component": "dashboard-server",
+                "component": "supervisor",
                 "status": status,
                 "message": message,
                 "details": {"pid": pid, "failures": failures},
             },
         )
         value = {
-            "component": "dashboard-server",
+            "component": "supervisor",
             "status": status,
             "pid": pid,
             "checked_at": checked_at,
@@ -405,19 +421,17 @@ def main(argv: list[str] | None = None) -> None:
     acquire_lock()
     try:
         config = load_initialization_config(config_path)
-        host = str(config["dashboard"]["host"])
         port = int(config["dashboard"]["port"])
         threshold = int(config["health"]["failure_threshold"])
-        url = f"http://{host}:{port}/healthz"
-        current = health_request(url)
+        heartbeat_timeout = int(config["health"]["heartbeat_timeout_seconds"])
+        pid, heartbeat = supervisor_health(heartbeat_timeout)
 
-        # HTTP 响应和进程拓扑必须同时可信，才判定整个 Supervisor 健康。
-        if current and current.get("ok") and dashboard_topology_is_clean(port):
-            pid = int(PID_PATH.read_text(encoding="utf-8")) if PID_PATH.exists() else None
+        # 主进程身份和主循环 heartbeat 必须同时可信，才判定 Supervisor 健康。
+        if pid is not None:
             record("HEALTHY", "Supervisor 主进程正常。", 0, pid)
-            output({"outcome": "HEALTHY", "url": url, "health": current, "pid": pid})
+            output({"outcome": "HEALTHY", "pid": pid, "heartbeat": heartbeat})
 
-        # 任何探活或拓扑异常都累计一次失败，并尝试受控恢复。
+        # 进程身份或 heartbeat 异常都累计一次失败，并尝试受控恢复。
         state = read_state()
         failures = int(state.get("consecutive_failures", 0)) + 1
         try:
@@ -430,7 +444,6 @@ def main(argv: list[str] | None = None) -> None:
             output(
                 {
                     "outcome": status,
-                    "url": url,
                     "message": message,
                     "consecutive_failures": failures,
                     "threshold": threshold,
@@ -438,18 +451,27 @@ def main(argv: list[str] | None = None) -> None:
                 2 if status == "NEEDS_ATTENTION" else 1,
             )
 
-        # 新进程最多等待十秒变为可用，每次请求使用一秒超时。
-        recovered = None
-        for _ in range(20):
+        # 新进程最多等待三十秒完成首轮监控并写入属于该 PID 的 heartbeat。
+        recovered_heartbeat = None
+        for _ in range(60):
             time.sleep(0.5)
-            recovered = health_request(url, timeout=1.0)
-            if recovered and recovered.get("ok"):
+            recovered_pid, recovered_heartbeat = supervisor_health(
+                heartbeat_timeout,
+                expected_pid=pid,
+            )
+            if recovered_pid is not None:
                 break
 
         # 恢复成功后失败计数清零，并返回新进程 PID。
-        if recovered and recovered.get("ok"):
+        if recovered_pid is not None:
             record("RESTARTED", "Supervisor 主进程已启动或恢复。", 0, pid)
-            output({"outcome": "RESTARTED", "url": url, "pid": pid, "health": recovered})
+            output(
+                {
+                    "outcome": "RESTARTED",
+                    "pid": pid,
+                    "heartbeat": recovered_heartbeat,
+                }
+            )
 
         # 进程已启动但始终无法通过探活，继续保留连续失败计数。
         status = "NEEDS_ATTENTION" if failures >= threshold else "UNHEALTHY"
@@ -462,7 +484,6 @@ def main(argv: list[str] | None = None) -> None:
         output(
             {
                 "outcome": status,
-                "url": url,
                 "pid": pid,
                 "consecutive_failures": failures,
                 "threshold": threshold,
