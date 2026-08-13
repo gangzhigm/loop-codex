@@ -12,7 +12,7 @@ Planner 做只读预检，Worker 在取得 scope 锁后执行，Dashboard 展示
 ```powershell
 py -3 .\control\loopctl.py validate
 py -3 .\control\loopctl.py state
-py -3 .\supervisor\main.py health
+py -3 .\supervisor\health_run.py
 py -3 .\supervisor\main.py serve
 ```
 

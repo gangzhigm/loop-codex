@@ -1,7 +1,7 @@
 param(
     # 允许计划任务安装器显式传入初始化配置路径。
     [string]$ConfigPath = '',
-    # 其余参数原样透传给 Supervisor health 子命令。
+    # 其余参数原样透传给健康检查程序。
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$SupervisorArguments
 )
@@ -13,7 +13,7 @@ Windows 计划任务调用的 Supervisor 启动器。
 不健康时，Python 健康检查会在后台启动 ``main.py serve``，随后本脚本退出。此脚本不
 注册、启动或修改 Windows 计划任务，也不直接访问 SQLite。
 
-排查计划任务失败时，依次确认 py.exe 可用、main.py 存在、初始化配置路径正确，再查看
+排查计划任务失败时，依次确认 py.exe 可用、health_run.py 存在、初始化配置路径正确，再查看
 Supervisor 输出的 JSON 或运行时日志。退出码原样返回给 Windows 计划任务。
 #>
 
@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 
 # 所有路径都以脚本所在目录为基准，避免受计划任务当前目录影响。
 $loopRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$entry = Join-Path $PSScriptRoot 'main.py'
+$entry = Join-Path $PSScriptRoot 'health_run.py'
 
 # 调用方未覆盖配置时使用项目内的权威初始化配置。
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
@@ -40,7 +40,7 @@ if (-not (Test-Path -LiteralPath $resolvedConfig -PathType Leaf)) {
 
 # 固定使用 Windows Python Launcher 的 Python 3，并禁止生成字节码缓存。
 $pythonLauncher = (Get-Command py.exe -ErrorAction Stop).Source
-$arguments = @('-3', '-B', $entry, 'health', '--config', $resolvedConfig) + $SupervisorArguments
+$arguments = @('-3', '-B', $entry, '--config', $resolvedConfig) + $SupervisorArguments
 
 # 健康检查在项目根目录执行，确保相对路径和模块导入保持一致。
 Push-Location -LiteralPath $loopRoot

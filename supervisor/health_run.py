@@ -96,36 +96,6 @@ def write_state(value: dict[str, Any]) -> None:
     temporary.replace(HEALTH_STATE)
 
 
-def record_monitor_state(monitors: dict[str, dict[str, Any]]) -> None:
-    """保存常驻 Supervisor 的组件快照，并保留最近一次外部健康检查结果。
-
-    ``health`` 与 ``serve`` 都可能更新同一个健康文件。两者只更新自己拥有的字段：
-    这里更新 ``monitors``，健康检查的 ``record`` 会保留该字段。
-    """
-    try:
-        # 基于当前快照合并，保留 health 命令拥有的失败计数和事件历史。
-        state = read_state()
-        state["monitors"] = monitors
-        state["monitor_checked_at"] = now_shanghai()
-        write_state(state)
-    except Exception as error:
-        # 状态落盘失败不终止常驻服务，只记录异常类型以免泄露上下文。
-        append_fallback(f"MONITOR_STATE_WRITE_FAILED {type(error).__name__}")
-
-
-def write_supervisor_heartbeat(pid: int) -> dict[str, Any]:
-    """原子记录 Supervisor 主循环最近一次完成监控的时间和进程身份。"""
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    value = {"pid": pid, "checked_at": now_shanghai()}
-    temporary = HEARTBEAT_PATH.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(HEARTBEAT_PATH)
-    return value
-
-
 def acquire_lock() -> None:
     """建立健康检查互斥锁，并清理超过 120 秒的遗留锁。"""
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)

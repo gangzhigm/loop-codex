@@ -2192,16 +2192,46 @@
     }
 
     // 七、任务路由和执行配置展示。项目来自规范化 scope key，模型信息来自 runtime_config。
+    function scopeKeyProject(key) {
+      if (typeof key !== "string") return null;
+      if (key.startsWith("project:")) {
+        const project = key.slice("project:".length);
+        return project && !project.includes(":") ? project : null;
+      }
+      const match = /^(?:file|module):([^:]+)::(.+)$/.exec(key);
+      return match?.[1] ?? null;
+    }
+
+    function hintedScopeProject(scope) {
+      if (typeof scope !== "string") return null;
+      const normalized = scope.replaceAll("\\", "/").replace(/^\.\//, "");
+      const projects = Array.isArray(state?.projects) ? state.projects : [];
+      const matches = projects
+        .map((project) => String(project?.path ?? "").replaceAll("\\", "/").replace(/\/$/, ""))
+        .filter((project) => project && (normalized === project || normalized.startsWith(`${project}/`)))
+        .sort((left, right) => right.length - left.length);
+      return matches[0] ?? null;
+    }
+
     function taskProjects(task) {
       const scopes = Array.isArray(task.scope) ? task.scope : [];
       const keys = Array.isArray(task.scope_keys) ? task.scope_keys : [];
       const projectScopes = new Map();
       keys.forEach((key, index) => {
-        if (typeof key !== "string" || !key.startsWith("project:")) return;
-        const project = key.slice("project:".length);
+        const project = scopeKeyProject(key);
+        if (!project) return;
         if (!projectScopes.has(project)) projectScopes.set(project, []);
         projectScopes.get(project).push(String(scopes[index] ?? "").replaceAll("\\", "/"));
       });
+      if (!projectScopes.size) {
+        const hints = Array.isArray(task.scope_hint) ? task.scope_hint : [];
+        hints.forEach((scope) => {
+          const project = hintedScopeProject(scope);
+          if (!project) return;
+          if (!projectScopes.has(project)) projectScopes.set(project, []);
+          projectScopes.get(project).push(String(scope).replaceAll("\\", "/"));
+        });
+      }
       if (projectScopes.size > 1) {
         const loopScopes = projectScopes.get("local-agent-loop") ?? [];
         if (loopScopes.length && loopScopes.every((scope) => scope.startsWith("local-agent-loop/assets/"))) {

@@ -1,17 +1,17 @@
-"""仅支持 Windows 的 Supervisor 常驻宿主与一次性健康检查入口。
+"""仅支持 Windows 的 Supervisor 常驻宿主。
 
 ``serve`` 是长期运行的 Supervisor 主进程：它托管本机 Dashboard，并周期性检查
 Dashboard、Planner 与 Codex CLI Dispatcher 的可核实状态。它只读取任务投影和本机
 进程/计划任务信息，不领取任务、不管理 Codex 自动化，也不直接写 SQLite。
 
-``health`` 由 Windows 计划任务周期调用，用于探测和恢复整个 ``serve`` 进程。
+健康检查由 ``health_run.py`` 独立执行，用于探测和恢复整个 ``serve`` 进程。
 """
 
 from __future__ import annotations
 
-# 计划任务调用 health；由 health 恢复的常驻主进程调用 serve。
-# 本文件只组织 Supervisor 命令边界，任务状态写入仍只能经过 control/loopctl.py。
+# 本文件只承载常驻 Supervisor，任务状态写入仍只能经过 control/loopctl.py。
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -37,28 +37,86 @@ if str(REPOSITORY_ROOT) not in sys.path:
 # 统一复用控制面的配置加载、数据库连接和上海时区时间函数。
 from loopdb import CONFIG_PATH, DEFAULT_DB, connect, load_initialization_config, now_shanghai
 
-# 根据当前启动方式导入同一目录的健康模块和项目根目录的 Dashboard 模块。
+# 根据当前启动方式导入项目根目录的 Dashboard 模块。
 if __package__:
-    from . import health_run
     from client import dashboard_server
 else:
-    import health_run
     from client import dashboard_server
+
+
+# 常驻 Supervisor 自己维护 PID、heartbeat 和组件监控快照。
+RUNTIME_DIR = REPOSITORY_ROOT / "runtime"
+HEALTH_STATE = RUNTIME_DIR / "health-state.json"
+PID_PATH = RUNTIME_DIR / "supervisor.pid"
+HEARTBEAT_PATH = RUNTIME_DIR / "supervisor-heartbeat.json"
+FALLBACK_LOG = RUNTIME_DIR / "health-fallback.log"
+
+
+def read_monitor_state() -> dict[str, Any]:
+    """读取健康状态；文件缺失或损坏时返回不含历史记录的初始值。"""
+    if not HEALTH_STATE.exists():
+        return {"consecutive_failures": 0, "last_checked_at": None, "events": []}
+    try:
+        return json.loads(HEALTH_STATE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"consecutive_failures": 0, "last_checked_at": None, "events": []}
+
+
+def write_monitor_state(value: dict[str, Any]) -> None:
+    """原子替换健康状态，避免 Supervisor 中断时留下半截 JSON。"""
+    temporary = HEALTH_STATE.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(HEALTH_STATE)
+
+
+def append_monitor_fallback(message: str) -> None:
+    """组件快照无法保存时记录最小诊断，不中断 Supervisor 主循环。"""
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    with FALLBACK_LOG.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(f"{now_shanghai()} {message}\n")
+
+
+def record_monitor_state(monitors: dict[str, dict[str, Any]]) -> None:
+    """保存本轮组件监控快照，同时保留外部健康检查写入的字段。"""
+    try:
+        state = read_monitor_state()
+        state["monitors"] = monitors
+        state["monitor_checked_at"] = now_shanghai()
+        write_monitor_state(state)
+    except Exception as error:
+        # 快照展示失败不能阻止 Supervisor 继续监控和恢复各组件。
+        append_monitor_fallback(f"MONITOR_STATE_WRITE_FAILED {type(error).__name__}")
+
+
+def write_supervisor_heartbeat(pid: int) -> None:
+    """主循环完成一轮监控后刷新 heartbeat，供外部健康任务探活。"""
+    value = {"pid": pid, "checked_at": now_shanghai()}
+    temporary = HEARTBEAT_PATH.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(HEARTBEAT_PATH)
+
+
+def heartbeat_belongs_to(pid: int) -> bool:
+    """退出清理前确认 heartbeat 仍属于当前 Supervisor 实例。"""
+    try:
+        value = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        return isinstance(value, dict) and int(value["pid"]) == pid
+    except (FileNotFoundError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 def parser() -> argparse.ArgumentParser:
-    """创建 Supervisor 命令行，明确区分短暂检查和常驻服务。"""
+    """创建只用于启动常驻 Supervisor 的命令行。"""
     value = argparse.ArgumentParser(description="Local Agent Loop Supervisor entry point")
 
-    # 强制调用方选择 health 或 serve，防止无意启动错误运行模式。
+    # 固定使用 serve 子命令，避免把健康检查逻辑重新放回常驻入口。
     commands = value.add_subparsers(dest="command", required=True)
-
-    # health 只需要定位任务库和初始化配置，不直接监听 HTTP 端口。
-    health = commands.add_parser("health", help="检查 Supervisor，并在必要时恢复常驻进程")
-    health.add_argument("--db", default=str(DEFAULT_DB))
-    health.add_argument("--config", default=str(CONFIG_PATH))
-
-    # serve 承载 Dashboard，并允许部署环境覆盖监听地址、端口和监控周期。
     serve = commands.add_parser("serve", help="常驻运行 Supervisor 主进程")
     serve.add_argument("--db", default=str(DEFAULT_DB))
     serve.add_argument("--config", default=str(CONFIG_PATH))
@@ -77,12 +135,10 @@ def command_arguments(args: argparse.Namespace) -> list[str]:
     """把入口参数转为 Dashboard 下层实现使用的稳定参数列表。"""
     values = ["--db", str(args.db), "--config", str(args.config)]
 
-    # host 和 port 只属于常驻 HTTP 服务，health 模式不能向下层透传这两个参数。
-    if args.command == "serve":
-        if args.host is not None:
-            values.extend(["--host", str(args.host)])
-        if args.port is not None:
-            values.extend(["--port", str(args.port)])
+    if args.host is not None:
+        values.extend(["--host", str(args.host)])
+    if args.port is not None:
+        values.extend(["--port", str(args.port)])
     return values
 
 
@@ -315,10 +371,10 @@ def serve_supervisor(args: argparse.Namespace) -> None:
     shutdown_event = threading.Event()
     dashboard = DashboardThread(command_arguments(args))
     pid = os.getpid()
-    health_run.RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     try:
         descriptor = os.open(
-            health_run.PID_PATH,
+            PID_PATH,
             os.O_CREAT | os.O_EXCL | os.O_WRONLY,
         )
     except FileExistsError:
@@ -350,32 +406,25 @@ def serve_supervisor(args: argparse.Namespace) -> None:
                 dashboard_running=dashboard.is_running(),
                 dashboard_error=dashboard.last_error,
             )
-            health_run.record_monitor_state(monitors)
-            health_run.write_supervisor_heartbeat(pid)
+            record_monitor_state(monitors)
+            write_supervisor_heartbeat(pid)
 
             # 使用事件等待，使终止信号可以提前唤醒主循环，而不是固定休眠。
             shutdown_event.wait(args.monitor_interval_seconds)
     finally:
         dashboard.stop()
         if (
-            health_run.PID_PATH.exists()
-            and health_run.PID_PATH.read_text(encoding="utf-8").strip() == str(pid)
+            PID_PATH.exists()
+            and PID_PATH.read_text(encoding="utf-8").strip() == str(pid)
         ):
-            health_run.PID_PATH.unlink()
-        heartbeat = health_run.read_supervisor_heartbeat()
-        if heartbeat is not None and heartbeat["pid"] == pid:
-            health_run.HEARTBEAT_PATH.unlink(missing_ok=True)
+            PID_PATH.unlink()
+        if heartbeat_belongs_to(pid):
+            HEARTBEAT_PATH.unlink(missing_ok=True)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    """执行一次命令分发；serve 持续运行，health 完成检查后立即退出。"""
+    """解析 serve 参数并启动长期运行的 Supervisor。"""
     args = parser().parse_args(argv)
-    values = command_arguments(args)
-
-    # health 是短命令；serve 才进入长期监控循环。
-    if args.command == "health":
-        health_run.main(values)
-        return
     serve_supervisor(args)
 
 

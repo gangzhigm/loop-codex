@@ -114,6 +114,16 @@ assert(html.includes('<h4>依赖等待</h4>'), "详情未单独展示依赖等�
 assert(html.includes('<h4>范围锁等待</h4>'), "详情未单独展示范围锁等待");
 assert(html.includes('${renderPendingBlockers(task, state.tasks)}'), "详情未挂载待执行阻塞信息");
 
+assert(html.includes("function scopeKeyProject(key)"), "缺少 scope key 项目解析函数");
+assert(html.includes('key.startsWith("project:")'), "项目解析未覆盖 project scope key");
+assert(html.includes('/^(?:file|module):([^:]+)::(.+)$/'), "项目解析未覆盖 file/module scope key 或非法 key 边界");
+assert(html.includes('const project = scopeKeyProject(key);'), "任务项目展示未使用统一 scope key 解析");
+assert(!html.includes('!key.startsWith("project:")'), "任务项目展示仍排除 file/module scope key");
+assert(html.includes("function hintedScopeProject(scope)"), "缺少预检前 scope hint 项目回退解析");
+assert(html.includes("if (!projectScopes.size)"), "最终 scope 缺失时未回退到 scope hint");
+assert(html.includes("right.length - left.length"), "scope hint 项目匹配未优先使用最长登记路径");
+assert(html.includes('scope.startsWith("local-agent-loop/assets/")'), "项目展示丢失纯附件项目排除规则");
+
 assert(html.includes('function resetHeaderFilters()'), "缺少状态切换时的筛选重置");
 assert(html.includes('const nextFilter = ["draft", "review", "pending", "active", "closed", "archived"]'), "分类切换没有覆盖当前生命周期");
 assert(html.includes('function resetInvalidHeaderFilters(tasks)'), "缺少自动轮询后的失效筛选重置");
