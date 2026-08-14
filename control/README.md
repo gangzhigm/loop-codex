@@ -15,11 +15,13 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 | `loopdb.py` | 导出当前数据库公共 API | SQL 业务实现 |
 | `../operator/secretctl.py` | 系统密钥库的人工管理入口 | 任务数据库 |
 | `../planner/control.py` | Planner 的只读静态预检状态机 | 业务实现与 scope 写锁 |
+| `../planner/main.py` | Planner Scheduler 单实例、PID 与 heartbeat | 任务预检业务实现 |
 | `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
 | `../dispatcher/codex_cli_dispatcher.py` | 只读选择一个 Codex CLI 能力等级并启动一次 Runner | 原子 claim 与业务实现 |
+| `../dispatcher/main.py` | Dispatcher Scheduler 单实例、heartbeat 与周期调度 | Supervisor 探活 |
 | `../runner/codex_cli_runner.py` | 单任务 Codex CLI 进程、heartbeat、finish | 周期调度 |
 | `../runner/agent_runtime.py` | Self-hosted Agent 启动和 Provider 工厂 | 工具循环具体实现 |
-| `../supervisor/main.py` | Supervisor 统一入口：一次健康检查或启动常驻 Client 服务 | 任务调度与任务表写入 |
+| `../supervisor/main.py` | 托管 Dashboard，并按 PID 与 heartbeat 管理两个 Scheduler | 任务查询、领取与任务表写入 |
 | `../client/dashboard_server.py` | 本机 HTTP 路由、Secret API、静态资源服务 | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
 
@@ -137,7 +139,8 @@ Supervisor 异常：
 
 1. `runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
 2. `runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
-3. 外部 `health` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
+3. `health_run.py` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
+4. Planner 与 Dispatcher 分别维护自己的 PID 和 heartbeat；Supervisor 不读取任务数量。
 
 ## 回归测试
 

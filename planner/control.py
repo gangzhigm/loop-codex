@@ -525,4 +525,3 @@ def command_preflight_fail(args: argparse.Namespace) -> None:
         raise
     finally:
         database.close()
-

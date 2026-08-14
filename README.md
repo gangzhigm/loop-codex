@@ -18,7 +18,7 @@ py -3 .\supervisor\main.py serve
 
 Dashboard 默认地址、端口及其他部署参数以 `config/initialization.json` 为准。
 `serve` 用于人工前台运行，托管 Dashboard 并周期检查 Dashboard、Planner 和 Codex CLI Dispatcher；
-计划任务使用 `health` 做探活和必要恢复。
+Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活和必要恢复。
 
 ## 工作流程
 
@@ -54,7 +54,9 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | 任务管理和状态迁移 | `control/loopctl.py` |
 | 数据库公共 API | `control/loopdb.py` |
 | Codex 客户端自动化 | `worker/worker.md` 与受控 `loopctl.py claim/heartbeat/finish` |
-| Codex CLI 周期调度 | `dispatcher/codex_cli_dispatcher.py` |
+| Planner 常驻调度 | `planner/main.py serve` |
+| Codex CLI 常驻调度 | `dispatcher/main.py serve` |
+| Codex CLI 单轮调度 | `dispatcher/codex_cli_dispatcher.py` |
 | Codex CLI 单任务运行 | `runner/codex_cli_runner.py` |
 | Self-hosted Agent | `runner/agent_runtime.py` |
 | DeepSeek Provider 适配 | `control/loop_agent/providers/deepseek.py` |
@@ -99,7 +101,7 @@ py -3 .\control\loopctl.py validate
 | `operator/` | Operator 提示词、任务控制状态机和密钥管理入口 |
 | `planner/` | Planner 提示词与只读预检状态机 |
 | `worker/` | Worker 提示词与任务执行状态机 |
-| `dispatcher/` | Codex CLI 单次调度入口 |
+| `dispatcher/` | Codex CLI 常驻调度与单轮调度实现 |
 | `runner/` | Codex CLI 与 Self-hosted Runner 入口及 CLI 提示词 |
 | `config/initialization.json` | 唯一部署配置源 |
 | `schemas/loop-agent.sql` | 当前数据库 Schema |
@@ -114,7 +116,7 @@ py -3 .\control\loopctl.py validate
 ## 排障顺序
 
 1. 运行 `py -3 control/loopctl.py validate` 检查任务库和配置一致性。
-2. 查看 `runtime/supervisor-heartbeat.json` 和 `runtime/health-state.json`，必要时运行 Supervisor `health`。
+2. 查看 `runtime/supervisor-heartbeat.json` 和 `runtime/health-state.json`，必要时运行 `supervisor/health_run.py`。
 3. 根据失败角色读取对应角色目录中的提示词和 `control/README.md` 的职责导航。
 4. 使用 `loopctl.py state` 或 Dashboard 查看任务、execution、依赖和 scope 阻塞事实。
 

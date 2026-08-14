@@ -143,13 +143,11 @@
     "max_stdout_chars": 1000000,
     "max_stderr_chars": 50000,
     "dispatcher": {
+      "scheduled": true,
       "interval_minutes": 15,
-      "task_name": "Local Agent Loop Codex CLI Dispatcher",
+      "heartbeat_interval_seconds": 15,
       "working_directory": "E:\\code\\local-agent-loop",
-      "run_as_current_user": true,
-      "timeout_seconds": 7220,
       "log_path": "runtime/codex-cli-dispatcher.log",
-      "hidden": true,
       "supported_capability_levels": [
         "L1",
         "L2",
@@ -205,6 +203,7 @@
       "name": "Loop Agent Planner",
       "scheduled": true,
       "interval_minutes": 5,
+      "heartbeat_interval_seconds": 15,
       "model": "gpt-5.6-terra",
       "reasoning_effort": "high",
       "runtime_environment": "codex_automation",
@@ -227,5 +226,28 @@
     "interval_minutes": 30,
     "failure_threshold": 3,
     "heartbeat_timeout_seconds": 120
+  },
+  "supervisor": {
+    "monitor_interval_seconds": 30,
+    "component_start_timeout_seconds": 10,
+    "component_stop_timeout_seconds": 5,
+    "components": {
+      "planner": {
+        "entry": "planner/main.py",
+        "pid_path": "runtime/planner.pid",
+        "heartbeat_path": "runtime/planner-heartbeat.json",
+        "stop_path": "runtime/planner-stop-request.json",
+        "log_path": "runtime/planner-scheduler.log",
+        "heartbeat_timeout_seconds": 60
+      },
+      "dispatcher": {
+        "entry": "dispatcher/main.py",
+        "pid_path": "runtime/dispatcher.pid",
+        "heartbeat_path": "runtime/dispatcher-heartbeat.json",
+        "stop_path": "runtime/dispatcher-stop-request.json",
+        "log_path": "runtime/dispatcher-scheduler.log",
+        "heartbeat_timeout_seconds": 60
+      }
+    }
   }
 }

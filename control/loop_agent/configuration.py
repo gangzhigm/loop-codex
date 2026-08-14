@@ -92,11 +92,51 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     dashboard = config.get("dashboard") or {}
     automations = config.get("automations") or {}
     planner_automation = automations.get("planner") or {}
+    codex_cli = config.get("codex_cli") or {}
+    dispatcher = codex_cli.get("dispatcher") or {}
     health = config.get("health") or {}
+    supervisor = config.get("supervisor") or {}
+    supervisor_components = supervisor.get("components") or {}
     platform_limits = execution.get("platform_max_active_executions") or {}
     automation_capabilities = automations.get("capabilities") or {}
     runtime_environments = config.get("runtime_environments") or {}
     project_defaults = priority_policy.get("project_defaults") or {}
+    expected_supervisor_components = {
+        "planner": {
+            "entry": "planner/main.py",
+            "pid_path": "runtime/planner.pid",
+            "heartbeat_path": "runtime/planner-heartbeat.json",
+            "stop_path": "runtime/planner-stop-request.json",
+            "log_path": "runtime/planner-scheduler.log",
+        },
+        "dispatcher": {
+            "entry": "dispatcher/main.py",
+            "pid_path": "runtime/dispatcher.pid",
+            "heartbeat_path": "runtime/dispatcher-heartbeat.json",
+            "stop_path": "runtime/dispatcher-stop-request.json",
+            "log_path": "runtime/dispatcher-scheduler.log",
+        },
+    }
+    valid_supervisor_components = (
+        set(supervisor_components) == set(expected_supervisor_components)
+        and all(
+            isinstance(supervisor_components[name], dict)
+            and all(
+                supervisor_components[name].get(key) == expected
+                for key, expected in contract.items()
+            )
+            and (BASE_DIR / supervisor_components[name]["entry"]).is_file()
+            and all(
+                (BASE_DIR / supervisor_components[name][key]).resolve().is_relative_to(BASE_DIR)
+                for key in ("entry", "pid_path", "heartbeat_path", "stop_path", "log_path")
+            )
+            and isinstance(
+                supervisor_components[name].get("heartbeat_timeout_seconds"), int
+            )
+            and supervisor_components[name]["heartbeat_timeout_seconds"] >= 1
+            for name, contract in expected_supervisor_components.items()
+        )
+    )
     valid_automation_capabilities = set(automation_capabilities) == set(CAPABILITY_LEVELS) and all(
         isinstance(automation_capabilities[level], dict)
         and isinstance(automation_capabilities[level].get("name"), str)
@@ -247,8 +287,10 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and "codex_automation" in automations["entry_prompt_template"]
         and planner_automation.get("automation_id") == "loop-agent-planner"
         and planner_automation.get("name") == "Loop Agent Planner"
-        and planner_automation.get("scheduled") is True
+        and isinstance(planner_automation.get("scheduled"), bool)
         and planner_automation.get("interval_minutes") == 5
+        and isinstance(planner_automation.get("heartbeat_interval_seconds"), int)
+        and planner_automation["heartbeat_interval_seconds"] >= 1
         and planner_automation.get("model") == "gpt-5.6-terra"
         and planner_automation.get("reasoning_effort") == "high"
         and planner_automation.get("runtime_environment") == "codex_automation"
@@ -260,6 +302,9 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and "runtime_environment=codex_automation" in planner_automation["entry_prompt"]
         and "execution_kind=PLANNER" in planner_automation["entry_prompt"]
         and "sandbox=read-only" in planner_automation["entry_prompt"]
+        and isinstance(dispatcher.get("scheduled"), bool)
+        and isinstance(dispatcher.get("heartbeat_interval_seconds"), int)
+        and dispatcher["heartbeat_interval_seconds"] >= 1
         and valid_automation_capabilities
         and valid_runtime_environment_config
         and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
@@ -274,6 +319,17 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and health["failure_threshold"] >= 1
         and isinstance(health.get("heartbeat_timeout_seconds"), int)
         and health["heartbeat_timeout_seconds"] >= 1
+        and isinstance(supervisor.get("monitor_interval_seconds"), (int, float))
+        and supervisor["monitor_interval_seconds"] >= 1
+        and isinstance(supervisor.get("component_start_timeout_seconds"), (int, float))
+        and supervisor["component_start_timeout_seconds"] >= 1
+        and isinstance(supervisor.get("component_stop_timeout_seconds"), (int, float))
+        and supervisor["component_stop_timeout_seconds"] >= 1
+        and valid_supervisor_components
+        and supervisor_components["planner"]["heartbeat_timeout_seconds"]
+        >= planner_automation["heartbeat_interval_seconds"]
+        and supervisor_components["dispatcher"]["heartbeat_timeout_seconds"]
+        >= dispatcher["heartbeat_interval_seconds"]
     )
     if not valid:
         raise LoopError(f"初始化配置字段或取值无效: {config_path}")

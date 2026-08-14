@@ -6,8 +6,8 @@ Dispatcher 读取任务和活动执行快照，只判断“当前是否值得启
 Runner 调用 loopctl 完成，因此多个 Dispatcher 同时看到同一候选也不会获得双重
 写权限。
 
-每次运行最多启动一个 Runner。日志只记录调度元数据与退出码，不记录子进程输出，
-防止任务内容或命令输出意外进入长期日志。
+每次运行最多启动一个 Runner。Runner 创建成功后立即返回，由 Runner 独立完成领取、
+执行、写回和退出；日志只记录候选任务、能力等级和 Runner PID。
 """
 
 from __future__ import annotations
@@ -39,13 +39,12 @@ from loopdb import (
     load_initialization_config,
     now_shanghai,
     platform_parallel_limit,
-    resolve_execution_profile,
     state_payload,
 )
 
 
 RUNTIME_ENVIRONMENT = "codex_cli"
-TERMINAL_RUNNER_OUTCOMES = {"NO_TASK", "SLOT_FULL", "CONFLICT"}
+_RUNNER_PROCESSES: set[subprocess.Popen[bytes]] = set()
 
 
 class DispatcherError(RuntimeError):
@@ -59,18 +58,15 @@ class DispatcherSettings:
     """从初始化配置冻结出的 Dispatcher 运行参数。
 
     路径在构造时解析为绝对路径，并限制在 Loop Agent 根目录内；并发上限必须与统一
-    配置解析函数一致；超时时间必须覆盖最慢能力等级的全部重试和终止宽限期。
+    配置解析函数一致。Runner 的执行超时由 Runner 自己管理，不属于 Dispatcher 设置。
     """
     config_path: Path
     database_path: Path
     runner_path: Path
     working_directory: Path
+    scheduled: bool
     interval_minutes: int
-    task_name: str
-    run_as_current_user: bool
-    timeout_seconds: float
     log_path: Path
-    hidden: bool
     supported_capability_levels: tuple[str, ...]
     global_max_active_executions: int
     platform_max_active_executions: int
@@ -83,34 +79,26 @@ class DispatcherSettings:
         base_dir: Path = BASE_DIR,
         config_path: Path = CONFIG_PATH,
     ) -> "DispatcherSettings":
-        """严格校验配置结构、能力映射、路径边界和超时预算后生成设置。"""
+        """严格校验配置结构、能力映射和路径边界后生成设置。"""
         cli = config.get("codex_cli")
         execution = config.get("task_execution")
         database = config.get("database")
-        workspace = config.get("workspace")
-        if not all(isinstance(value, dict) for value in (cli, execution, database, workspace)):
+        if not all(isinstance(value, dict) for value in (cli, execution, database)):
             raise DispatcherError("dispatcher configuration is incomplete")
         raw = cli.get("dispatcher")
         if not isinstance(raw, dict):
             raise DispatcherError("codex_cli.dispatcher configuration is missing")
+        scheduled = raw.get("scheduled")
         interval = raw.get("interval_minutes")
-        task_name = raw.get("task_name")
         working_value = raw.get("working_directory")
-        run_as_current_user = raw.get("run_as_current_user")
-        timeout = raw.get("timeout_seconds")
         log_value = raw.get("log_path")
-        hidden = raw.get("hidden")
         supported = raw.get("supported_capability_levels")
+        if not isinstance(scheduled, bool):
+            raise DispatcherError("dispatcher scheduled is invalid")
         if not isinstance(interval, int) or interval < 1:
             raise DispatcherError("dispatcher interval_minutes is invalid")
-        if not isinstance(task_name, str) or not task_name.strip():
-            raise DispatcherError("dispatcher task_name is invalid")
         if not isinstance(working_value, str) or not working_value.strip():
             raise DispatcherError("dispatcher working_directory is invalid")
-        if not isinstance(run_as_current_user, bool) or not isinstance(hidden, bool):
-            raise DispatcherError("dispatcher boolean settings are invalid")
-        if not isinstance(timeout, (int, float)) or timeout <= 0:
-            raise DispatcherError("dispatcher timeout_seconds is invalid")
         if not isinstance(log_value, str) or not log_value.strip():
             raise DispatcherError("dispatcher log_path is invalid")
         if not isinstance(supported, list) or not supported or len(supported) != len(set(supported)):
@@ -122,20 +110,6 @@ class DispatcherSettings:
         )
         if not isinstance(enabled, dict) or not set(supported).issubset(enabled):
             raise DispatcherError("dispatcher capability levels must be configured for codex_cli")
-        profiles = [
-            resolve_execution_profile(RUNTIME_ENVIRONMENT, None, level, config)
-            for level in supported
-        ]
-        termination_grace = cli.get("termination_grace_seconds")
-        if not isinstance(termination_grace, (int, float)) or termination_grace <= 0:
-            raise DispatcherError("dispatcher Codex CLI termination grace is invalid")
-        required_timeout = max(
-            profile["attempt_timeout_seconds"] * (profile["max_retries"] + 1)
-            + termination_grace * (profile["max_retries"] + 1)
-            for profile in profiles
-        )
-        if float(timeout) <= required_timeout:
-            raise DispatcherError("dispatcher timeout must cover every complete execution attempt")
         root = base_dir.resolve()
         expected_working = Path(working_value).resolve()
         if expected_working != root:
@@ -163,12 +137,9 @@ class DispatcherSettings:
             database_path=database_path,
             runner_path=runner_path,
             working_directory=root,
+            scheduled=scheduled,
             interval_minutes=interval,
-            task_name=task_name.strip(),
-            run_as_current_user=run_as_current_user,
-            timeout_seconds=float(timeout),
             log_path=log_path,
-            hidden=hidden,
             supported_capability_levels=tuple(supported),
             global_max_active_executions=maximum,
             platform_max_active_executions=platform_maximum,
@@ -231,9 +202,33 @@ def default_snapshot(settings: DispatcherSettings, config: dict[str, Any]) -> tu
         database.close()
 
 
-def default_launcher(command: list[str], cwd: Path, timeout: float) -> subprocess.CompletedProcess[str]:
-    """以 UTF-8 捕获模式同步运行 Runner，并由调用方负责处理超时和退出码。"""
-    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+def reap_runner_processes() -> None:
+    """释放已经退出的 Runner 进程句柄，不读取或解释其执行结果。"""
+    # 只保留尚未退出的 Popen 对象，避免常驻 Dispatcher 累积 Windows 进程句柄。
+    for process in tuple(_RUNNER_PROCESSES):
+        if process.poll() is not None:
+            _RUNNER_PROCESSES.discard(process)
+
+
+def default_launcher(command: list[str], cwd: Path) -> int:
+    """创建与 Dispatcher 解耦的 Runner，成功后立即返回其 PID。"""
+    reap_runner_processes()
+    creation_flags = (
+        subprocess.CREATE_NEW_PROCESS_GROUP
+        | subprocess.DETACHED_PROCESS
+        | subprocess.CREATE_NO_WINDOW
+    )
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        creationflags=creation_flags,
+    )
+    _RUNNER_PROCESSES.add(process)
+    return process.pid
 
 
 class CodexCliDispatcher:
@@ -245,7 +240,7 @@ class CodexCliDispatcher:
         config: dict[str, Any],
         *,
         snapshot_reader: Callable[[DispatcherSettings, dict[str, Any]], tuple[list[dict[str, Any]], list[dict[str, Any]]]] = default_snapshot,
-        launcher: Callable[[list[str], Path, float], subprocess.CompletedProcess[str]] = default_launcher,
+        launcher: Callable[[list[str], Path], int] = default_launcher,
         logger: EventLogger | None = None,
     ) -> None:
         """注入设置、快照读取器和启动器，便于测试时隔离数据库与真实进程。"""
@@ -258,9 +253,10 @@ class CodexCliDispatcher:
     def run(self) -> dict[str, Any]:
         """执行一次调度并返回稳定 outcome，不循环等待也不重试。
 
-        无任务和容量已满属于正常终止；进程超时、无法启动或非零退出会记录为独立
-        outcome。返回值不包含 Runner 的 stdout/stderr。
+        无任务和容量已满属于正常结果。Runner 创建成功后立即返回，不等待执行结果，
+        也不读取 Runner 的 stdout 或 stderr。
         """
+        reap_runner_processes()
         tasks, active_agents = self.snapshot_reader(self.settings, self.config)
         candidate = select_candidate(tasks, self.settings.supported_capability_levels)
         if candidate is None:
@@ -299,36 +295,27 @@ class CodexCliDispatcher:
             "--db",
             str(self.settings.database_path),
         ]
-        self.logger.event(
-            "RUNNER_STARTED", task_id=task_id, capability_level=capability_level
-        )
         try:
-            completed = self.launcher(command, self.settings.working_directory, self.settings.timeout_seconds)
-        except subprocess.TimeoutExpired:
-            self.logger.event(
-                "RUNNER_TIMEOUT", task_id=task_id, capability_level=capability_level
-            )
-            return {
-                "outcome": "RUNNER_TIMEOUT", "task_id": task_id,
-                "capability_level": capability_level,
-            }
+            runner_pid = self.launcher(command, self.settings.working_directory)
         except OSError as error:
             self.logger.event(
-                "RUNNER_START_FAILED", task_id=task_id, capability_level=capability_level,
+                "RUNNER_START_FAILED", candidate_task_id=task_id,
+                capability_level=capability_level,
                 error_type=type(error).__name__,
             )
             return {
-                "outcome": "RUNNER_START_FAILED", "task_id": task_id,
+                "outcome": "RUNNER_START_FAILED", "candidate_task_id": task_id,
                 "capability_level": capability_level,
             }
-        outcome = "RUNNER_FINISHED" if completed.returncode == 0 else "RUNNER_FAILED"
         self.logger.event(
-            outcome, task_id=task_id, capability_level=capability_level,
-            exit_code=completed.returncode,
+            "RUNNER_STARTED", candidate_task_id=task_id,
+            capability_level=capability_level, runner_pid=runner_pid,
         )
         return {
-            "outcome": outcome, "task_id": task_id, "capability_level": capability_level,
-            "exit_code": completed.returncode,
+            "outcome": "RUNNER_STARTED",
+            "candidate_task_id": task_id,
+            "capability_level": capability_level,
+            "runner_pid": runner_pid,
         }
 
 
@@ -353,7 +340,7 @@ def main() -> None:
             raise DispatcherError("dispatcher database path must remain in the Local Agent Loop root")
         settings = DispatcherSettings(**{**settings.__dict__, "database_path": database_path})
     if args.dry_run:
-        print(json.dumps({"outcome": "DRY_RUN", "task_name": settings.task_name, "interval_minutes": settings.interval_minutes}, ensure_ascii=False))
+        print(json.dumps({"outcome": "DRY_RUN", "interval_minutes": settings.interval_minutes}, ensure_ascii=False))
         return
     print(json.dumps(CodexCliDispatcher(settings, config).run(), ensure_ascii=False))
 

@@ -422,8 +422,8 @@ def operations_config_payload(
                 "id": "dispatcher",
                 "title": "Dispatcher 管理",
                 "items": [
-                    item("dispatcher-service", "常驻 Dispatcher", "尚未部署", "部署设计", "负责生成可执行队列并按容量、依赖与锁状态路由任务。", "受保护", "尚未实现", "planned"),
-                    item("cli-dispatcher", "Codex CLI 单次调度", f"每 {_config_value(cli if isinstance(cli, Mapping) else {}, 'dispatcher', 'interval_minutes')} 分钟", "config/initialization.json", "Codex CLI Dispatcher 由 Windows 计划任务周期启动，每次只执行一轮调度。", "需计划任务部署", "配置加载时校验"),
+                    item("dispatcher-service", "常驻 Dispatcher", "main.py serve", "dispatcher/main.py", "由 Supervisor 管理单实例、PID 与 heartbeat，并按配置周期检查是否需要分发 Runner。", "当前生效", "runtime/health-state.json", "active"),
+                    item("cli-dispatcher", "Runner 分发周期", f"每 {_config_value(cli if isinstance(cli, Mapping) else {}, 'dispatcher', 'interval_minutes')} 分钟", "config/initialization.json", "每轮最多创建一个独立 Runner；创建成功后立即返回，不等待 Runner 执行结束。", "需重启 Dispatcher", "配置加载时校验"),
                 ],
             },
             {

@@ -355,7 +355,165 @@
     .distribution .failed { background: var(--danger); }
     .distribution .queued { background: #98a2ad; }
 
-    /* 四、主工作区：左侧任务表，右侧只显示调度容量；窄屏下改为单列。 */
+    /* 四、运行链路只消费 Supervisor 快照，不提供任何组件控制入口。 */
+    .runtime-section {
+      flex: 0 0 auto;
+      margin-bottom: 16px;
+    }
+
+    .runtime-heading-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      padding: 0 2px;
+    }
+
+    .runtime-heading-row h2 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    .runtime-updated {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .runtime-flow {
+      display: grid;
+      justify-items: center;
+      min-width: 0;
+    }
+
+    .runtime-root {
+      width: min(360px, 100%);
+    }
+
+    .runtime-stem {
+      width: 1px;
+      height: 18px;
+      background: var(--line-strong);
+    }
+
+    .runtime-targets {
+      position: relative;
+      display: grid;
+      width: 100%;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      padding-top: 18px;
+    }
+
+    .runtime-targets::before {
+      position: absolute;
+      top: 0;
+      right: 25%;
+      left: 25%;
+      height: 1px;
+      background: var(--line-strong);
+      content: "";
+    }
+
+    .runtime-target {
+      position: relative;
+      min-width: 0;
+    }
+
+    .runtime-target::before {
+      position: absolute;
+      top: -18px;
+      left: 50%;
+      width: 1px;
+      height: 18px;
+      background: var(--line-strong);
+      content: "";
+    }
+
+    .runtime-node {
+      display: grid;
+      align-content: start;
+      gap: 7px;
+      min-width: 0;
+      min-height: 92px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+
+    .runtime-node[data-tone="healthy"] { border-left-color: var(--success); }
+    .runtime-node[data-tone="active"] { border-left-color: var(--accent); }
+    .runtime-node[data-tone="warning"] { border-left-color: var(--warning); }
+    .runtime-node[data-tone="danger"] { border-left-color: var(--danger); }
+
+    .runtime-node-header,
+    .runtime-node-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .runtime-node-name {
+      min-width: 0;
+      overflow: hidden;
+      font-size: 13px;
+      font-weight: 750;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .runtime-state {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .runtime-state-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--line-strong);
+    }
+
+    .runtime-state[data-tone="healthy"] { color: var(--success); }
+    .runtime-state[data-tone="healthy"] .runtime-state-dot { background: var(--success); }
+    .runtime-state[data-tone="active"] { color: var(--accent); }
+    .runtime-state[data-tone="active"] .runtime-state-dot { background: var(--accent); }
+    .runtime-state[data-tone="warning"] { color: var(--warning); }
+    .runtime-state[data-tone="warning"] .runtime-state-dot { background: var(--warning); }
+    .runtime-state[data-tone="danger"] { color: var(--danger); }
+    .runtime-state[data-tone="danger"] .runtime-state-dot { background: var(--danger); }
+
+    .runtime-node-meta {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 10px;
+    }
+
+    .runtime-node-message {
+      min-width: 0;
+      margin: 0;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    /* 五、主工作区：左侧任务表，右侧只显示调度容量；窄屏下改为单列。 */
     .content-grid {
       flex: 1 1 auto;
       min-height: 0;
@@ -448,7 +606,7 @@
       overflow: hidden;
     }
 
-    /* 五、任务表与表头筛选。header-filter-menu 使用 fixed 定位，由 JS 跟随按钮和滚动重排。 */
+    /* 六、任务表与表头筛选。header-filter-menu 使用 fixed 定位，由 JS 跟随按钮和滚动重排。 */
     .table-wrap {
       flex: 1 1 auto;
       min-height: 0;
@@ -906,7 +1064,7 @@
       font-size: 15px;
     }
 
-    /* 六、能力等级容量。这里只展示服务端投影，不在前端修改真实并发配置。 */
+    /* 七、能力等级容量。这里只展示服务端投影，不在前端修改真实并发配置。 */
     .side-section {
       overflow: auto;
       scrollbar-gutter: stable;
@@ -1493,6 +1651,10 @@
       }
       .header-actions { width: 100%; justify-content: space-between; }
       .main { padding: 16px 12px 28px; }
+      .runtime-heading-row { align-items: flex-start; flex-direction: column; gap: 3px; }
+      .runtime-targets { grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 14px; }
+      .runtime-targets::before { display: none; }
+      .runtime-target::before { top: -14px; display: block; height: 14px; }
       .summary-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric { min-height: 44px; border-bottom: 1px solid var(--line); }
       .metric:nth-child(2n) { border-right: 0; }
@@ -1581,6 +1743,22 @@
       <span id="noticeText"></span>
       <button id="dismissNotice" type="button" aria-label="关闭提示" title="关闭">×</button>
     </div>
+
+    <!-- 运行链路只展示 /api/state 中已有的健康快照，不提供启动、停止或恢复操作。 -->
+    <section class="runtime-section" aria-labelledby="runtimeHeading">
+      <div class="runtime-heading-row">
+        <h2 id="runtimeHeading">运行链路</h2>
+        <span id="runtimeUpdated" class="runtime-updated">尚无快照</span>
+      </div>
+      <div class="runtime-flow" aria-live="polite">
+        <div id="runtimeSupervisor" class="runtime-root"></div>
+        <div class="runtime-stem" aria-hidden="true"></div>
+        <div class="runtime-targets">
+          <div id="runtimePlanner" class="runtime-target"></div>
+          <div id="runtimeDispatcher" class="runtime-target"></div>
+        </div>
+      </div>
+    </section>
 
     <div class="content-grid">
       <!-- 任务列表默认显示待执行；表头筛选项只从当前上下文中确实存在的数据生成。 -->
@@ -1696,6 +1874,17 @@
       invalid: "无效",
       storage_unavailable: "存储不可用"
     };
+    const RUNTIME_STATUS_LABELS = {
+      HEALTHY: "正常",
+      RESTARTED: "已恢复",
+      RESTARTING: "恢复中",
+      DISABLED: "已关闭",
+      STOPPING: "停止中",
+      STOP_FAILED: "停止失败",
+      BLOCKED: "恢复受阻",
+      UNHEALTHY: "异常",
+      NEEDS_ATTENTION: "需要处理"
+    };
     const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
 
     // 二、固定 DOM 索引。启动时集中查询，后续渲染只更新节点内容，避免反复查找和 ID 漂移。
@@ -1727,6 +1916,10 @@
       metricConfirmation: document.querySelector("#metricConfirmation"),
       metricArchived: document.querySelector("#metricArchived"),
       distribution: document.querySelector("#distribution"),
+      runtimeUpdated: document.querySelector("#runtimeUpdated"),
+      runtimeSupervisor: document.querySelector("#runtimeSupervisor"),
+      runtimePlanner: document.querySelector("#runtimePlanner"),
+      runtimeDispatcher: document.querySelector("#runtimeDispatcher"),
       profileList: document.querySelector("#profileList"),
       profileCount: document.querySelector("#profileCount"),
       taskDialog: document.querySelector("#taskDialog"),
@@ -1811,6 +2004,52 @@
         second: includeDate ? undefined : "2-digit",
         hour12: false
       }).format(date);
+    }
+
+    function runtimeTone(status) {
+      if (["HEALTHY"].includes(status)) return "healthy";
+      if (["RESTARTED"].includes(status)) return "active";
+      if (["RESTARTING", "STOPPING"].includes(status)) return "warning";
+      if (["STOP_FAILED", "BLOCKED", "UNHEALTHY", "NEEDS_ATTENTION"].includes(status)) return "danger";
+      return "neutral";
+    }
+
+    function runtimeNodeMarkup(name, service) {
+      const status = typeof service?.status === "string" ? service.status : "UNKNOWN";
+      const tone = runtimeTone(status);
+      const checkedAt = service?.heartbeat?.checked_at ?? service?.checked_at ?? null;
+      const statusLabel = RUNTIME_STATUS_LABELS[status] ?? (status === "UNKNOWN" ? "无快照" : status);
+      const message = typeof service?.message === "string" && service.message.trim()
+        ? service.message
+        : "尚未收到组件状态。";
+      return `<article class="runtime-node" data-tone="${escapeHtml(tone)}">
+        <div class="runtime-node-header">
+          <span class="runtime-node-name">${escapeHtml(name)}</span>
+          <span class="runtime-state" data-tone="${escapeHtml(tone)}"><span class="runtime-state-dot" aria-hidden="true"></span>${escapeHtml(statusLabel)}</span>
+        </div>
+        <div class="runtime-node-meta"><span>PID ${escapeHtml(service?.pid ?? "--")}</span><span>${escapeHtml(formatDate(checkedAt))}</span></div>
+        <p class="runtime-node-message">${escapeHtml(message)}</p>
+      </article>`;
+    }
+
+    function renderRuntimeChain(services) {
+      const values = Array.isArray(services) ? services : [];
+      const byComponent = new Map(values
+        .filter((item) => item && typeof item.component === "string")
+        .map((item) => [item.component, item]));
+      const supervisor = byComponent.get("supervisor") ?? null;
+      const planner = byComponent.get("planner") ?? null;
+      const dispatcher = byComponent.get("dispatcher") ?? null;
+      elements.runtimeSupervisor.innerHTML = runtimeNodeMarkup("Supervisor", supervisor);
+      elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Scheduler", planner);
+      elements.runtimeDispatcher.innerHTML = runtimeNodeMarkup("Dispatcher Scheduler", dispatcher);
+      const timestamps = [supervisor, planner, dispatcher]
+        .map((item) => item?.heartbeat?.checked_at ?? item?.checked_at)
+        .map((value) => new Date(value ?? "").getTime())
+        .filter(Number.isFinite);
+      elements.runtimeUpdated.textContent = timestamps.length
+        ? `快照 ${formatDate(new Date(Math.max(...timestamps)).toISOString())}`
+        : "尚无快照";
     }
 
     // 五、SecretStore 抽屉。打开时读取非敏感状态，关闭时主动清空候选密钥和表单。
@@ -2411,6 +2650,7 @@
       if (!Array.isArray(candidate?.tasks)) errors.push("tasks 必须是数组");
       if (!Array.isArray(candidate?.agents)) errors.push("agents 必须是数组");
       if (!Array.isArray(candidate?.recoveries)) errors.push("recoveries 必须是数组");
+      if (!Array.isArray(candidate?.services)) errors.push("services 必须是数组");
       const environmentConfig = candidate?.runtime_config?.runtime_environments;
       if (!environmentConfig || typeof environmentConfig !== "object" || Array.isArray(environmentConfig) || !Object.keys(environmentConfig).length) {
         errors.push("runtime_config.runtime_environments 无效");
@@ -2685,6 +2925,7 @@
 
       resetInvalidHeaderFilters(tasks);
       renderHeaderFilterButtons();
+      renderRuntimeChain(state.services);
       renderTasks(tasks);
       renderProfiles(currentTasks, state.agents ?? []);
     }

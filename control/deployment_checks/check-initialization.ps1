@@ -81,7 +81,7 @@ Assert-Condition (
 
 $plannerAutomation = $config.automations.planner
 Assert-Condition ($plannerAutomation.automation_id -eq 'loop-agent-planner') 'Planner 自动化 ID 固定'
-Assert-Condition ($plannerAutomation.scheduled -eq $true) 'Planner 自动化定义为定时任务'
+Assert-Condition ($plannerAutomation.scheduled -is [bool]) 'Planner 自动调度开关为布尔值'
 Assert-Condition ($plannerAutomation.interval_minutes -eq 5) 'Planner 周期为 5 分钟'
 Assert-Condition ($plannerAutomation.model -eq 'gpt-5.6-terra') 'Planner 模型为 Terra'
 Assert-Condition ($plannerAutomation.reasoning_effort -eq 'high') 'Planner reasoning 为 high'
