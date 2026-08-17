@@ -88,7 +88,7 @@ class CodexCliDispatcherTests(unittest.TestCase):
     def test_global_and_platform_capacity_prevent_runner_start(self) -> None:
         selected = task("selected", capability_level="L3")
         global_agents = [
-            {"runtime_environment": "codex_automation", "capability_level": "L1"}
+            {"runtime_environment": "self_hosted_agent", "capability_level": "L1"}
         ] * self.settings.global_max_active_executions
         global_result = self.dispatcher([selected], global_agents).run()
         self.assertEqual((global_result["outcome"], global_result["limit_scope"]), ("SLOT_FULL", "global"))

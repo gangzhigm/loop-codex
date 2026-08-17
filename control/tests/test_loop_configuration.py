@@ -9,29 +9,26 @@ from _loop_support import *  # noqa: F403
 class LoopConfigurationTests(LoopTestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "4.3.0")
-        self.assertEqual(config["automations"]["worker_interval_minutes"], 20)
+        self.assertEqual(config["config_version"], "4.4.0")
         self.assertEqual(config["prompts"]["operator"], "operator/operator.md")
         self.assertEqual(config["prompts"]["planner"], "planner/planner.md")
         self.assertEqual(config["prompts"]["worker"], "worker/worker.md")
-        self.assertNotIn("health_interval_minutes", config["automations"])
+        self.assertNotIn("automations", config)
         self.assertEqual(config["health"]["scheduler"], "windows_task_scheduler")
         self.assertEqual(config["health"]["interval_minutes"], 30)
         self.assertEqual(config["dashboard"]["port"], 4178)
         self.assertEqual(config["health"]["failure_threshold"], 3)
         self.assertEqual(config["priority_policy"]["levels"], ["blocker", "critical", "high", "medium", "low"])
-        self.assertEqual(set(config["automations"]["capabilities"]), set(CAPABILITY_LEVELS))
         self.assertEqual(set(config["runtime_environments"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
-        self.assertEqual(config["automations"]["runtime_environment"], "codex_automation")
         self.assertEqual(config["task_execution"]["global_max_active_executions"], 8)
         self.assertEqual(
             config["task_execution"]["platform_max_active_executions"],
-            {"codex_automation": 5, "codex_cli": 5, "self_hosted_agent": 5},
+            {"codex_cli": 5, "self_hosted_agent": 5},
         )
         self.assertNotIn("profile_parallel_limits", config["task_execution"])
         self.assertNotIn("capability_parallel_limits", config["task_execution"])
         self.assertEqual(config["planner"]["execution_kind"], "PLANNER")
-        self.assertEqual(config["planner"]["default_runtime_environment"], "codex_automation")
+        self.assertEqual(config["planner"]["default_runtime_environment"], "codex_cli")
         self.assertGreaterEqual(config["planner"]["attempt_timeout_seconds"], config["planner"]["lease_seconds"])
         self.assertEqual(
             config["planner"]["client_boundary"],
@@ -56,32 +53,16 @@ class LoopConfigurationTests(LoopTestCase):
             },
         )
         self.assertEqual(
-            {
-                key: config["automations"]["planner"][key]
-                for key in ("interval_minutes", "model", "reasoning_effort", "sandbox")
-            },
-            {
-                "interval_minutes": 5,
-                "model": "gpt-5.6-terra",
-                "reasoning_effort": "high",
-                "sandbox": "read-only",
-            },
+            config["planner"]["scheduler"],
+            {"scheduled": True, "interval_minutes": 5, "heartbeat_interval_seconds": 15},
         )
         self.assertEqual(set(config["execution_profiles"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
-        for environment in ("codex_automation", "codex_cli"):
-            self.assertEqual(
-                set(config["execution_profiles"][environment]["capabilities"]), set(CAPABILITY_LEVELS)
-            )
+        self.assertEqual(
+            set(config["execution_profiles"]["codex_cli"]["capabilities"]), set(CAPABILITY_LEVELS)
+        )
         self.assertEqual(
             set(config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]),
             set(CAPABILITY_LEVELS),
-        )
-        self.assertEqual(
-            [
-                config["execution_profiles"]["codex_automation"]["capabilities"][level]["model"]
-                for level in CAPABILITY_LEVELS
-            ],
-            ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-sol"],
         )
         self.assertEqual(
             {
@@ -109,7 +90,7 @@ class LoopConfigurationTests(LoopTestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout.lstrip("\ufeff"))
         self.assertEqual(result["outcome"], "VALID")
-        self.assertGreaterEqual(result["checks"], 60)
+        self.assertGreaterEqual(result["checks"], 40)
         self.assertEqual(len(result["operator_actions"]), 4)
 
     def test_database_contains_only_task_tables(self) -> None:
@@ -214,7 +195,7 @@ class LoopConfigurationTests(LoopTestCase):
         self.assertEqual(result["outcome"], "ENQUEUED")
         state = self.run_ctl("state")
         task = next(item for item in state["tasks"] if item["id"] == "MISSING-RUNTIME")
-        self.assertEqual(task["runtime_environment"], "codex_automation")
+        self.assertEqual(task["runtime_environment"], "codex_cli")
         self.assertEqual((task["status"], task["preflight_status"]), ("DRAFT", "UNINSPECTED"))
 
     def test_provider_is_required_only_for_self_hosted_agent(self) -> None:

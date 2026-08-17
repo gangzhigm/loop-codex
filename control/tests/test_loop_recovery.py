@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# 中文排查：心跳、租约、超时、隔离与人工恢复回归。
+# 中文排查：心跳、租约、超时、隔离与 Runner 恢复回归。
 # 公共 fixture 位于 _loop_support.py；业务行为断言保留在各职责模块中。
 
 from _loop_support import *  # noqa: F403
@@ -108,7 +108,7 @@ class LoopRecoveryTests(LoopTestCase):
         database.close()
 
         result = self.claim("exec-detect-timeout")
-        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED")
+        self.assertEqual(result["outcome"], "NO_TASK")
         recovery = result["recovery_required"][0]
         self.assertEqual(recovery["execution_status"], "TIMED_OUT")
         database = connect(self.db_path)
@@ -189,13 +189,13 @@ class LoopRecoveryTests(LoopTestCase):
 
         result = self.claim("exec-lease-detector")
 
-        self.assertEqual(result["outcome"], "RECOVERY_REQUIRED")
+        self.assertEqual(result["outcome"], "NO_TASK")
         recovery = result["recovery_required"][0]
         self.assertTrue(recovery["lease_expired"])
         self.assertFalse(recovery["heartbeat_stalled"])
         self.assertFalse(recovery["attempt_timed_out"])
 
-    def test_codex_stall_requires_human_safe_recovery_and_never_duplicates_scope(self) -> None:
+    def test_runner_stall_requires_termination_confirmation_and_never_duplicates_scope(self) -> None:
         self.add_task("STALLED", "project-1")
         self.claim("exec-stalled")
         self.add_task("SAME-SCOPE", "project-1", priority="low")
@@ -211,7 +211,7 @@ class LoopRecoveryTests(LoopTestCase):
 
         result = self.claim("exec-no-duplicate")
         self.assertEqual(result["outcome"], "CONFLICT")
-        self.assertEqual(result["recovery_required"][0]["recovery_confirmation"], "human_confirmed_safe")
+        self.assertEqual(result["recovery_required"][0]["recovery_confirmation"], "runner_confirmed_terminated")
         database = connect(self.db_path)
         self.assertEqual(
             database.execute("SELECT status FROM executions WHERE execution_id='exec-stalled'").fetchone()[0],
@@ -226,11 +226,9 @@ class LoopRecoveryTests(LoopTestCase):
         ).fetchone()
         self.assertEqual(human_state["status"], "WAITING_HUMAN")
         self.assertEqual(human_state["human_required"], 1)
-        self.assertIn("确认旧 Codex 客户端会话", human_state["human_question"])
+        self.assertIn("受控 Runner 确认旧进程树已终止", human_state["human_question"])
         database.close()
-        error = self.run_ctl_error("recover", "exec-stalled", "--runner-confirmed-terminated")
-        self.assertIn("人工确认", error["message"])
-        recovered = self.run_ctl("recover", "exec-stalled", "--human-confirmed-safe")
+        recovered = self.run_ctl("recover", "exec-stalled", "--runner-confirmed-terminated")
         self.assertEqual(recovered["task_status"], "PENDING")
         database = connect(self.db_path)
         self.assertEqual(
@@ -272,7 +270,7 @@ class LoopRecoveryTests(LoopTestCase):
         self.assertEqual(statuses["NEW-RUNNABLE"], "RUNNING")
         self.assertEqual(statuses["CONFLICT-1"], "PENDING")
         self.assertEqual(statuses["CONFLICT-2"], "PENDING")
-        recovered = self.run_ctl("recover", "exec-blocker", "--human-confirmed-safe")
+        recovered = self.run_ctl("recover", "exec-blocker", "--runner-confirmed-terminated")
         self.assertEqual(recovered["requeued_conflicts"], [])
 
     def test_recovery_failed_and_wait_actions_are_idempotent(self) -> None:
@@ -287,19 +285,19 @@ class LoopRecoveryTests(LoopTestCase):
         self.claim("exec-recovery-detector")
 
         waiting = self.run_ctl(
-            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "wait"
+            "recover", "exec-recovery-actions", "--runner-confirmed-terminated", "--action", "wait"
         )
         self.assertEqual(waiting["outcome"], "WAITING")
         repeated_wait = self.run_ctl(
-            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "wait"
+            "recover", "exec-recovery-actions", "--runner-confirmed-terminated", "--action", "wait"
         )
         self.assertEqual(repeated_wait["outcome"], "ALREADY_WAITING")
         failed = self.run_ctl(
-            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "failed"
+            "recover", "exec-recovery-actions", "--runner-confirmed-terminated", "--action", "failed"
         )
         self.assertEqual(failed["task_status"], "FAILED")
         repeated_failed = self.run_ctl(
-            "recover", "exec-recovery-actions", "--human-confirmed-safe", "--action", "failed"
+            "recover", "exec-recovery-actions", "--runner-confirmed-terminated", "--action", "failed"
         )
         self.assertEqual(repeated_failed["outcome"], "ALREADY_RECOVERED")
         database = connect(self.db_path)
@@ -334,7 +332,7 @@ class LoopRecoveryTests(LoopTestCase):
         self.assertIn("活动 execution", finish_error["message"])
 
         self.run_ctl(
-            "recover", "exec-fenced-old", "--human-confirmed-safe", "--action", "requeue"
+            "recover", "exec-fenced-old", "--runner-confirmed-terminated", "--action", "requeue"
         )
         claimed = self.claim("exec-fenced-new")
         self.assertEqual(claimed["task"]["id"], "FENCED")

@@ -49,7 +49,7 @@ class LoopPlannerTests(LoopTestCase):
         state = self.run_ctl("state")
         task = next(item for item in state["tasks"] if item["id"] == "PREFLIGHT-READY")
         self.assertEqual(task["priority"], "critical")
-        self.assertEqual(task["runtime_environment"], "codex_automation")
+        self.assertEqual(task["runtime_environment"], "codex_cli")
         self.assertEqual(task["capability_level"], "L3")
         self.assertEqual(task["technical_acceptance"], ["运行聚焦回归测试"])
         self.assertEqual(task["preflight_evidence"], ["已核对范围和依赖关系"])

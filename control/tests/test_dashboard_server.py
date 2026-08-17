@@ -28,7 +28,6 @@ from client.dashboard_server import (
     archive_dashboard_task,
     operations_config_payload,
     provider_secret_status,
-    recover_dashboard_task,
     resolve_attachment_image,
 )
 from supervisor.health_run import process_alive
@@ -90,7 +89,7 @@ class AttachmentImageTests(unittest.TestCase):
                 "description": "attachment test",
                 "status": "PENDING",
                 "priority": priority,
-                "runtime_environment": "codex_automation",
+                "runtime_environment": "codex_cli",
                 "created_at": now_shanghai(),
                 "scope": scope or ["project/file.txt"],
                 "lock_mode": lock_mode,
@@ -119,7 +118,7 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(content_type, "image/png")
 
     def test_dashboard_state_exposes_l1_l5_routes_and_capacity_config(self) -> None:
-        self.add_task("DASHBOARD-CODEX", "assets/DASHBOARD-CODEX/reference.png")
+        self.add_task("DASHBOARD-CLI", "assets/DASHBOARD-CLI/reference.png")
         insert_task(
             self.database,
             {
@@ -149,10 +148,10 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "3.7.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
-            {"codex_automation": 5, "codex_cli": 5, "self_hosted_agent": 5},
+            {"codex_cli": 5, "self_hosted_agent": 5},
         )
         self.assertEqual(payload["settings"]["global_max_active_executions"], 8)
-        self.assertEqual(routes["DASHBOARD-CODEX"], ("L2", "codex_automation", None))
+        self.assertEqual(routes["DASHBOARD-CLI"], ("L2", "codex_cli", None))
         self.assertEqual(routes["DASHBOARD-DEEPSEEK"], ("L5", "self_hosted_agent", "deepseek"))
         self.assertEqual(payload["planners"], [])
         self.assertEqual(payload["planner_settings"]["execution_kind"], "PLANNER")
@@ -188,7 +187,7 @@ class AttachmentImageTests(unittest.TestCase):
             "lease_expires_at, runtime_environment, provider_id, capability_level, execution_policy, "
             "model, reasoning, attempt_timeout_seconds, max_retries) VALUES("
             "'active-file-exec', 'ACTIVE-FILE', 'RUNNING', ?, ?, '2999-01-01T00:00:00+08:00', "
-            "'codex_automation', NULL, 'L2', 'automatic', 'gpt-5.6-terra', 'medium', 3600, 0)",
+            "'codex_cli', NULL, 'L2', 'automatic', 'gpt-5.6-terra', 'medium', 3600, 0)",
             (stamp, stamp),
         )
         self.database.execute(
@@ -355,7 +354,7 @@ class AttachmentImageTests(unittest.TestCase):
               execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, finished_at,
               outcome, runtime_environment, provider_id, capability_level, execution_policy, model,
               reasoning, attempt_timeout_seconds, max_retries, termination_reason, recovery_required
-            ) VALUES(?, ?, 'STALLED', ?, ?, ?, ?, 'RECOVERY_REQUIRED', 'codex_automation', NULL,
+            ) VALUES(?, ?, 'STALLED', ?, ?, ?, ?, 'RECOVERY_REQUIRED', 'codex_cli', NULL,
               'L5', 'automatic', 'gpt-5.6-sol', 'xhigh', 14400, 0, 'HEARTBEAT_STALLED', 1)""",
             (execution_id, task_id, stamp, stamp, stamp, stamp),
         )
@@ -383,51 +382,6 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(payload["recoveries"][0]["execution_id"], execution_id)
         self.assertEqual(payload["recoveries"][0]["execution_status"], "STALLED")
         self.assertEqual(payload["recoveries"][0]["scope_status"], "QUARANTINED")
-
-    def test_dashboard_recovery_requires_confirmation_and_requeues_transactionally(self) -> None:
-        execution_id, row_version = self.make_recovery()
-        with self.assertRaisesRegex(DashboardActionError, "明确确认"):
-            recover_dashboard_task(
-                self.db_path, "RECOVERY-TASK", execution_id, "requeue", row_version, False
-            )
-
-        result = recover_dashboard_task(
-            self.db_path, "RECOVERY-TASK", execution_id, "requeue", row_version, True
-        )
-
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["task_status"], "PENDING")
-        task = self.database.execute(
-            "SELECT status, assigned_agent FROM tasks WHERE id='RECOVERY-TASK'"
-        ).fetchone()
-        self.assertEqual((task["status"], task["assigned_agent"]), ("PENDING", None))
-        self.assertEqual(
-            self.database.execute(
-                "SELECT count(*) FROM scope_locks WHERE execution_id=?", (execution_id,)
-            ).fetchone()[0],
-            0,
-        )
-
-    def test_dashboard_continue_waiting_is_idempotent_and_keeps_quarantine(self) -> None:
-        execution_id, row_version = self.make_recovery()
-        first = recover_dashboard_task(
-            self.db_path, "RECOVERY-TASK", execution_id, "wait", row_version, True
-        )
-        next_version = self.database.execute(
-            "SELECT row_version FROM tasks WHERE id='RECOVERY-TASK'"
-        ).fetchone()[0]
-        second = recover_dashboard_task(
-            self.db_path, "RECOVERY-TASK", execution_id, "wait", next_version, True
-        )
-
-        self.assertEqual(first["outcome"], "WAITING")
-        self.assertEqual(second["outcome"], "ALREADY_WAITING")
-        self.assertEqual(
-            self.database.execute(
-                "SELECT status FROM scope_locks WHERE execution_id=?", (execution_id,)
-            ).fetchone()[0],
-            "QUARANTINED",
-        )
 
 class SecretApiTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -612,7 +566,7 @@ class SecretApiTests(unittest.TestCase):
                     "description": "active",
                     "status": "PENDING",
                     "priority": "medium",
-                    "runtime_environment": "codex_automation",
+                    "runtime_environment": "codex_cli",
                     "created_at": now_shanghai(),
                     "scope": ["project/file.txt"],
                     "acceptance": ["test"],
@@ -631,7 +585,7 @@ class SecretApiTests(unittest.TestCase):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     "active-execution", "ACTIVE-TASK", "RUNNING", now_shanghai(), now_shanghai(), now_shanghai(),
-                    "codex_automation", "L1", "automatic", "test-model", "low", 60, 0,
+                    "codex_cli", "L1", "automatic", "test-model", "low", 60, 0,
                 ),
             )
             database.commit()

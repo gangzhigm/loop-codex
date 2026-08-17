@@ -76,7 +76,7 @@ def describe_conflicting_task(
     task_id: str,
     conflicts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """把单个候选任务的冲突包装成 Dashboard 与自动化共用的稳定结构。"""
+    """把单个候选任务的冲突包装成 Dashboard 与 Runner 共用的稳定结构。"""
     return {"task_id": task_id, "conflicts": conflicts}
 
 
@@ -318,7 +318,7 @@ def command_claim(args: argparse.Namespace) -> None:
                 stamp,
                 stamp,
                 f"并发执行 {args.execution_id} 已领取任务。",
-                "在当前自动化对话中执行并验证。",
+                "在当前 Runner execution 中执行并验证。",
                 task_row["id"],
             ),
         )

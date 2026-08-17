@@ -63,7 +63,7 @@ class LoopTestCase(unittest.TestCase):
         project: str,
         priority: str = "medium",
         capability_level: str = "L2",
-        runtime_environment: str = "codex_automation",
+        runtime_environment: str = "codex_cli",
         *,
         provider_id: str | None = None,
         lock_mode: str = "project",
@@ -116,7 +116,7 @@ class LoopTestCase(unittest.TestCase):
         self,
         execution_id: str,
         capability_level: str = "L2",
-        runtime_environment: str = "codex_automation",
+        runtime_environment: str = "codex_cli",
         provider_id: str | None = None,
     ) -> dict[str, object]:
         arguments = [
@@ -206,7 +206,7 @@ class LoopTestCase(unittest.TestCase):
                     "title": task_id,
                     "description": "Operator business description",
                     "priority": "critical",
-                    "runtime_environment": "codex_automation",
+                    "runtime_environment": "codex_cli",
                     "estimated_capability_level": capability,
                     "execution_policy": execution_policy,
                     "scope_hint": ["local-agent-loop/control/loopctl.py"],
@@ -221,7 +221,7 @@ class LoopTestCase(unittest.TestCase):
     def planner_claim(self, execution_id: str) -> dict[str, object]:
         return self.run_ctl(
             "preflight-claim", execution_id,
-            "--runtime-environment", "codex_automation",
+            "--runtime-environment", "codex_cli",
             "--sandbox", "read-only",
         )
 
