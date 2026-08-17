@@ -9,7 +9,7 @@ from _loop_support import *  # noqa: F403
 class LoopConfigurationTests(LoopTestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "4.4.0")
+        self.assertEqual(config["config_version"], "5.0.0")
         self.assertEqual(config["prompts"]["operator"], "operator/operator.md")
         self.assertEqual(config["prompts"]["planner"], "planner/planner.md")
         self.assertEqual(config["prompts"]["worker"], "worker/worker.md")
@@ -23,12 +23,15 @@ class LoopConfigurationTests(LoopTestCase):
         self.assertEqual(config["task_execution"]["global_max_active_executions"], 8)
         self.assertEqual(
             config["task_execution"]["platform_max_active_executions"],
-            {"codex_cli": 5, "self_hosted_agent": 5},
+            {"self_hosted_agent": 8},
         )
         self.assertNotIn("profile_parallel_limits", config["task_execution"])
         self.assertNotIn("capability_parallel_limits", config["task_execution"])
         self.assertEqual(config["planner"]["execution_kind"], "PLANNER")
-        self.assertEqual(config["planner"]["default_runtime_environment"], "codex_cli")
+        self.assertEqual(config["planner"]["default_runtime_environment"], "self_hosted_agent")
+        self.assertEqual(config["planner"]["provider_id"], "deepseek")
+        self.assertEqual(config["planner"]["capability_level"], "L3")
+        self.assertEqual(config["planner"]["max_retries"], 1)
         self.assertGreaterEqual(config["planner"]["attempt_timeout_seconds"], config["planner"]["lease_seconds"])
         self.assertEqual(
             config["planner"]["client_boundary"],
@@ -54,12 +57,14 @@ class LoopConfigurationTests(LoopTestCase):
         )
         self.assertEqual(
             config["planner"]["scheduler"],
-            {"scheduled": True, "interval_minutes": 5, "heartbeat_interval_seconds": 15},
+            {
+                "scheduled": True,
+                "interval_minutes": 5,
+                "heartbeat_interval_seconds": 15,
+                "runner_log_path": "runtime/planner-runner.log",
+            },
         )
         self.assertEqual(set(config["execution_profiles"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
-        self.assertEqual(
-            set(config["execution_profiles"]["codex_cli"]["capabilities"]), set(CAPABILITY_LEVELS)
-        )
         self.assertEqual(
             set(config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]),
             set(CAPABILITY_LEVELS),
@@ -77,7 +82,7 @@ class LoopConfigurationTests(LoopTestCase):
         completed = subprocess.run(
             [
                 "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                str(BASE_DIR / "control" / "deployment_checks" / "check-initialization.ps1"), "-SkipCodexCliCheck",
+                str(BASE_DIR / "control" / "deployment_checks" / "check-initialization.ps1"),
             ],
             cwd=BASE_DIR,
             text=True,
@@ -155,7 +160,8 @@ class LoopConfigurationTests(LoopTestCase):
                     "description": "test",
                     "priority": "medium",
                     "estimated_capability_level": "L2",
-                    "runtime_environment": "codex_cli",
+                    "runtime_environment": "self_hosted_agent",
+                    "provider_id": "deepseek",
                     "scope": ["local-agent-loop/control/loopctl.py"],
                     "acceptance": ["test"],
                 },
@@ -195,10 +201,11 @@ class LoopConfigurationTests(LoopTestCase):
         self.assertEqual(result["outcome"], "ENQUEUED")
         state = self.run_ctl("state")
         task = next(item for item in state["tasks"] if item["id"] == "MISSING-RUNTIME")
-        self.assertEqual(task["runtime_environment"], "codex_cli")
+        self.assertEqual(task["runtime_environment"], "self_hosted_agent")
+        self.assertEqual(task["provider_id"], "deepseek")
         self.assertEqual((task["status"], task["preflight_status"]), ("DRAFT", "UNINSPECTED"))
 
-    def test_provider_is_required_only_for_self_hosted_agent(self) -> None:
+    def test_self_hosted_provider_defaults_and_unknown_provider_is_rejected(self) -> None:
         task_path = Path(self.temporary.name) / "provider-task.json"
         base = {
             "id": "PROVIDER-RULE", "title": "provider", "capability_level": "L2",
@@ -207,23 +214,17 @@ class LoopConfigurationTests(LoopTestCase):
         task_path.write_text(
             json.dumps({**base, "runtime_environment": "self_hosted_agent"}), encoding="utf-8"
         )
-        self.assertIn("必须提供 provider_id", self.run_ctl_error("enqueue", str(task_path))["message"])
-        task_path.write_text(
-            json.dumps({**base, "runtime_environment": "codex_cli", "provider_id": "deepseek"}),
-            encoding="utf-8",
-        )
-        self.assertIn("不得保存 provider_id", self.run_ctl_error("enqueue", str(task_path))["message"])
-        task_path.write_text(
-            json.dumps(
-                {**base, "runtime_environment": "self_hosted_agent", "provider_id": "deepseek"}
-            ),
-            encoding="utf-8",
-        )
         self.assertEqual(self.run_ctl("enqueue", str(task_path))["outcome"], "ENQUEUED")
+        base["id"] = "PROVIDER-UNKNOWN"
+        task_path.write_text(
+            json.dumps({**base, "runtime_environment": "self_hosted_agent", "provider_id": "unknown"}),
+            encoding="utf-8",
+        )
+        self.assertIn("没有匹配的 execution profile", self.run_ctl_error("enqueue", str(task_path))["message"])
 
     def test_invalid_execution_profile_config_is_rejected(self) -> None:
         config = load_initialization_config()
-        config["execution_profiles"]["codex_cli"]["capabilities"]["L2"].pop("max_retries")
+        config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L2"].pop("max_retries")
         config_path = Path(self.temporary.name) / "invalid-config.json"
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
         with self.assertRaises(LoopError):

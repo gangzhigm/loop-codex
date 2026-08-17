@@ -530,6 +530,91 @@ def command_update(args: argparse.Namespace) -> None:
         database.close()
 
 
+def command_migrate_internal_runtime(args: argparse.Namespace) -> None:
+    """把旧 Codex 路由批量迁移到当前内部 Agent，且不改变任务生命周期。"""
+    runtime_environment, provider_id = normalize_execution_target(
+        "self_hosted_agent", "deepseek"
+    )
+    database = connect(args.db)
+    try:
+        transaction(database)
+        tasks = database.execute(
+            "SELECT id, status, runtime_environment, capability_level, "
+            "estimated_capability_level, row_version FROM tasks "
+            "WHERE runtime_environment IN ('codex_cli', 'codex_automation') "
+            "ORDER BY id"
+        ).fetchall()
+        running = [task["id"] for task in tasks if task["status"] == "RUNNING"]
+        if running:
+            raise LoopError(
+                "存在 RUNNING 任务，拒绝迁移运行环境: " + ", ".join(running)
+            )
+
+        for task in tasks:
+            capability_level = (
+                task["capability_level"] or task["estimated_capability_level"]
+            )
+            if capability_level is not None:
+                resolve_execution_profile(
+                    runtime_environment, provider_id, capability_level
+                )
+
+        if not tasks:
+            commit(database)
+            output(
+                {
+                    "outcome": "ALREADY_MIGRATED",
+                    "migrated_tasks": 0,
+                    "runtime_environment": runtime_environment,
+                    "provider_id": provider_id,
+                }
+            )
+
+        stamp = now_shanghai()
+        reason = (
+            args.reason
+            or "旧 Codex CLI/客户端任务路由迁移到内部 self-hosted Agent。"
+        )
+        source_counts: dict[str, int] = {}
+        for task in tasks:
+            source = task["runtime_environment"]
+            source_counts[source] = source_counts.get(source, 0) + 1
+            database.execute(
+                "UPDATE tasks SET runtime_environment=?, provider_id=?, updated_at=?, "
+                "row_version=row_version+1 WHERE id=? AND row_version=?",
+                (
+                    runtime_environment,
+                    provider_id,
+                    stamp,
+                    task["id"],
+                    task["row_version"],
+                ),
+            )
+            database.execute(
+                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+                "VALUES(?, ?, ?, ?, 'task-manager', ?)",
+                (task["id"], stamp, task["status"], task["status"], reason),
+            )
+
+        revision = bump_revision(database, "task-manager")
+        commit(database)
+        output(
+            {
+                "outcome": "RUNTIME_TARGET_MIGRATED",
+                "migrated_tasks": len(tasks),
+                "source_counts": source_counts,
+                "runtime_environment": runtime_environment,
+                "provider_id": provider_id,
+                "revision": revision,
+            }
+        )
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
 def command_requeue(args: argparse.Namespace) -> None:
     """按当前预检状态把任务送回 Planner 或 Worker 队列。
 

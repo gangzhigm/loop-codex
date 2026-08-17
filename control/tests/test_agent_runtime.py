@@ -483,7 +483,7 @@ class AgentRuntimeTests(unittest.TestCase):
 
     def test_routing_mismatch_finishes_as_failed(self) -> None:
         provider = ScriptedProvider([])
-        claim = {"outcome": "CLAIMED", "task": self.task(runtime_environment="codex_cli")}
+        claim = {"outcome": "CLAIMED", "task": self.task(provider_id="other")}
         result, controller = self.run_agent(provider, claim)
         self.assertEqual(result["result"]["status"], "FAILED")
         self.assertEqual(len(controller.finishes), 1)

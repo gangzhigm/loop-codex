@@ -8,19 +8,19 @@ from _loop_support import *  # noqa: F403
 
 class LoopRecoveryTests(LoopTestCase):
     def test_runner_confirmed_recovery_releases_capacity_and_scope(self) -> None:
-        self.add_task("LEASE", "project-1", runtime_environment="codex_cli")
-        self.claim("exec-old", runtime_environment="codex_cli")
+        self.add_task("LEASE", "project-1")
+        self.claim("exec-old")
         database = connect(self.db_path)
         database.execute("UPDATE executions SET lease_expires_at='2000-01-01T00:00:00+08:00' WHERE execution_id='exec-old'")
         database.execute("UPDATE scope_locks SET lease_expires_at='2000-01-01T00:00:00+08:00' WHERE execution_id='exec-old'")
         database.close()
-        pending = self.claim("exec-blocked", runtime_environment="codex_cli")
+        pending = self.claim("exec-blocked")
         self.assertEqual(pending["outcome"], "NO_TASK")
         self.assertEqual(pending["recovery_required"][0]["recovery_confirmation"], "runner_confirmed_terminated")
         recovered = self.run_ctl("recover", "exec-old", "--runner-confirmed-terminated")
         self.assertEqual(recovered["outcome"], "RECOVERED")
         self.assertEqual(recovered["task_status"], "PENDING")
-        result = self.claim("exec-new", runtime_environment="codex_cli")
+        result = self.claim("exec-new")
         self.assertEqual(result["outcome"], "CLAIMED")
         self.assertEqual(result["task"]["id"], "LEASE")
         self.assertEqual(result["task"]["attempt"], 2)

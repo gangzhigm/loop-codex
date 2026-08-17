@@ -75,9 +75,8 @@
 
 ## 运行环境规则
 
-- `codex_cli`：只由 Codex CLI Runner 显式领取；不得由其他入口兜底领取。
-- `self_hosted_agent`：只由指定 Provider 的自建 Agent 显式领取；不得通过 Codex CLI 入口兜底领取。使用 DeepSeek 时必须显式设置 `provider_id=deepseek`。
-- `codex_automation` 只可能出现在已有 SQLite 历史记录中，不是当前可选运行环境；新建、更新或重新执行任务时必须选择当前配置登记的内部环境。
+- `self_hosted_agent`：只由指定 Provider 的内部 Agent 显式领取。使用 DeepSeek 时必须显式设置 `provider_id=deepseek`。
+- `codex_automation` 和 `codex_cli` 只可能出现在已有 SQLite 历史记录中，不是当前可选运行环境；新建、更新或重新执行任务时必须选择当前配置登记的内部环境。
 - 用户没有明确指定运行环境时，使用 `planner.default_runtime_environment`；用户明确指定已登记环境时以用户选择为准，不得让其他入口兜底领取。
 - 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。用户未指定时允许 `enqueue` 使用 `planner.default_runtime_environment`；Operator 必须在结果中说明采用了该默认值。Planner 不得改变已保存的环境。
 - 环境已登记不等于对应 Runner 已可用。创建任务时只保存路由事实；任务必须先完成 Planner 预检。进入 `PENDING/READY` 后再依据可核对的配置或运行状态判断入口是否可用，缺少证据时不得伪称 Runner 已启动。

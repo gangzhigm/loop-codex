@@ -31,7 +31,6 @@ class InstructionAuthorityTests(unittest.TestCase):
             "operator": "operator/operator.md",
             "planner": "planner/planner.md",
             "worker": "worker/worker.md",
-            "cli_worker": "runner/cli-worker.md",
         }
 
         self.assertEqual(self.config["prompts"], expected)
@@ -41,12 +40,11 @@ class InstructionAuthorityTests(unittest.TestCase):
                 self.assertIn(f"`{relative_path}`", self.agents)
                 self.assertIn(f"`{relative_path}`", self.readme)
 
-        self.assertEqual(self.config["codex_cli"]["prompt"], expected["cli_worker"])
-
     def test_runtime_authorities_are_documented_and_exist(self) -> None:
         authorities = (
-            "runner/codex_cli_runner.py",
+            "runner/planner_runner.py",
             "runner/agent_runtime.py",
+            "dispatcher/agent_dispatcher.py",
             "control/loop_agent/providers/deepseek.py",
             "control/loopdb.py",
             "control/loopctl.py",
@@ -88,8 +86,6 @@ class InstructionAuthorityTests(unittest.TestCase):
         self.assertIn("本文只供人工快速了解和排障", self.readme)
         self.assertNotIn("docs/architecture.md", self.readme)
         self.assertNotIn("docs/initialization.md", self.readme)
-        self.assertNotIn("install_codex_cli_task.ps1", self.readme)
-
         for relative_path in ("planner/planner.md", "worker/worker.md"):
             with self.subTest(role_context=relative_path):
                 text = (ROOT / relative_path).read_text(encoding="utf-8")
@@ -101,7 +97,6 @@ class InstructionAuthorityTests(unittest.TestCase):
             "operator/operator.md",
             "planner/planner.md",
             "worker/worker.md",
-            "runner/cli-worker.md",
         )
         prompt_text = "\n".join(
             (ROOT / relative_path).read_text(encoding="utf-8")
@@ -131,10 +126,7 @@ class InstructionAuthorityTests(unittest.TestCase):
                 self.assertIn("config/initialization.json", text.replace("\\", "/"))
 
     def test_workers_record_only_safe_rejected_test_temporary_cleanup(self) -> None:
-        for relative_path, actor in (
-            ("worker/worker.md", "execution"),
-            ("runner/cli-worker.md", "attempt"),
-        ):
+        for relative_path, actor in (("worker/worker.md", "execution"),):
             with self.subTest(role_prompt=relative_path):
                 text = (ROOT / relative_path).read_text(encoding="utf-8")
                 self.assertIn("普通测试日志或可丢弃测试临时文件", text)

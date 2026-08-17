@@ -28,6 +28,7 @@ from common.paths import (
     HEARTBEAT_PATH,
     REPOSITORY_ROOT,
 )
+from common.runners import runner_snapshot
 from common.windows import process_alive, windows_powershell
 
 
@@ -113,7 +114,7 @@ def component_specs(config: dict[str, Any]) -> tuple[ComponentSpec, ComponentSpe
     dispatcher = build(
         "dispatcher",
         "Dispatcher Scheduler",
-        config["codex_cli"]["dispatcher"]["scheduled"] is True,
+        config["dispatcher"]["scheduled"] is True,
     )
     return planner, dispatcher
 
@@ -416,8 +417,9 @@ def component_snapshot(
     dashboard_error: str | None,
     start_timeout_seconds: float,
     stop_timeout_seconds: float,
+    runner_heartbeat_timeout_seconds: float = 120,
 ) -> dict[str, dict[str, Any]]:
-    """管理三个常驻组件并返回本轮可验证状态。"""
+    """管理三个常驻组件，并只读汇总动态 Runner 状态。"""
     checked_at = now_shanghai()
     dashboard = {
         "component": "dashboard-server",
@@ -451,4 +453,22 @@ def component_snapshot(
             }
 
     planner, dispatcher = (inspect(spec) for spec in specs)
-    return {"dashboard": dashboard, "planner": planner, "dispatcher": dispatcher}
+    try:
+        runners = runner_snapshot(runner_heartbeat_timeout_seconds)
+    except Exception as error:
+        # 动态 Runner 的观察故障不能影响 Scheduler 管理或 Supervisor heartbeat。
+        runners = {
+            "component": "runners",
+            "status": "UNAVAILABLE",
+            "checked_at": now_shanghai(),
+            "active_count": 0,
+            "observed_count": 0,
+            "message": f"Runner 状态读取失败：{type(error).__name__}",
+            "instances": [],
+        }
+    return {
+        "dashboard": dashboard,
+        "planner": planner,
+        "dispatcher": dispatcher,
+        "runners": runners,
+    }

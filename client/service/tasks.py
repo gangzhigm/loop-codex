@@ -185,6 +185,12 @@ def runtime_health(
             item for item in monitors.values()
             if isinstance(item, dict) and isinstance(item.get("component"), str)
         )
+        runners = monitors.get("runners")
+        if isinstance(runners, dict) and isinstance(runners.get("instances"), list):
+            services.extend(
+                item for item in runners["instances"]
+                if isinstance(item, dict) and isinstance(item.get("component"), str)
+            )
     events = [
         item for item in (value.get("events") or []) if isinstance(item, dict)
     ][:12]

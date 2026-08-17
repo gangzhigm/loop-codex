@@ -91,8 +91,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     priority_policy = config.get("priority_policy") or {}
     dashboard = config.get("dashboard") or {}
     planner_scheduler = planner.get("scheduler") or {}
-    codex_cli = config.get("codex_cli") or {}
-    dispatcher = codex_cli.get("dispatcher") or {}
+    dispatcher = config.get("dispatcher") or {}
     health = config.get("health") or {}
     supervisor = config.get("supervisor") or {}
     supervisor_components = supervisor.get("components") or {}
@@ -154,15 +153,9 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and isinstance(item.get("max_retries"), int)
         and 0 <= item["max_retries"] <= 10
     )
-    direct_profiles_valid = all(
-        isinstance(execution_profiles.get(environment), dict)
-        and execution_profiles[environment].get("provider_id") is None
-        and set((execution_profiles[environment].get("capabilities") or {})) == set(CAPABILITY_LEVELS)
-        and all(valid_profile_fields(item) for item in execution_profiles[environment]["capabilities"].values())
-        for environment in ("codex_cli",)
-    )
     self_hosted_profiles = execution_profiles.get("self_hosted_agent") or {}
     providers = self_hosted_profiles.get("providers") or {}
+    provider_factories = self_hosted_agent.get("provider_factories") or {}
     self_hosted_profiles_valid = (
         isinstance(providers, dict) and bool(providers)
         and all(
@@ -172,9 +165,16 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
             and all(valid_profile_fields(profile) for profile in item["capabilities"].values())
             for provider, item in providers.items()
         )
+        and set(provider_factories) == set(providers)
+        and all(
+            isinstance(specification, str)
+            and specification.count(":") == 1
+            and all(part.strip() for part in specification.split(":"))
+            for specification in provider_factories.values()
+        )
     )
     valid = (
-        config.get("config_version") == "4.4.0"
+        config.get("config_version") == "5.0.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -184,11 +184,9 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and prompts.get("operator") == "operator/operator.md"
         and prompts.get("planner") == "planner/planner.md"
         and prompts.get("worker") == "worker/worker.md"
-        and prompts.get("cli_worker") == "runner/cli-worker.md"
         and (BASE_DIR / prompts["operator"]).is_file()
         and (BASE_DIR / prompts["planner"]).is_file()
         and (BASE_DIR / prompts["worker"]).is_file()
-        and (BASE_DIR / prompts["cli_worker"]).is_file()
         and isinstance(execution.get("heartbeat_interval_seconds"), int)
         and execution["heartbeat_interval_seconds"] >= 1
         and isinstance(execution.get("stalled_after_seconds"), int)
@@ -207,7 +205,12 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and execution.get("scope_conflict_mode") == "project"
         and isinstance(execution.get("require_human_approval_for"), list)
         and planner.get("execution_kind") == "PLANNER"
-        and planner.get("default_runtime_environment") in CANONICAL_RUNTIME_ENVIRONMENTS
+        and planner.get("default_runtime_environment") == "self_hosted_agent"
+        and planner.get("provider_id") in providers
+        and planner.get("provider_id") in provider_factories
+        and planner.get("capability_level") in CAPABILITY_LEVELS
+        and isinstance(planner.get("max_retries"), int)
+        and planner["max_retries"] >= 0
         and isinstance(planner.get("max_active_executions"), int)
         and planner["max_active_executions"] >= 1
         and isinstance(planner.get("heartbeat_interval_seconds"), int)
@@ -223,6 +226,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner_scheduler["interval_minutes"] >= 1
         and isinstance(planner_scheduler.get("heartbeat_interval_seconds"), int)
         and planner_scheduler["heartbeat_interval_seconds"] >= 1
+        and planner_scheduler.get("runner_log_path") == "runtime/planner-runner.log"
+        and (BASE_DIR / planner_scheduler["runner_log_path"]).resolve().is_relative_to(BASE_DIR)
         and planner_boundary.get("sandbox") == "read-only"
         and planner_boundary.get("approval_policy") == "never"
         and planner_boundary.get("network_access") is False
@@ -272,11 +277,19 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and isinstance(dashboard.get("poll_interval_ms"), int)
         and dashboard["poll_interval_ms"] >= 500
         and isinstance(dispatcher.get("scheduled"), bool)
+        and isinstance(dispatcher.get("interval_minutes"), int)
+        and dispatcher["interval_minutes"] >= 1
         and isinstance(dispatcher.get("heartbeat_interval_seconds"), int)
         and dispatcher["heartbeat_interval_seconds"] >= 1
+        and dispatcher.get("working_directory") == str(BASE_DIR)
+        and dispatcher.get("log_path") == "runtime/agent-dispatcher.log"
+        and (BASE_DIR / dispatcher["log_path"]).resolve().is_relative_to(BASE_DIR)
+        and dispatcher.get("runtime_environment") == "self_hosted_agent"
+        and dispatcher.get("provider_id") in providers
+        and isinstance(dispatcher.get("supported_capability_levels"), list)
+        and set(dispatcher["supported_capability_levels"]) == set(CAPABILITY_LEVELS)
         and valid_runtime_environment_config
         and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
-        and direct_profiles_valid
         and self_hosted_profiles_valid
         and health.get("scheduler") == "windows_task_scheduler"
         and isinstance(health.get("task_name"), str)
@@ -293,6 +306,10 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and supervisor["component_start_timeout_seconds"] >= 1
         and isinstance(supervisor.get("component_stop_timeout_seconds"), (int, float))
         and supervisor["component_stop_timeout_seconds"] >= 1
+        and isinstance(supervisor.get("runner_heartbeat_timeout_seconds"), (int, float))
+        and supervisor["runner_heartbeat_timeout_seconds"] >= max(
+            execution["heartbeat_interval_seconds"], planner["heartbeat_interval_seconds"]
+        )
         and valid_supervisor_components
         and supervisor_components["planner"]["heartbeat_timeout_seconds"]
         >= planner_scheduler["heartbeat_interval_seconds"]

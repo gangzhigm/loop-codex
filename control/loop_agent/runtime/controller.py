@@ -24,7 +24,7 @@ class SubprocessLoopController:
     """通过 UTF-8 JSON CLI 调用权威 SQLite 控制面。
 
     Runtime 刻意不直接导入或调用数据库修改函数。该适配器让 claim、heartbeat 和 finish
-    继续受 Codex 与 Dashboard 调用方共用的校验约束。
+    继续受 Runner 与 Dashboard 调用方共用的校验约束。
     """
 
     def __init__(

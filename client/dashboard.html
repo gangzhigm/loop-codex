@@ -513,6 +513,29 @@
       line-height: 1.4;
     }
 
+    .runtime-runner-list {
+      position: relative;
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+    }
+
+    .runtime-runner-list:not(:empty)::before {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      width: 1px;
+      height: 12px;
+      background: var(--line-strong);
+      content: "";
+    }
+
+    .runtime-runner-list .runtime-node {
+      min-height: 82px;
+      background: var(--surface-subtle);
+    }
+
     /* 五、主工作区：左侧任务表，右侧只显示调度容量；窄屏下改为单列。 */
     .content-grid {
       flex: 1 1 auto;
@@ -1747,8 +1770,14 @@
         <div id="runtimeSupervisor" class="runtime-root"></div>
         <div class="runtime-stem" aria-hidden="true"></div>
         <div class="runtime-targets">
-          <div id="runtimePlanner" class="runtime-target"></div>
-          <div id="runtimeDispatcher" class="runtime-target"></div>
+          <div class="runtime-target">
+            <div id="runtimePlanner"></div>
+            <div id="runtimePlannerRunners" class="runtime-runner-list"></div>
+          </div>
+          <div class="runtime-target">
+            <div id="runtimeDispatcher"></div>
+            <div id="runtimeWorkerRunners" class="runtime-runner-list"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -1876,7 +1905,14 @@
       STOP_FAILED: "停止失败",
       BLOCKED: "恢复受阻",
       UNHEALTHY: "异常",
-      NEEDS_ATTENTION: "需要处理"
+      NEEDS_ATTENTION: "需要处理",
+      STALE: "心跳超时",
+      PROCESS_MISSING: "进程不存在",
+      IDENTITY_MISMATCH: "身份不匹配",
+      WORKER_MISSING: "AI 进程不存在",
+      INVALID_STATE: "状态无效",
+      UNAVAILABLE: "不可观察",
+      IDLE: "空闲"
     };
     const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpeg", "jpg", "png", "webp"]);
 
@@ -1913,6 +1949,8 @@
       runtimeSupervisor: document.querySelector("#runtimeSupervisor"),
       runtimePlanner: document.querySelector("#runtimePlanner"),
       runtimeDispatcher: document.querySelector("#runtimeDispatcher"),
+      runtimePlannerRunners: document.querySelector("#runtimePlannerRunners"),
+      runtimeWorkerRunners: document.querySelector("#runtimeWorkerRunners"),
       profileList: document.querySelector("#profileList"),
       profileCount: document.querySelector("#profileCount"),
       taskDialog: document.querySelector("#taskDialog"),
@@ -2002,7 +2040,7 @@
       if (["HEALTHY"].includes(status)) return "healthy";
       if (["RESTARTED"].includes(status)) return "active";
       if (["RESTARTING", "STOPPING"].includes(status)) return "warning";
-      if (["STOP_FAILED", "BLOCKED", "UNHEALTHY", "NEEDS_ATTENTION"].includes(status)) return "danger";
+      if (["STOP_FAILED", "BLOCKED", "UNHEALTHY", "NEEDS_ATTENTION", "STALE", "PROCESS_MISSING", "IDENTITY_MISMATCH", "WORKER_MISSING", "INVALID_STATE", "UNAVAILABLE"].includes(status)) return "danger";
       return "neutral";
     }
 
@@ -2024,6 +2062,17 @@
       </article>`;
     }
 
+    function renderRunnerList(container, services, mode, label) {
+      const runners = services
+        .filter((item) => item?.mode === mode && String(item?.component ?? "").startsWith("runner:"))
+        .sort((left, right) => String(left?.started_at ?? "").localeCompare(String(right?.started_at ?? "")));
+      container.innerHTML = runners.map((runner, index) => {
+        const identity = runner?.task_id || runner?.execution_id || String(index + 1);
+        return runtimeNodeMarkup(`${label} · ${identity}`, runner);
+      }).join("");
+      return runners;
+    }
+
     function renderRuntimeChain(services) {
       const values = Array.isArray(services) ? services : [];
       const byComponent = new Map(values
@@ -2035,7 +2084,9 @@
       elements.runtimeSupervisor.innerHTML = runtimeNodeMarkup("Supervisor", supervisor);
       elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Scheduler", planner);
       elements.runtimeDispatcher.innerHTML = runtimeNodeMarkup("Dispatcher Scheduler", dispatcher);
-      const timestamps = [supervisor, planner, dispatcher]
+      const plannerRunners = renderRunnerList(elements.runtimePlannerRunners, values, "planner", "Planner Runner");
+      const workerRunners = renderRunnerList(elements.runtimeWorkerRunners, values, "worker", "Worker Runner");
+      const timestamps = [supervisor, planner, dispatcher, ...plannerRunners, ...workerRunners]
         .map((item) => item?.heartbeat?.checked_at ?? item?.checked_at)
         .map((value) => new Date(value ?? "").getTime())
         .filter(Number.isFinite);

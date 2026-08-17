@@ -17,10 +17,9 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 | `../planner/control.py` | Planner 的只读静态预检状态机 | 业务实现与 scope 写锁 |
 | `../planner/main.py` | Planner Scheduler 单实例、PID 与 heartbeat | 任务预检业务实现 |
 | `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
-| `../dispatcher/codex_cli_dispatcher.py` | 只读选择一个 Codex CLI 能力等级并启动一次 Runner | 原子 claim 与业务实现 |
+| `../dispatcher/agent_dispatcher.py` | 只读选择一个内部 Provider 任务并启动一次 Runner | 原子 claim 与业务实现 |
 | `../dispatcher/main.py` | Dispatcher Scheduler 单实例、heartbeat 与周期调度 | Supervisor 探活 |
-| `../runner/codex_cli_runner.py` | 单任务 Codex CLI 进程、heartbeat、finish | 周期调度 |
-| `../runner/agent_runtime.py` | Self-hosted Agent 启动和 Provider 工厂 | 工具循环具体实现 |
+| `../runner/agent_runtime.py` | 内部 Agent 的 claim、heartbeat、Provider 工具循环和 finish | 周期调度 |
 | `../supervisor/main.py` | 托管 Dashboard，并按 PID 与 heartbeat 管理两个 Scheduler | 任务查询、领取与任务表写入 |
 | `../client/dashboard_server.py` | 本机 HTTP 路由、Secret API、静态资源服务 | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
@@ -163,11 +162,9 @@ python -m unittest discover -s control/tests -p "test_loop_*.py"
 python control/tests/test_dashboard_server.py
 python control/tests/test_agent_runtime.py
 python control/tests/test_deepseek_provider.py
-python control/tests/test_codex_cli_runner.py
-python control/tests/test_codex_cli_dispatcher.py
 python control/tests/test_secret_store.py
 python control/tests/test_instruction_authority.py
-powershell -NoProfile -ExecutionPolicy Bypass -File control/deployment_checks/check-initialization.ps1 -SkipCodexCliCheck
+powershell -NoProfile -ExecutionPolicy Bypass -File control/deployment_checks/check-initialization.ps1
 node control/deployment_checks/check-dashboard.mjs
 python control/loopctl.py validate
 ```

@@ -1,7 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$ConfigPath,
-    [switch]$SkipCodexCliCheck
+    [string]$ConfigPath
 )
 
 <#
@@ -41,15 +40,14 @@ $root = Split-Path -Parent (Split-Path -Parent $resolvedConfig)
 $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
-Assert-Condition ($config.config_version -eq '4.4.0') 'config_version 为 4.4.0'
+Assert-Condition ($config.config_version -eq '5.0.0') 'config_version 为 5.0.0'
 Assert-Condition ($config.database.schema_version -eq '3.7.0') 'Schema 契约为 3.7.0'
 Assert-Condition ($config.prompts.planner -eq 'planner/planner.md') 'Planner 提示词路径唯一且已登记'
 
 $promptPaths = @(
     $config.prompts.operator,
     $config.prompts.planner,
-    $config.prompts.worker,
-    $config.prompts.cli_worker
+    $config.prompts.worker
 )
 foreach ($relativePath in $promptPaths) {
     $fullPath = Join-Path $root $relativePath
@@ -83,24 +81,26 @@ $plannerScheduler = $config.planner.scheduler
 Assert-Condition ($plannerScheduler.scheduled -is [bool]) 'Planner Scheduler 开关为布尔值'
 Assert-Condition ($plannerScheduler.interval_minutes -ge 1) 'Planner Scheduler 周期有效'
 Assert-Condition ($plannerScheduler.heartbeat_interval_seconds -ge 1) 'Planner Scheduler heartbeat 周期有效'
-Assert-Condition ($config.planner.default_runtime_environment -eq 'codex_cli') 'Planner 默认目标为内部 Codex CLI 环境'
+Assert-Condition ($config.planner.default_runtime_environment -eq 'self_hosted_agent') 'Planner 默认目标为内部 Agent 环境'
+Assert-Condition ($config.planner.provider_id -eq 'deepseek') 'Planner 显式登记内部 Provider'
 Assert-Condition ($null -eq $config.automations) '初始化配置不包含外部客户端自动化定义'
 $runtimeNames = @($config.runtime_environments.PSObject.Properties.Name | Sort-Object)
-Assert-Condition (($runtimeNames -join '|') -eq 'codex_cli|self_hosted_agent') '只登记两个内部运行环境'
+Assert-Condition (($runtimeNames -join '|') -eq 'self_hosted_agent') '只登记内部 Agent 运行环境'
 $profileNames = @($config.execution_profiles.PSObject.Properties.Name | Sort-Object)
-Assert-Condition (($profileNames -join '|') -eq 'codex_cli|self_hosted_agent') '只登记两个内部 execution profile'
+Assert-Condition (($profileNames -join '|') -eq 'self_hosted_agent') '只登记内部 Agent execution profile'
+Assert-Condition ($config.dispatcher.runtime_environment -eq 'self_hosted_agent') 'Dispatcher 只分发内部 Agent 任务'
+Assert-Condition ($config.dispatcher.provider_id -eq 'deepseek') 'Dispatcher 显式登记内部 Provider'
 
 $operatorPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.operator)
 $plannerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.planner)
 $workerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.worker)
-$cliPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.cli_worker)
 $loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'control\loopctl.py')
 $plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'planner\control.py')
 $controlIoSource = Read-Utf8Strict -Path (Join-Path $root 'control\loop_agent\control\io.py')
 Assert-Condition ($plannerPrompt -match 'preflight-claim') 'Planner 提示词包含单次 claim 协议'
-Assert-Condition ($plannerPrompt -match '--sandbox read-only') 'Planner 提示词核对只读入口'
+Assert-Condition ($plannerPrompt -match 'sandbox=read-only') 'Planner 提示词核对只读入口'
 Assert-Condition ($plannerPrompt -match 'preflight-needs-review') 'Planner 提示词包含人工复核分支'
-Assert-Condition ($plannerPrompt -match '控制面会拒绝明显损坏的 payload') 'Planner 提示词要求 UTF-8 写回完整性检查'
+Assert-Condition ($plannerPrompt -match 'Unicode replacement character') 'Planner 提示词要求 UTF-8 写回完整性检查'
 Assert-Condition ($plannerPrompt -match 'APPROVED_PLANNER_ESCALATION') 'Planner 提示词要求 L5/manual 明确批准'
 Assert-Condition ($plannerPrompt -match '不得实现任务') 'Planner 提示词禁止实现业务任务'
 Assert-Condition ($operatorPrompt -match 'APPROVED_PLANNER_ESCALATION') 'Operator 提示词记录 L5/manual 批准'
@@ -120,26 +120,13 @@ Assert-Condition ($workerPrompt -match 'scope_lock_credential') 'Worker 编辑�
 Assert-Condition ($workerPrompt -match 'extend-scope') 'Worker 新范围写入前原子扩锁'
 Assert-Condition ($workerPrompt -match '唯一允许自动恢复的已跟踪范围外文件') 'Worker 仅允许自动恢复严格证明归属的已跟踪字节码缓存'
 Assert-Condition ($workerPrompt -match '不得删除文件、修改索引、使用通配符或递归操作') 'Worker 字节码恢复不得扩大为删除或批量回退权限'
-Assert-Condition ($cliPrompt -match '唯一允许自动恢复的已跟踪范围外文件') 'CLI Worker 使用相同的已跟踪字节码缓存恢复边界'
-Assert-Condition ($cliPrompt -match 'PENDING/READY') 'CLI Worker 只执行 READY 任务'
-Assert-Condition ($cliPrompt -match 'extend-scope') 'CLI Worker 遵循宿主扩锁契约'
-
-$codexVersion = $null
-if (-not $SkipCodexCliCheck) {
-    $codexCommand = Get-Command codex -ErrorAction Stop
-    $codexVersion = (& $codexCommand.Source --version 2>&1 | Out-String).Trim()
-    Assert-Condition ($LASTEXITCODE -eq 0) '本机 Codex CLI 可执行'
-    $codexHelp = (& $codexCommand.Source --help 2>&1 | Out-String)
-    Assert-Condition ($LASTEXITCODE -eq 0) '本机 Codex CLI help 可读取'
-    Assert-Condition ($codexHelp -match 'read-only') '本机 Codex CLI 明确支持 read-only sandbox'
-    Assert-Condition ($codexHelp -match 'dangerously-bypass-approvals-and-sandbox') '初始化检查识别危险 bypass 参数'
-}
+Assert-Condition ($config.self_hosted_agent.provider_factories.deepseek -eq 'loop_agent.providers.deepseek:create_provider') '内部 Provider 工厂路径已登记'
 
 [ordered]@{
     outcome = 'VALID'
     config = $resolvedConfig
     checks = $script:Checks.Count
-    codex_cli = $codexVersion
+    runtime_environment = 'self_hosted_agent'
     operator_actions = @(
         '复核 Planner Scheduler 的启停、轮询周期和 heartbeat 边界。',
         '逐条复核内部运行环境 L1-L5 的模型、reasoning 和 attempt 参数。',

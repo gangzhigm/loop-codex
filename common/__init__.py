@@ -1,4 +1,4 @@
-"""项目长期运行入口共享的 Windows 进程、运行文件和健康管理方法。"""
+"""跨角色共享的 Windows 进程、运行文件和无业务状态工具。"""
 
 from __future__ import annotations
 

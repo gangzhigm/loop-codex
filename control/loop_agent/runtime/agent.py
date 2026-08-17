@@ -16,10 +16,8 @@ from __future__ import annotations
 # 若超时线程仍存活，必须保留隔离并等待恢复流程，不能启动第二个写入者。
 
 import os
-import queue
 import shutil
 import subprocess
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -42,6 +40,7 @@ from loop_agent.runtime.core import (
 from loop_agent.runtime.diagnostics import ProviderDiagnostic, TrustedDiagnosticError
 from loop_agent.runtime.protocol import approved_actions, validate_model_response
 from loop_agent.runtime.sandbox import ScopePolicy, ToolSandbox
+from common.providers import call_provider
 from loopdb import (
     CAPABILITY_LEVELS,
     CANONICAL_RUNTIME_ENVIRONMENTS,
@@ -526,42 +525,17 @@ class SingleTaskAgent:
         self, request: dict[str, Any], deadline: float
     ) -> dict[str, Any]:
         """在 attempt 剩余截止时间内执行一次 Provider 请求。"""
-        completed: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
         attempt_remaining = self._remaining_attempt_seconds(deadline)
         request_timeout_seconds = min(
             self.settings.model_timeout_seconds, attempt_remaining
         )
-
-        def invoke() -> None:
-            try:
-                completed.put(
-                    (
-                        "result",
-                        self.provider.complete(request, request_timeout_seconds),
-                    )
-                )
-            except BaseException as error:
-                completed.put(("error", error))
-
-        thread = threading.Thread(
-            target=invoke, name="model-provider", daemon=True
+        value = call_provider(
+            self.provider,
+            request,
+            request_timeout_seconds,
+            attempt_remaining,
+            self.settings.provider_termination_grace_seconds,
         )
-        thread.start()
-        try:
-            outcome, value = completed.get(timeout=attempt_remaining)
-        except queue.Empty as error:
-            thread.join(timeout=self.settings.provider_termination_grace_seconds)
-            if thread.is_alive():
-                raise OwnedWorkStillRunning(
-                    "model provider remained active after the attempt timeout"
-                ) from error
-            raise AgentAttemptTimeout("agent attempt timed out") from error
-        if outcome == "error":
-            if isinstance(value, TimeoutError):
-                raise ModelRequestTimeout(
-                    "model provider request timed out"
-                ) from value
-            raise value
         self._remaining_attempt_seconds(deadline)
         return value
 

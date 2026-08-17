@@ -17,13 +17,13 @@ py -3 .\supervisor\main.py serve
 ```
 
 Dashboard 默认地址、端口及其他部署参数以 `config/initialization.json` 为准。
-`serve` 用于人工前台运行，托管 Dashboard 并周期检查 Dashboard、Planner 和 Codex CLI Dispatcher；
+`serve` 用于人工前台运行，托管 Dashboard，并周期检查 Dashboard、Planner、内部 Agent Dispatcher 和动态 Runner；
 Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活和必要恢复。
 
 ## 工作流程
 
 1. Operator 通过 `loopctl.py` 创建或更新任务；新任务进入 `DRAFT/UNINSPECTED`。
-2. Planner 只读检查目标项目，补充精确 scope、能力等级、锁模式和技术验收。
+2. Planner Scheduler 启动一次性 Planner Runner；Runner 托管只读 AI 预检并写回精确 scope、能力等级、锁模式和技术验收。
 3. 预检通过后任务进入 `PENDING/READY`，由匹配运行环境和能力等级的 Worker 领取。
 4. Worker 持有有效 scope 锁后实现并验证，最终写回 `SUCCEEDED`、`FAILED` 或 `WAITING_HUMAN`。
 5. 人工复核成功任务后执行 `confirm`；终态任务可独立归档。
@@ -36,12 +36,13 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 | --- | --- |
 | 跨角色安全边界和角色入口 | `AGENTS.md` |
 | Operator、Planner、通用 Worker 协议 | `operator/operator.md`、`planner/planner.md`、`worker/worker.md` |
-| Codex CLI 子进程协议 | `runner/cli-worker.md` |
+| 内部 Agent Worker 协议 | `worker/worker.md`、`runner/agent_runtime.py` |
 | 运行环境、模型、周期、并发和部署参数 | `config/initialization.json` |
 | 任务、预检、execution、依赖和 scope 锁事实 | `data/loop-agent.sqlite3` |
 | Schema 与状态约束 | `schemas/loop-agent.sql`、`control/loop_agent/` |
 | 项目路由 | 实时读取 `E:\code\根目录清单.md` |
-| Dashboard 健康状态 | `runtime/health-state.json` |
+| Dashboard 汇总健康状态 | `runtime/health-state.json` |
+| 动态 Runner 原始 heartbeat 登记 | `runtime/runners/` |
 | 脚本职责和回归命令 | `control/README.md` |
 
 README 只提供人工导航。若说明与配置、任务事实或控制代码冲突，以表中对应权威来源为准；
@@ -55,10 +56,10 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | 数据库公共 API | `control/loopdb.py` |
 | 通用 Worker 角色协议 | `worker/worker.md` |
 | Planner 常驻调度 | `planner/main.py serve` |
-| Codex CLI 常驻调度 | `dispatcher/main.py serve` |
-| Codex CLI 单轮调度 | `dispatcher/codex_cli_dispatcher.py` |
-| Codex CLI 单任务运行 | `runner/codex_cli_runner.py` |
-| Self-hosted Agent | `runner/agent_runtime.py` |
+| Planner 单次预检运行 | `runner/planner_runner.py` |
+| 内部 Agent 常驻调度 | `dispatcher/main.py serve` |
+| 内部 Agent 单轮调度 | `dispatcher/agent_dispatcher.py` |
+| 内部 Agent 单任务运行 | `runner/agent_runtime.py` |
 | DeepSeek Provider 适配 | `control/loop_agent/providers/deepseek.py` |
 | Dashboard 健康与前台服务 | `supervisor/main.py`、`client/dashboard_server.py` |
 | Supervisor 健康检查实现 | `supervisor/health_run.py` |
@@ -101,8 +102,8 @@ py -3 .\control\loopctl.py validate
 | `operator/` | Operator 提示词、任务控制状态机和密钥管理入口 |
 | `planner/` | Planner 提示词与只读预检状态机 |
 | `worker/` | Worker 提示词与任务执行状态机 |
-| `dispatcher/` | Codex CLI 常驻调度与单轮调度实现 |
-| `runner/` | Codex CLI 与 Self-hosted Runner 入口及 CLI 提示词 |
+| `dispatcher/` | 内部 Agent 常驻调度与单轮调度实现 |
+| `runner/` | Planner 与 Worker 的一次性内部 Agent Runner 入口 |
 | `config/initialization.json` | 唯一部署配置源 |
 | `schemas/loop-agent.sql` | 当前数据库 Schema |
 | `control/loopctl.py` | 任务控制 CLI |

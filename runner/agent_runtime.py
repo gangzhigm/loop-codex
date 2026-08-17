@@ -21,8 +21,6 @@ from __future__ import annotations
 # 启动失败先检查运行环境、Provider 工厂签名和 SecretStore；执行失败再进入 runtime/agent.py。
 
 import argparse
-import importlib
-import inspect
 import json
 import sys
 from pathlib import Path
@@ -30,13 +28,16 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 
-CONTROL_ROOT = Path(__file__).resolve().parents[1] / "control"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+CONTROL_ROOT = REPOSITORY_ROOT / "control"
 if str(CONTROL_ROOT) not in sys.path:
     sys.path.insert(0, str(CONTROL_ROOT))
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from loop_agent.runtime.agent import SingleTaskAgent
 from loop_agent.runtime.controller import SubprocessLoopController
-from loop_agent.runtime.core import ModelProvider, RuntimeSettings
+from loop_agent.runtime.core import RuntimeSettings
 from loop_agent.runtime.diagnostics import AgentRuntimeError
 from loopdb import (
     CAPABILITY_LEVELS,
@@ -44,35 +45,8 @@ from loopdb import (
     CONFIG_PATH,
     load_initialization_config,
 )
-from loop_agent.secrets.store import SecretStore, create_secret_store
-
-
-def load_provider(
-    specification: str,
-    config: dict[str, Any],
-    secret_store: SecretStore | None = None,
-) -> ModelProvider:
-    """加载 Provider 工厂，并显式注入 SecretStore。
-
-    工厂必须接受具名参数 ``config`` 和 ``secret_store``。签名预绑定可在真正调用前
-    拒绝不符合当前协议的适配器，避免其绕过密钥边界读取环境凭据。
-    返回对象还必须实现可调用的 ``complete`` 方法。
-    """
-    if ":" not in specification:
-        raise AgentRuntimeError("provider must use module:factory syntax")
-    module_name, attribute = specification.split(":", 1)
-    factory = getattr(importlib.import_module(module_name), attribute)
-    store = secret_store or create_secret_store(config)
-    try:
-        inspect.signature(factory).bind(config=config, secret_store=store)
-    except (TypeError, ValueError):
-        raise AgentRuntimeError(
-            "provider factory must accept config and secret_store keyword arguments"
-        ) from None
-    provider = factory(config=config, secret_store=store)
-    if not callable(getattr(provider, "complete", None)):
-        raise AgentRuntimeError("provider factory did not return a ModelProvider")
-    return provider
+from common.providers import load_provider
+from common.runners import ObservedWorkerController, RunnerState
 
 
 def parser() -> argparse.ArgumentParser:
@@ -107,20 +81,33 @@ def main() -> None:
     config = load_initialization_config(Path(args.config))
     workspace = Path(config["workspace"]["task_root"])
     provider = load_provider(args.provider, config)
-    agent = SingleTaskAgent(
-        provider=provider,
-        controller=SubprocessLoopController(Path(args.db) if args.db else None),
-        workspace=workspace,
-        settings=RuntimeSettings.from_config(config),
-        config=config,
-    )
-    result = agent.run(
+    state = RunnerState(
         args.execution_id,
+        "worker",
         args.runtime_environment,
-        args.capability_level,
-        args.provider_id,
+        args.execution_id,
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    state.start()
+    try:
+        controller = ObservedWorkerController(
+            SubprocessLoopController(Path(args.db) if args.db else None), state
+        )
+        agent = SingleTaskAgent(
+            provider=provider,
+            controller=controller,
+            workspace=workspace,
+            settings=RuntimeSettings.from_config(config),
+            config=config,
+        )
+        result = agent.run(
+            args.execution_id,
+            args.runtime_environment,
+            args.capability_level,
+            args.provider_id,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    finally:
+        state.close()
 
 
 if __name__ == "__main__":

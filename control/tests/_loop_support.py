@@ -63,9 +63,9 @@ class LoopTestCase(unittest.TestCase):
         project: str,
         priority: str = "medium",
         capability_level: str = "L2",
-        runtime_environment: str = "codex_cli",
+        runtime_environment: str = "self_hosted_agent",
         *,
-        provider_id: str | None = None,
+        provider_id: str | None = "deepseek",
         lock_mode: str = "project",
         scope: list[str] | None = None,
     ) -> None:
@@ -116,8 +116,8 @@ class LoopTestCase(unittest.TestCase):
         self,
         execution_id: str,
         capability_level: str = "L2",
-        runtime_environment: str = "codex_cli",
-        provider_id: str | None = None,
+        runtime_environment: str = "self_hosted_agent",
+        provider_id: str | None = "deepseek",
     ) -> dict[str, object]:
         arguments = [
             "claim",
@@ -206,7 +206,8 @@ class LoopTestCase(unittest.TestCase):
                     "title": task_id,
                     "description": "Operator business description",
                     "priority": "critical",
-                    "runtime_environment": "codex_cli",
+                    "runtime_environment": "self_hosted_agent",
+                    "provider_id": "deepseek",
                     "estimated_capability_level": capability,
                     "execution_policy": execution_policy,
                     "scope_hint": ["local-agent-loop/control/loopctl.py"],
@@ -221,7 +222,7 @@ class LoopTestCase(unittest.TestCase):
     def planner_claim(self, execution_id: str) -> dict[str, object]:
         return self.run_ctl(
             "preflight-claim", execution_id,
-            "--runtime-environment", "codex_cli",
+            "--runtime-environment", "self_hosted_agent",
             "--sandbox", "read-only",
         )
 

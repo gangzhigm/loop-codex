@@ -88,6 +88,7 @@ command_archive = operator_control.command_archive
 command_cancel = operator_control.command_cancel
 command_confirm = operator_control.command_confirm
 command_enqueue = operator_control.command_enqueue
+command_migrate_internal_runtime = operator_control.command_migrate_internal_runtime
 command_requeue = operator_control.command_requeue
 command_resolve_human = operator_control.command_resolve_human
 command_unarchive = operator_control.command_unarchive
@@ -243,6 +244,11 @@ def parser() -> argparse.ArgumentParser:
     update.add_argument("file")
     update.add_argument("--expected-row-version", type=int)
     update.set_defaults(handler=command_update)
+
+    # 一次性收敛旧 Codex 路由；只改执行目标，不重置任务状态或历史结果。
+    migrate_internal_runtime = commands.add_parser("migrate-internal-runtime")
+    migrate_internal_runtime.add_argument("--reason")
+    migrate_internal_runtime.set_defaults(handler=command_migrate_internal_runtime)
 
     # requeue 根据当前状态回到 DRAFT 或 PENDING；cancel 只做逻辑取消并保留历史。
     requeue = commands.add_parser("requeue")

@@ -412,7 +412,7 @@ class DeepSeekProviderTests(unittest.TestCase):
             self.store({"DEEPSEEK_API_KEY": "test-only-token"}),
         )
         with self.assertRaises(DeepSeekProviderError) as captured:
-            provider.validate_startup(ExecutionProfile("codex_cli", None, "L2", "x", "high", 600, 0))
+            provider.validate_startup(ExecutionProfile("unsupported", None, "L2", "x", "high", 600, 0))
         self.assertEqual(captured.exception.diagnostic.category, "local_protocol")
         with self.assertRaises(DeepSeekProviderError) as captured:
             provider.validate_startup(ExecutionProfile("self_hosted_agent", "deepseek", "L2", "wrong", "high", 600, 0))

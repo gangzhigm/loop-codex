@@ -1,5 +1,5 @@
 {
-  "config_version": "4.4.0",
+  "config_version": "5.0.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -13,17 +13,9 @@
   "prompts": {
     "operator": "operator/operator.md",
     "planner": "planner/planner.md",
-    "worker": "worker/worker.md",
-    "cli_worker": "runner/cli-worker.md"
+    "worker": "worker/worker.md"
   },
   "runtime_environments": {
-    "codex_cli": {
-      "name": "Codex CLI",
-      "entry": {
-        "type": "codex_cli",
-        "claim_argument": "codex_cli"
-      }
-    },
     "self_hosted_agent": {
       "name": "Self-hosted Agent",
       "entry": {
@@ -33,16 +25,6 @@
     }
   },
   "execution_profiles": {
-    "codex_cli": {
-      "provider_id": null,
-      "capabilities": {
-        "L1": { "model": "gpt-5.6-luna", "reasoning": "medium", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L2": { "model": "gpt-5.6-terra", "reasoning": "medium", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L3": { "model": "gpt-5.6-terra", "reasoning": "high", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L4": { "model": "gpt-5.6-terra", "reasoning": "xhigh", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L5": { "model": "gpt-5.6-sol", "reasoning": "high", "attempt_timeout_seconds": 3600, "max_retries": 1 }
-      }
-    },
     "self_hosted_agent": {
       "providers": {
         "deepseek": {
@@ -64,8 +46,7 @@
     "max_attempts": 2,
     "global_max_active_executions": 8,
     "platform_max_active_executions": {
-      "codex_cli": 5,
-      "self_hosted_agent": 5
+      "self_hosted_agent": 8
     },
     "scope_conflict_mode": "project",
     "require_human_approval_for": [
@@ -78,7 +59,10 @@
   },
   "planner": {
     "execution_kind": "PLANNER",
-    "default_runtime_environment": "codex_cli",
+    "default_runtime_environment": "self_hosted_agent",
+    "provider_id": "deepseek",
+    "capability_level": "L3",
+    "max_retries": 1,
     "max_active_executions": 2,
     "heartbeat_interval_seconds": 30,
     "stalled_after_seconds": 300,
@@ -87,7 +71,8 @@
     "scheduler": {
       "scheduled": true,
       "interval_minutes": 5,
-      "heartbeat_interval_seconds": 15
+      "heartbeat_interval_seconds": 15,
+      "runner_log_path": "runtime/planner-runner.log"
     },
     "client_boundary": {
       "sandbox": "read-only",
@@ -113,6 +98,9 @@
     }
   },
   "self_hosted_agent": {
+    "provider_factories": {
+      "deepseek": "loop_agent.providers.deepseek:create_provider"
+    },
     "max_steps": 24,
     "max_final_repairs": 1,
     "model_timeout_seconds": 120,
@@ -121,28 +109,21 @@
     "max_file_bytes": 524288,
     "max_tool_output_chars": 50000
   },
-  "codex_cli": {
-    "executable": "codex",
-    "prompt": "runner/cli-worker.md",
-    "use_user_config": true,
-    "sandbox": "workspace-write",
-    "termination_grace_seconds": 5,
-    "max_stdout_chars": 1000000,
-    "max_stderr_chars": 50000,
-    "dispatcher": {
-      "scheduled": true,
-      "interval_minutes": 15,
-      "heartbeat_interval_seconds": 15,
-      "working_directory": "E:\\code\\local-agent-loop",
-      "log_path": "runtime/codex-cli-dispatcher.log",
-      "supported_capability_levels": [
-        "L1",
-        "L2",
-        "L3",
-        "L4",
-        "L5"
-      ]
-    }
+  "dispatcher": {
+    "scheduled": true,
+    "interval_minutes": 15,
+    "heartbeat_interval_seconds": 15,
+    "working_directory": "E:\\code\\local-agent-loop",
+    "log_path": "runtime/agent-dispatcher.log",
+    "runtime_environment": "self_hosted_agent",
+    "provider_id": "deepseek",
+    "supported_capability_levels": [
+      "L1",
+      "L2",
+      "L3",
+      "L4",
+      "L5"
+    ]
   },
   "secret_management": {
     "backend": "os_keyring",
@@ -192,6 +173,7 @@
     "monitor_interval_seconds": 30,
     "component_start_timeout_seconds": 10,
     "component_stop_timeout_seconds": 5,
+    "runner_heartbeat_timeout_seconds": 120,
     "components": {
       "planner": {
         "entry": "planner/main.py",

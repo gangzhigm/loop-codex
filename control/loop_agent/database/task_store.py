@@ -224,6 +224,11 @@ def insert_task(
     if runtime_environment is None:
         runtime_environment = config["planner"]["default_runtime_environment"]
     provider_id = task.get("provider_id")
+    if (
+        provider_id is None
+        and runtime_environment == config["planner"]["default_runtime_environment"]
+    ):
+        provider_id = config["planner"]["provider_id"]
     valid_statuses = {
         "DRAFT",
         "NEEDS_REVIEW",

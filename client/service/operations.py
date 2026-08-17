@@ -342,7 +342,7 @@ def operations_config_payload(
     task_execution = config.get("task_execution")
     planner = config.get("planner")
     dashboard = config.get("dashboard")
-    cli = config.get("codex_cli")
+    dispatcher = config.get("dispatcher")
     self_hosted_agent = config.get("self_hosted_agent")
     health = config.get("health")
     priority_policy = config.get("priority_policy")
@@ -413,7 +413,7 @@ def operations_config_payload(
                 "id": "supervisor",
                 "title": "Supervisor 管理",
                 "items": [
-                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "托管 Dashboard，并周期检查 Dashboard、Planner 与 Codex CLI Dispatcher 的可核实状态。", "当前生效", "runtime/health-state.json", "active"),
+                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "托管 Dashboard，并周期检查 Dashboard、Planner 与内部 Agent Dispatcher 的可核实状态。", "当前生效", "runtime/health-state.json", "active"),
                     item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "健康任务只探测并恢复 Supervisor 主进程，不领取或执行任务。", "当前生效", "健康任务运行结果"),
                 ],
             },
@@ -422,7 +422,7 @@ def operations_config_payload(
                 "title": "Dispatcher 管理",
                 "items": [
                     item("dispatcher-service", "常驻 Dispatcher", "main.py serve", "dispatcher/main.py", "由 Supervisor 管理单实例、PID 与 heartbeat，并按配置周期检查是否需要分发 Runner。", "当前生效", "runtime/health-state.json", "active"),
-                    item("cli-dispatcher", "Runner 分发周期", f"每 {_config_value(cli if isinstance(cli, Mapping) else {}, 'dispatcher', 'interval_minutes')} 分钟", "config/initialization.json", "每轮最多创建一个独立 Runner；创建成功后立即返回，不等待 Runner 执行结束。", "需重启 Dispatcher", "配置加载时校验"),
+                    item("agent-dispatcher", "Runner 分发周期", f"每 {_config_value(dispatcher if isinstance(dispatcher, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "每轮最多创建一个内部 Agent Runner；创建成功后立即返回，不等待 Runner 执行结束。", "需重启 Dispatcher", "配置加载时校验"),
                 ],
             },
             {
@@ -439,8 +439,6 @@ def operations_config_payload(
                 "id": "runner",
                 "title": "Runner 管理",
                 "items": [
-                    item("cli-worker-prompt", "Codex CLI Worker 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "cli_worker"), "config/initialization.json", "Codex CLI 单次 Runner 的任务边界和结果协议。", "读取时生效", "文件存在性检查"),
-                    item("cli-sandbox", "Codex CLI 沙箱", _config_value(cli if isinstance(cli, Mapping) else {}, "sandbox"), "config/initialization.json", "CLI Runner 的固定文件系统沙箱边界。", "需重启", "配置加载时校验"),
                     item("self-hosted-limits", "自建 Agent 运行上限", self_hosted_limits or "未配置", "config/initialization.json", "自建 Agent 的步骤、模型、工具和输出边界。", "需重启", "配置加载时校验"),
                     item("runner-service", "独立 Runner 服务", "尚未部署", "部署设计", "当前仅提供单次 Runner 入口，尚未安装常驻 Runner 服务。", "受保护", "尚未实现", "planned"),
                 ],

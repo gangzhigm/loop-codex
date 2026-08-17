@@ -89,7 +89,8 @@ class AttachmentImageTests(unittest.TestCase):
                 "description": "attachment test",
                 "status": "PENDING",
                 "priority": priority,
-                "runtime_environment": "codex_cli",
+                "runtime_environment": "self_hosted_agent",
+                "provider_id": "deepseek",
                 "created_at": now_shanghai(),
                 "scope": scope or ["project/file.txt"],
                 "lock_mode": lock_mode,
@@ -118,7 +119,7 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(content_type, "image/png")
 
     def test_dashboard_state_exposes_l1_l5_routes_and_capacity_config(self) -> None:
-        self.add_task("DASHBOARD-CLI", "assets/DASHBOARD-CLI/reference.png")
+        self.add_task("DASHBOARD-AGENT-L2", "assets/DASHBOARD-AGENT-L2/reference.png")
         insert_task(
             self.database,
             {
@@ -148,10 +149,10 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "3.7.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
-            {"codex_cli": 5, "self_hosted_agent": 5},
+            {"self_hosted_agent": 8},
         )
         self.assertEqual(payload["settings"]["global_max_active_executions"], 8)
-        self.assertEqual(routes["DASHBOARD-CLI"], ("L2", "codex_cli", None))
+        self.assertEqual(routes["DASHBOARD-AGENT-L2"], ("L2", "self_hosted_agent", "deepseek"))
         self.assertEqual(routes["DASHBOARD-DEEPSEEK"], ("L5", "self_hosted_agent", "deepseek"))
         self.assertEqual(payload["planners"], [])
         self.assertEqual(payload["planner_settings"]["execution_kind"], "PLANNER")
@@ -187,7 +188,7 @@ class AttachmentImageTests(unittest.TestCase):
             "lease_expires_at, runtime_environment, provider_id, capability_level, execution_policy, "
             "model, reasoning, attempt_timeout_seconds, max_retries) VALUES("
             "'active-file-exec', 'ACTIVE-FILE', 'RUNNING', ?, ?, '2999-01-01T00:00:00+08:00', "
-            "'codex_cli', NULL, 'L2', 'automatic', 'gpt-5.6-terra', 'medium', 3600, 0)",
+            "'self_hosted_agent', 'deepseek', 'L2', 'automatic', 'deepseek-v4-flash', 'high', 600, 0)",
             (stamp, stamp),
         )
         self.database.execute(
@@ -354,8 +355,8 @@ class AttachmentImageTests(unittest.TestCase):
               execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, finished_at,
               outcome, runtime_environment, provider_id, capability_level, execution_policy, model,
               reasoning, attempt_timeout_seconds, max_retries, termination_reason, recovery_required
-            ) VALUES(?, ?, 'STALLED', ?, ?, ?, ?, 'RECOVERY_REQUIRED', 'codex_cli', NULL,
-              'L5', 'automatic', 'gpt-5.6-sol', 'xhigh', 14400, 0, 'HEARTBEAT_STALLED', 1)""",
+            ) VALUES(?, ?, 'STALLED', ?, ?, ?, ?, 'RECOVERY_REQUIRED', 'self_hosted_agent', 'deepseek',
+              'L5', 'automatic', 'deepseek-v4-pro', 'xhigh', 600, 0, 'HEARTBEAT_STALLED', 1)""",
             (execution_id, task_id, stamp, stamp, stamp, stamp),
         )
         scope = self.database.execute(
@@ -566,7 +567,8 @@ class SecretApiTests(unittest.TestCase):
                     "description": "active",
                     "status": "PENDING",
                     "priority": "medium",
-                    "runtime_environment": "codex_cli",
+                    "runtime_environment": "self_hosted_agent",
+                    "provider_id": "deepseek",
                     "created_at": now_shanghai(),
                     "scope": ["project/file.txt"],
                     "acceptance": ["test"],
@@ -580,12 +582,12 @@ class SecretApiTests(unittest.TestCase):
             database.execute(
                 """INSERT INTO executions(
                   execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at,
-                  runtime_environment, capability_level, execution_policy, model, reasoning,
+                  runtime_environment, provider_id, capability_level, execution_policy, model, reasoning,
                   attempt_timeout_seconds, max_retries
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     "active-execution", "ACTIVE-TASK", "RUNNING", now_shanghai(), now_shanghai(), now_shanghai(),
-                    "codex_cli", "L1", "automatic", "test-model", "low", 60, 0,
+                    "self_hosted_agent", "deepseek", "L1", "automatic", "test-model", "low", 60, 0,
                 ),
             )
             database.commit()

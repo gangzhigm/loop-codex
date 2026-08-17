@@ -9,9 +9,11 @@ from _loop_support import *  # noqa: F403
 class LoopClaimingTests(LoopTestCase):
     def test_global_eight_parallel_claims_and_ninth_slot_full(self) -> None:
         targets = [
-            ("L1", "codex_cli", None), ("L2", "codex_cli", None),
-            ("L3", "codex_cli", None), ("L4", "codex_cli", None),
-            ("L5", "codex_cli", None),
+            ("L1", "self_hosted_agent", "deepseek"),
+            ("L2", "self_hosted_agent", "deepseek"),
+            ("L3", "self_hosted_agent", "deepseek"),
+            ("L4", "self_hosted_agent", "deepseek"),
+            ("L5", "self_hosted_agent", "deepseek"),
             ("L1", "self_hosted_agent", "deepseek"),
             ("L2", "self_hosted_agent", "deepseek"),
             ("L3", "self_hosted_agent", "deepseek"),
@@ -38,18 +40,6 @@ class LoopClaimingTests(LoopTestCase):
         self.assertEqual(full["limit_scope"], "global")
         self.assertEqual(full["maximum"], 8)
 
-    def test_platform_parallel_limit_is_enforced_without_capability_pool(self) -> None:
-        levels = ["L1", "L2", "L3", "L4", "L5", "L1"]
-        for index, level in enumerate(levels, start=1):
-            self.add_task(f"TASK-{index}", f"project-{index}", capability_level=level)
-        for index, level in enumerate(levels[:5], start=1):
-            self.assertEqual(self.claim(f"platform-{index}", level)["outcome"], "CLAIMED")
-        full = self.claim("platform-6", levels[5])
-        self.assertEqual(full["outcome"], "SLOT_FULL")
-        self.assertEqual(full["limit_scope"], "platform")
-        self.assertEqual(full["platform_active"], 5)
-        self.assertEqual(full["platform_maximum"], 5)
-
     def test_claim_isolated_by_capability_level(self) -> None:
         self.add_task("L2-BLOCKER", "project-1", "blocker", "L2")
         self.add_task("L1-LOW", "project-2", "low", "L1")
@@ -61,7 +51,7 @@ class LoopClaimingTests(LoopTestCase):
         self.add_task("CAPABILITY-SNAPSHOT", "project-1", capability_level="L3")
         result = self.run_ctl(
             "claim", "capability-snapshot", "--capability-level", "L3",
-            "--runtime-environment", "codex_cli",
+            "--runtime-environment", "self_hosted_agent", "--provider-id", "deepseek",
         )
         self.assertEqual(result["outcome"], "CLAIMED")
         database = connect(self.db_path)
@@ -72,13 +62,13 @@ class LoopClaimingTests(LoopTestCase):
             ).fetchone()
         )
         database.close()
-        expected = resolve_execution_profile("codex_cli", None, "L3")
+        expected = resolve_execution_profile("self_hosted_agent", "deepseek", "L3")
         self.assertEqual(before["model"], expected["model"])
         self.assertEqual(before["reasoning"], expected["reasoning"])
         changed_config = json.loads(json.dumps(load_initialization_config()))
-        changed_config["execution_profiles"]["codex_cli"]["capabilities"]["L3"]["model"] = "future-model"
+        changed_config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]["L3"]["model"] = "future-model"
         self.assertEqual(
-            resolve_execution_profile("codex_cli", None, "L3", changed_config)["model"],
+            resolve_execution_profile("self_hosted_agent", "deepseek", "L3", changed_config)["model"],
             "future-model",
         )
         database = connect(self.db_path)
@@ -90,20 +80,6 @@ class LoopClaimingTests(LoopTestCase):
         )
         database.close()
         self.assertEqual(after, before)
-
-    def test_claim_isolated_by_runtime_environment(self) -> None:
-        self.add_task(
-            "SELF-HOSTED-BLOCKER", "project-1", "blocker",
-            runtime_environment="self_hosted_agent", provider_id="deepseek",
-        )
-        self.add_task("CLI-LOW", "project-2", "low", runtime_environment="codex_cli")
-        result = self.claim("cli-only", runtime_environment="codex_cli")
-        self.assertEqual(result["task"]["id"], "CLI-LOW")
-        self.assertEqual(result["task"]["runtime_environment"], "codex_cli")
-        self.assertEqual(result["runtime_environment"], "codex_cli")
-        state = self.run_ctl("state")
-        agent = next(item for item in state["agents"] if item["id"] == "cli-only")
-        self.assertEqual(agent["runtime_environment"], "codex_cli")
 
     def test_claim_requires_explicit_runtime_environment(self) -> None:
         self.add_task("EXPLICIT-ENV", "project-1")
@@ -123,27 +99,20 @@ class LoopClaimingTests(LoopTestCase):
         self.assertEqual(status, "PENDING")
 
     def test_capability_level_does_not_create_a_shared_capacity_pool(self) -> None:
-        self.add_task("ENV-1", "project-1", runtime_environment="codex_cli")
-        self.add_task(
-            "ENV-2", "project-2", runtime_environment="self_hosted_agent", provider_id="deepseek"
-        )
-        self.add_task("ENV-3", "project-3", runtime_environment="codex_cli")
-        self.assertEqual(self.claim("env-exec-1", runtime_environment="codex_cli")["outcome"], "CLAIMED")
-        self.assertEqual(
-            self.claim(
-                "env-exec-2", runtime_environment="self_hosted_agent", provider_id="deepseek"
-            )["outcome"],
-            "CLAIMED",
-        )
-        self.assertEqual(self.claim("env-exec-3", runtime_environment="codex_cli")["outcome"], "CLAIMED")
+        self.add_task("ENV-1", "project-1", capability_level="L1")
+        self.add_task("ENV-2", "project-2", capability_level="L2")
+        self.add_task("ENV-3", "project-3", capability_level="L3")
+        self.assertEqual(self.claim("env-exec-1", "L1")["outcome"], "CLAIMED")
+        self.assertEqual(self.claim("env-exec-2", "L2")["outcome"], "CLAIMED")
+        self.assertEqual(self.claim("env-exec-3", "L3")["outcome"], "CLAIMED")
 
-    def test_scope_conflict_is_shared_across_runtime_environments(self) -> None:
-        self.add_task("CLI-LOCK", "project-1", "critical", runtime_environment="codex_cli")
+    def test_scope_conflict_is_shared_across_agent_runners(self) -> None:
+        self.add_task("AGENT-LOCK", "project-1", "critical")
         self.add_task(
             "AGENT-CONFLICT", "project-1", "high",
             runtime_environment="self_hosted_agent", provider_id="deepseek",
         )
-        self.assertEqual(self.claim("cli-lock")["outcome"], "CLAIMED")
+        self.assertEqual(self.claim("agent-lock")["outcome"], "CLAIMED")
         conflict = self.claim(
             "agent-conflict", runtime_environment="self_hosted_agent", provider_id="deepseek"
         )
@@ -174,7 +143,7 @@ class LoopClaimingTests(LoopTestCase):
         self.assertEqual(self.claim("same-execution")["outcome"], "CLAIMED")
         error = self.run_ctl_error(
             "claim", "same-execution", "--capability-level", "L2",
-            "--runtime-environment", "codex_cli",
+            "--runtime-environment", "self_hosted_agent", "--provider-id", "deepseek",
         )
         self.assertIn("execution-id 已存在", error["message"])
 
@@ -249,7 +218,8 @@ class LoopClaimingTests(LoopTestCase):
                 "description": "test",
                 "status": "PENDING",
                 "priority": "critical",
-                "runtime_environment": "codex_cli",
+                "runtime_environment": "self_hosted_agent",
+                "provider_id": "deepseek",
                 "created_at": now_shanghai(),
                 "scope": ["project-1/a.txt", "project-1/b.txt", "project-1/sub/c.txt"],
                 "acceptance": ["test"],

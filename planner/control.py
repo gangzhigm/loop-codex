@@ -171,8 +171,13 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
             return
         task = database.execute(
             "SELECT * FROM tasks WHERE status='DRAFT' AND preflight_status='UNINSPECTED' "
+            "AND runtime_environment=? AND provider_id=? "
             "ORDER BY CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 "
-            "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id LIMIT 1"
+            "WHEN 'medium' THEN 3 ELSE 4 END, created_at, id LIMIT 1",
+            (
+                config["planner"]["default_runtime_environment"],
+                config["planner"]["provider_id"],
+            ),
         ).fetchone()
         if task is None:
             commit(database)

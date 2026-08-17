@@ -166,6 +166,9 @@ def serve_supervisor(args: argparse.Namespace) -> None:
             specs = component_specs(config)
             start_timeout = float(config["supervisor"]["component_start_timeout_seconds"])
             stop_timeout = float(config["supervisor"]["component_stop_timeout_seconds"])
+            runner_timeout = float(
+                config["supervisor"]["runner_heartbeat_timeout_seconds"]
+            )
             if args.monitor_interval_seconds is None:
                 monitor_interval = float(config["supervisor"]["monitor_interval_seconds"])
             if not dashboard.is_running():
@@ -178,6 +181,7 @@ def serve_supervisor(args: argparse.Namespace) -> None:
                 dashboard_error=dashboard.last_error,
                 start_timeout_seconds=start_timeout,
                 stop_timeout_seconds=stop_timeout,
+                runner_heartbeat_timeout_seconds=runner_timeout,
             )
             record_monitor_state(monitors)
             write_supervisor_heartbeat(pid)
