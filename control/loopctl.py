@@ -138,11 +138,11 @@ def parser() -> argparse.ArgumentParser:
     state.set_defaults(handler=command_state)
 
     # 二、Planner 静态预检协议。
-    # claim 强制 codex_automation/read-only，避免 Planner 获得业务写权限。
+    # Planner 预检目标必须属于当前内部运行环境，且自身始终保持只读。
     preflight_claim = commands.add_parser("preflight-claim")
     preflight_claim.add_argument("execution_id")
     preflight_claim.add_argument(
-        "--runtime-environment", required=True, choices=("codex_automation",)
+        "--runtime-environment", required=True, choices=CLAIM_RUNTIME_ENVIRONMENTS
     )
     preflight_claim.add_argument("--sandbox", required=True, choices=("read-only",))
     preflight_claim.set_defaults(handler=command_preflight_claim)
@@ -193,15 +193,12 @@ def parser() -> argparse.ArgumentParser:
     extend_scope.set_defaults(handler=command_extend_scope)
 
     # 四、失联恢复。
-    # 恢复必须由受控 Runner 确认进程树终止，或由人工确认旧客户端会话安全结束；
-    # 两种确认互斥，防止调用方用模糊的布尔组合绕过隔离锁。
+    # 当前恢复只接受受控 Runner 对自己进程树的终止确认。
     recover = commands.add_parser("recover")
     recover.add_argument("execution_id")
     recover.add_argument("--action", choices=("requeue", "failed", "wait"))
     recover.add_argument("--expected-row-version", type=int)
-    recovery_confirmation = recover.add_mutually_exclusive_group(required=True)
-    recovery_confirmation.add_argument("--runner-confirmed-terminated", action="store_true")
-    recovery_confirmation.add_argument("--human-confirmed-safe", action="store_true")
+    recover.add_argument("--runner-confirmed-terminated", action="store_true", required=True)
     recover.set_defaults(handler=command_recover)
     finish = commands.add_parser("finish")
     finish.add_argument("execution_id")

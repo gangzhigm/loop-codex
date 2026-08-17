@@ -3,16 +3,16 @@
 恢复流程刻意分离两个在排查队列时容易混淆的问题：
 
 1. 无法继续证明存活的 execution 会从活动容量中移除。
-2. 在确认旧进程或 Codex 会话无法再次写入前，其 scope 锁继续保持隔离。
+2. 在 Runner 确认旧进程树无法再次写入前，其 scope 锁继续保持隔离。
 
-这种分离可以防止废弃进程仍可能修改文件时，替代 Worker 进入同一 scope。本机服务无法终止
-Codex 客户端会话，因此必须由人工确认安全；受控 Runner 则必须确认进程已经终止。本模块
-负责这些状态迁移；claim 代码只会在选择新任务前要求它刷新恢复状态。
+这种分离可以防止废弃进程仍可能修改文件时，替代 Worker 进入同一 scope。当前系统只处理
+受控 Runner 启动的 execution，Runner 必须确认进程已经终止。本模块负责这些状态迁移；
+claim 代码只会在选择新任务前要求它刷新恢复状态。
 """
 
 from __future__ import annotations
 
-# 中文排查：失联检测、execution 隔离、QUARANTINED 锁和人工安全恢复都在本模块。
+# 中文排查：失联检测、execution 隔离、QUARANTINED 锁和 Runner 安全恢复都在本模块。
 # 恢复异常按 heartbeat、lease、attempt timeout、execution 状态和锁状态的顺序核对。
 # 时间信号只能证明会话可能失联，不能证明旧写入者已结束；释放隔离锁必须有终止确认。
 
@@ -24,6 +24,7 @@ from typing import Any
 
 from loop_agent.control.io import output, require_expected_row_version
 from loopdb import (
+    CANONICAL_RUNTIME_ENVIRONMENTS,
     LoopError,
     bump_revision,
     commit,
@@ -54,6 +55,10 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
     ).fetchall()
     stalled: list[dict[str, Any]] = []
     for execution in rows:
+        runtime_environment = execution["runtime_environment"]
+        # 历史外部环境只保留数据库记录，当前控制面不推断或管理其进程生命周期。
+        if runtime_environment not in CANONICAL_RUNTIME_ENVIRONMENTS:
+            continue
         heartbeat_stalled = execution["heartbeat_at"] <= stalled_cutoff
         lease_expired = execution["lease_expires_at"] <= stamp
         attempt_timed_out = False
@@ -70,7 +75,6 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
             or execution["recovery_required"]
         ):
             continue
-        runtime_environment = execution["runtime_environment"]
         stalled.append(
             {
                 "execution_id": execution["execution_id"],
@@ -84,11 +88,7 @@ def stalled_executions(database: sqlite3.Connection) -> list[dict[str, Any]]:
                 "lease_expired": lease_expired,
                 "attempt_timed_out": attempt_timed_out,
                 "termination_reason": execution["termination_reason"],
-                "recovery_confirmation": (
-                    "human_confirmed_safe"
-                    if runtime_environment == "codex_automation"
-                    else "runner_confirmed_terminated"
-                ),
+                "recovery_confirmation": "runner_confirmed_terminated",
             }
         )
     return stalled
@@ -172,14 +172,9 @@ def transition_recovery_states(
                 ),
             )
             continue
-        is_codex = recovery["runtime_environment"] == "codex_automation"
         question = (
             f"execution {recovery['execution_id']} 已离开活动容量，但 scope 仍处于隔离状态；"
-            + (
-                "请确认旧 Codex 客户端会话已结束，再选择重新排队、标记失败或继续等待。"
-                if is_codex
-                else "受控 Runner 确认旧进程树已终止后，可重新排队、标记失败或继续等待。"
-            )
+            "受控 Runner 确认旧进程树已终止后，可重新排队、标记失败或继续等待。"
         )
         task_updated = database.execute(
             "UPDATE tasks SET status='WAITING_HUMAN', human_required=1, human_question=?, "
@@ -223,6 +218,8 @@ def recovery_required_records(database: sqlite3.Connection) -> list[dict[str, An
     ).fetchall()
     records: dict[str, dict[str, Any]] = {}
     for row in rows:
+        if row["runtime_environment"] not in CANONICAL_RUNTIME_ENVIRONMENTS:
+            continue
         item = records.setdefault(
             row["execution_id"],
             {
@@ -244,11 +241,7 @@ def recovery_required_records(database: sqlite3.Connection) -> list[dict[str, An
                 "quarantined_at": row["quarantined_at"],
                 "quarantine_reason": row["quarantine_reason"],
                 "scope_keys": [],
-                "recovery_confirmation": (
-                    "human_confirmed_safe"
-                    if row["runtime_environment"] == "codex_automation"
-                    else "runner_confirmed_terminated"
-                ),
+                "recovery_confirmation": "runner_confirmed_terminated",
             },
         )
         item["scope_keys"].append(row["scope_key"])
@@ -266,6 +259,8 @@ def command_recover(args: argparse.Namespace) -> None:
         ).fetchone()
         if not execution:
             raise LoopError("execution 不存在")
+        if execution["runtime_environment"] not in CANONICAL_RUNTIME_ENVIRONMENTS:
+            raise LoopError("历史外部 execution 不属于当前 Runner 恢复协议")
         if not execution["recovery_required"]:
             if execution["recovery_action"] and (
                 args.action is None or execution["recovery_action"] == args.action
@@ -289,14 +284,9 @@ def command_recover(args: argparse.Namespace) -> None:
         if not recovery:
             raise LoopError("execution 缺少 QUARANTINED scope，数据库状态不一致")
         platform = recovery["runtime_environment"]
-        if platform == "codex_automation":
-            if not args.human_confirmed_safe or args.runner_confirmed_terminated:
-                raise LoopError("Codex 客户端 execution 只能在人工确认旧会话不再修改后恢复")
-            actor = "human-safe-recovery"
-        else:
-            if not args.runner_confirmed_terminated or args.human_confirmed_safe:
-                raise LoopError("受控 Runner 平台必须确认旧进程已终止后恢复")
-            actor = "runner-safe-recovery"
+        if not args.runner_confirmed_terminated:
+            raise LoopError("受控 Runner 必须确认旧进程已终止后恢复")
+        actor = "runner-safe-recovery"
         task = database.execute(
             "SELECT status, attempt, assigned_agent, human_response, row_version FROM tasks WHERE id=?",
             (execution["task_id"],),

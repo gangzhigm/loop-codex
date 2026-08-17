@@ -785,8 +785,7 @@
       text-align: center;
     }
 
-    .archive-button,
-    .recovery-button {
+    .archive-button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -803,18 +802,12 @@
     }
 
     .archive-button { width: 62px; height: 32px; }
-    .recovery-button { width: 78px; height: 32px; }
 
-    .archive-button:hover,
-    .recovery-button:hover { border-color: var(--accent); background: var(--accent-soft); }
-    .archive-button:focus-visible,
-    .recovery-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .archive-button:disabled,
-    .recovery-button:disabled { cursor: wait; opacity: 0.58; }
+    .archive-button:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .archive-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .archive-button:disabled { cursor: wait; opacity: 0.58; }
     .archive-button.is-submitting .archive-icon { animation: archive-submit 0.8s linear infinite; }
-    .recovery-button { color: #8a4b08; }
     .recovery-state { color: #8a4b08; font-size: 11px; font-weight: 700; }
-    .recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .archive-icon { font-size: 15px; line-height: 1; }
     @keyframes archive-submit { to { transform: rotate(360deg); } }
     .copy-feedback {
@@ -1943,7 +1936,6 @@
     let activeHeaderFilter = null;
     let availableProjects = [];
     let archivingTaskId = null;
-    let recoveringExecutionId = null;
     let secretProviders = [];
     let secretCsrfToken = null;
     let secretRequestInFlight = false;
@@ -2800,55 +2792,9 @@
     }
 
     function renderTaskAction(task) {
-      const recovery = recoveryForTask(task);
-      if (recovery) {
-        const submitting = recoveringExecutionId === recovery.execution_id;
-        return `<button class="recovery-button" type="button" data-open-recovery-task="${escapeHtml(task.id)}" aria-label="处置隔离任务 ${escapeHtml(task.id)}" title="处置隔离"${submitting ? " disabled aria-busy=\"true\"" : ""}><span aria-hidden="true">!</span><span>处置</span></button>`;
-      }
       if (!canArchiveTask(task)) return "";
       const submitting = archivingTaskId === task.id;
       return `<button class="archive-button${submitting ? " is-submitting" : ""}" type="button" data-archive-task-id="${escapeHtml(task.id)}" aria-label="归档任务 ${escapeHtml(task.id)}" title="归档任务"${submitting ? " disabled aria-busy=\"true\"" : ""}><span class="archive-icon" aria-hidden="true">${submitting ? "↻" : "⇩"}</span><span>归档</span></button>`;
-    }
-
-    /**
-     * 处置 STALLED/TIMED_OUT execution 的隔离锁。
-     * 前端必须取得人工确认并提交当前 row_version；真正的进程终止确认、状态迁移和解锁由服务端完成。
-     */
-    async function recoverTask(taskId, executionId, recoveryAction) {
-      const task = state?.tasks?.find((candidate) => candidate.id === taskId);
-      const recovery = recoveryForTask(task ?? {});
-      if (!task || !recovery || recovery.execution_id !== executionId || recoveringExecutionId !== null) return;
-      const labels = { requeue: "释放隔离并重新排队", failed: "释放隔离并标记失败", wait: "继续等待并保持隔离" };
-      if (!window.confirm(`确认旧 Codex 客户端会话 ${executionId} 已结束，并执行“${labels[recoveryAction]}”？`)) return;
-      recoveringExecutionId = executionId;
-      if (state) renderTasks(state.tasks);
-      try {
-        const response = await fetch(TASK_ACTION_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task_id: task.id,
-            action: "recover",
-            execution_id: executionId,
-            recovery_action: recoveryAction,
-            row_version: task.row_version,
-            confirmed_safe: true
-          })
-        });
-        let payload = null;
-        try { payload = await response.json(); } catch { /* HTTP 状态提供降级错误。 */ }
-        if (!response.ok || payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
-        elements.taskDialog.close();
-        const refreshed = await refreshState();
-        if (!refreshed) showNotice("恢复处置已提交，但状态刷新失败，请稍后重新加载。");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        await refreshState();
-        showNotice(`恢复处置失败：${message}`);
-      } finally {
-        recoveringExecutionId = null;
-        if (state) renderTasks(state.tasks);
-      }
     }
 
     /**
@@ -3135,7 +3081,7 @@
         ? `<section class="detail-block"><h3>结果</h3><p>${escapeHtml(task.result.summary ?? task.result.error)}</p></section>`
         : "";
       const recovery = recoveryForTask(task);
-      const recoveryPanel = recovery ? `<section class="detail-block"><h3>安全恢复</h3><p>execution ${escapeHtml(recovery.execution_id)} · ${escapeHtml(recovery.execution_status)}<br>scope ${escapeHtml(recovery.scope_status)} · 活动容量已释放<br>${escapeHtml(recovery.quarantine_reason ?? recovery.termination_reason ?? "等待安全确认")}</p><div class="recovery-actions"><button class="recovery-button" type="button" data-recovery-action="requeue" data-recovery-execution="${escapeHtml(recovery.execution_id)}" data-recovery-task="${escapeHtml(task.id)}">重新排队</button><button class="recovery-button" type="button" data-recovery-action="failed" data-recovery-execution="${escapeHtml(recovery.execution_id)}" data-recovery-task="${escapeHtml(task.id)}">标记失败</button><button class="recovery-button" type="button" data-recovery-action="wait" data-recovery-execution="${escapeHtml(recovery.execution_id)}" data-recovery-task="${escapeHtml(task.id)}">继续等待</button></div></section>` : "";
+      const recoveryPanel = recovery ? `<section class="detail-block"><h3>隔离状态</h3><p>execution ${escapeHtml(recovery.execution_id)} · ${escapeHtml(recovery.execution_status)}<br>scope ${escapeHtml(recovery.scope_status)} · 活动容量已释放<br>${escapeHtml(recovery.quarantine_reason ?? recovery.termination_reason ?? "等待所属 Runner 确认进程结束并恢复")}</p></section>` : "";
       const timeline = (task.history ?? []).slice().reverse().map((entry) => `
         <li><strong>${escapeHtml(STATUS_LABELS[entry.to] ?? entry.to)}</strong> · ${escapeHtml(entry.reason)}<time>${escapeHtml(formatDate(entry.at))} · ${escapeHtml(entry.actor)}</time></li>
       `).join("");
@@ -3286,18 +3232,12 @@
         archiveTask(archiveButton.dataset.archiveTaskId);
         return;
       }
-      const recoveryButton = event.target.closest("[data-open-recovery-task]");
-      if (recoveryButton) {
-        event.stopPropagation();
-        openTask(recoveryButton.dataset.openRecoveryTask);
-        return;
-      }
       if (event.target.closest(".conflict-summary, .queue-summary")) return;
       const row = event.target.closest("tr[data-task-id]");
       if (row) openTask(row.dataset.taskId);
     });
     elements.taskRows.addEventListener("keydown", (event) => {
-      if (event.target.closest(".task-copy-button, .archive-button, .recovery-button")) return;
+      if (event.target.closest(".task-copy-button, .archive-button")) return;
       if (event.target.closest(".conflict-summary, .queue-summary")) return;
       if (!["Enter", " "].includes(event.key)) return;
       const row = event.target.closest("tr[data-task-id]");
@@ -3315,11 +3255,6 @@
       handleCapabilityAction(button.dataset.capabilityLevel);
     });
     elements.closeDialog.addEventListener("click", () => elements.taskDialog.close());
-    elements.dialogBody.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-recovery-action]");
-      if (!button) return;
-      recoverTask(button.dataset.recoveryTask, button.dataset.recoveryExecution, button.dataset.recoveryAction);
-    });
     elements.taskDialog.addEventListener("click", (event) => {
       if (event.target === elements.taskDialog) elements.taskDialog.close();
     });

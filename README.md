@@ -35,7 +35,7 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 | 信息 | 权威来源 |
 | --- | --- |
 | 跨角色安全边界和角色入口 | `AGENTS.md` |
-| Operator、Planner、Codex Worker 协议 | `operator/operator.md`、`planner/planner.md`、`worker/worker.md` |
+| Operator、Planner、通用 Worker 协议 | `operator/operator.md`、`planner/planner.md`、`worker/worker.md` |
 | Codex CLI 子进程协议 | `runner/cli-worker.md` |
 | 运行环境、模型、周期、并发和部署参数 | `config/initialization.json` |
 | 任务、预检、execution、依赖和 scope 锁事实 | `data/loop-agent.sqlite3` |
@@ -53,7 +53,7 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | --- | --- |
 | 任务管理和状态迁移 | `control/loopctl.py` |
 | 数据库公共 API | `control/loopdb.py` |
-| Codex 客户端自动化 | `worker/worker.md` 与受控 `loopctl.py claim/heartbeat/finish` |
+| 通用 Worker 角色协议 | `worker/worker.md` |
 | Planner 常驻调度 | `planner/main.py serve` |
 | Codex CLI 常驻调度 | `dispatcher/main.py serve` |
 | Codex CLI 单轮调度 | `dispatcher/codex_cli_dispatcher.py` |
@@ -77,7 +77,7 @@ py -3 .\control\loopctl.py confirm TASK-ID --reason "人工复核通过"
 py -3 .\control\loopctl.py archive TASK-ID --reason "终态任务归档"
 py -3 .\control\loopctl.py unarchive TASK-ID --reason "取消归档"
 py -3 .\control\loopctl.py resolve-human TASK-ID --response "人工答复"
-py -3 .\control\loopctl.py recover EXECUTION-ID --human-confirmed-safe --action requeue
+py -3 .\control\loopctl.py recover EXECUTION-ID --runner-confirmed-terminated --action requeue
 ```
 
 `cancel` 保留审计历史，不物理删除任务。`migrate` 只升级已有 SQLite Schema，

@@ -340,7 +340,6 @@ def operations_config_payload(
         for provider_id, secret_ref in sorted(provider_secret_refs_by_id.items())
     ]
     task_execution = config.get("task_execution")
-    automation = config.get("automations")
     planner = config.get("planner")
     dashboard = config.get("dashboard")
     cli = config.get("codex_cli")
@@ -367,7 +366,7 @@ def operations_config_payload(
         for key, value in (self_hosted_agent.items() if isinstance(self_hosted_agent, Mapping) else [])
         if key in {"max_steps", "max_final_repairs", "model_timeout_seconds", "tool_timeout_seconds"}
     ]
-    planner_automation = automation.get("planner") if isinstance(automation, Mapping) else {}
+    planner_scheduler = planner.get("scheduler") if isinstance(planner, Mapping) else {}
     return {
         "ok": True,
         "generated_at": now_shanghai(),
@@ -406,7 +405,7 @@ def operations_config_payload(
                 "items": [
                     item("planner-prompt", "Planner 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "草稿任务的只读预检与结构化写回约束。", "读取时生效", "文件存在性检查"),
                     item("planner-runtime", "运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "Planner 固定使用的只读预检环境。", "需重启", "配置加载时校验"),
-                    item("planner-cadence", "自动化周期", f"每 {_config_value(planner_automation if isinstance(planner_automation, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "Planner 自动化的预检轮询周期。", "需重启", "配置加载时校验"),
+                    item("planner-cadence", "调度周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "Planner Scheduler 检查是否需要启动单次 Planner Runner 的周期。", "需重启 Planner Scheduler", "配置加载时校验"),
                     item("planner-boundary", "安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "Planner 只能静态读取，不能直接修改任务库或业务文件。", "受保护", "配置加载时校验"),
                 ],
             },
@@ -415,7 +414,7 @@ def operations_config_payload(
                 "title": "Supervisor 管理",
                 "items": [
                     item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "托管 Dashboard，并周期检查 Dashboard、Planner 与 Codex CLI Dispatcher 的可核实状态。", "当前生效", "runtime/health-state.json", "active"),
-                    item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "健康任务探测并恢复整个 Supervisor 进程；不会领取任务或管理 Codex 自动化。", "当前生效", "健康任务运行结果"),
+                    item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "健康任务只探测并恢复 Supervisor 主进程，不领取或执行任务。", "当前生效", "健康任务运行结果"),
                 ],
             },
             {
@@ -430,9 +429,7 @@ def operations_config_payload(
                 "id": "worker",
                 "title": "Worker 管理",
                 "items": [
-                    item("worker-prompt", "Worker 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "worker"), "config/initialization.json", "L1-L5 Codex 自动化执行任务时必须遵循的单任务协议。", "读取时生效", "文件存在性检查"),
-                    item("worker-runtime", "默认运行环境", _config_value(automation if isinstance(automation, Mapping) else {}, "runtime_environment"), "config/initialization.json", "定时 Worker 的默认运行环境。", "需重启", "配置加载时校验"),
-                    item("worker-cadence", "自动化周期", f"每 {_config_value(automation if isinstance(automation, Mapping) else {}, 'worker_interval_minutes')} 分钟", "config/initialization.json", "L1-L5 自动 Worker 的轮询周期。", "需重启", "配置加载时校验"),
+                    item("worker-prompt", "Worker 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "worker"), "config/initialization.json", "不同执行入口共同遵循的单任务、scope 锁和结果写回协议。", "读取时生效", "文件存在性检查"),
                     item("global-capacity", "全局并发上限", _config_value(task_execution if isinstance(task_execution, Mapping) else {}, "global_max_active_executions"), "config/initialization.json", "所有运行环境共享的活动 execution 上限。", "需重启", "领取事务校验"),
                     item("platform-capacity", "平台并发上限", platform_capacities, "config/initialization.json", "每个运行环境的活动 execution 上限。", "需重启", "领取事务校验"),
                     item("human-approvals", "人工批准动作", approval_actions, "config/initialization.json", "Worker 必须由人工明确批准的高风险动作。", "受保护", "领取与 finish 事务校验"),

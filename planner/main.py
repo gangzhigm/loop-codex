@@ -71,11 +71,11 @@ def serve_planner(args: argparse.Namespace) -> None:
     """保持单实例 Scheduler 存活，并持续向 Supervisor 提供 heartbeat。"""
     config_path = Path(args.config).resolve()
     config = load_initialization_config(config_path)
-    planner_config = config["automations"]["planner"]
-    if planner_config["scheduled"] is not True:
+    scheduler_config = config["planner"]["scheduler"]
+    if scheduler_config["scheduled"] is not True:
         raise SystemExit("Planner 自动调度已关闭")
 
-    heartbeat_interval = float(planner_config["heartbeat_interval_seconds"])
+    heartbeat_interval = float(scheduler_config["heartbeat_interval_seconds"])
     pid_path = runtime_path(config, "pid_path")
     heartbeat_path = runtime_path(config, "heartbeat_path")
     stop_path = runtime_path(config, "stop_path")

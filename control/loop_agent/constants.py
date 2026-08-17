@@ -25,7 +25,14 @@ CAPABILITY_LEVELS = ("L1", "L2", "L3", "L4", "L5")
 PREFLIGHT_STATUSES = ("UNINSPECTED", "INSPECTING", "READY", "FAILED")
 LOCK_MODES = ("file", "module", "project")
 EXECUTION_POLICIES = ("automatic", "manual")
-CANONICAL_RUNTIME_ENVIRONMENTS = ("codex_automation", "codex_cli", "self_hosted_agent")
+# 新任务和新 execution 只允许系统能够自行启动、监管和恢复的内部运行环境。
+CANONICAL_RUNTIME_ENVIRONMENTS = ("codex_cli", "self_hosted_agent")
+# SQLite 继续接受旧环境值，保证已有记录可以读取和迁移；应用层禁止再创建该值。
+HISTORICAL_RUNTIME_ENVIRONMENTS = ("codex_automation",)
+DATABASE_RUNTIME_ENVIRONMENTS = (
+    *HISTORICAL_RUNTIME_ENVIRONMENTS,
+    *CANONICAL_RUNTIME_ENVIRONMENTS,
+)
 RUNTIME_ENVIRONMENTS = CANONICAL_RUNTIME_ENVIRONMENTS
 CLAIM_RUNTIME_ENVIRONMENTS = CANONICAL_RUNTIME_ENVIRONMENTS
 

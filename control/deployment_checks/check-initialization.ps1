@@ -5,9 +5,9 @@ param(
 )
 
 <#
-部署校验：只读核对当前真实初始化配置、角色提示词、Planner 边界和五档 Worker 定义。
+部署校验：只读核对当前真实初始化配置、角色提示词、Planner 边界和内部执行环境。
 失败时从输出的第一条“初始化检查失败”开始处理，后续错误可能只是同一路径或配置根因。
-本脚本不创建数据库、不注册计划任务，也不修改 Codex 自动化。
+本脚本不创建数据库、不注册计划任务，也不启动 Scheduler 或 Runner。
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -41,7 +41,7 @@ $root = Split-Path -Parent (Split-Path -Parent $resolvedConfig)
 $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
-Assert-Condition ($config.config_version -eq '4.3.0') 'config_version 为 4.3.0'
+Assert-Condition ($config.config_version -eq '4.4.0') 'config_version 为 4.4.0'
 Assert-Condition ($config.database.schema_version -eq '3.7.0') 'Schema 契约为 3.7.0'
 Assert-Condition ($config.prompts.planner -eq 'planner/planner.md') 'Planner 提示词路径唯一且已登记'
 
@@ -79,41 +79,16 @@ Assert-Condition (
     (($boundary.writeback.allowed_commands -join '|') -eq ($expectedWriteback -join '|'))
 ) 'Planner 写回命令为精确允许列表'
 
-$plannerAutomation = $config.automations.planner
-Assert-Condition ($plannerAutomation.automation_id -eq 'loop-agent-planner') 'Planner 自动化 ID 固定'
-Assert-Condition ($plannerAutomation.scheduled -is [bool]) 'Planner 自动调度开关为布尔值'
-Assert-Condition ($plannerAutomation.interval_minutes -eq 5) 'Planner 周期为 5 分钟'
-Assert-Condition ($plannerAutomation.model -eq 'gpt-5.6-terra') 'Planner 模型为 Terra'
-Assert-Condition ($plannerAutomation.reasoning_effort -eq 'high') 'Planner reasoning 为 high'
-Assert-Condition ($plannerAutomation.runtime_environment -eq 'codex_automation') 'Planner 环境为 codex_automation'
-Assert-Condition ($plannerAutomation.execution_kind -eq 'PLANNER') 'Planner execution kind 已隔离'
-Assert-Condition ($plannerAutomation.sandbox -eq 'read-only') 'Planner 自动化声明只读沙箱'
-Assert-Condition ($plannerAutomation.approval_policy -eq 'never') 'Planner 自动化禁止审批升级'
-Assert-Condition ($plannerAutomation.entry_prompt -match 'planner\\planner\.md') 'Planner 入口只引用权威提示词'
-Assert-Condition ($plannerAutomation.entry_prompt -match 'runtime_environment=codex_automation') 'Planner 入口显式声明运行环境'
-Assert-Condition ($plannerAutomation.entry_prompt -match 'execution_kind=PLANNER') 'Planner 入口显式声明角色'
-Assert-Condition ($plannerAutomation.entry_prompt -match 'sandbox=read-only') 'Planner 入口显式声明只读边界'
-
-$expectedWorkers = [ordered]@{
-    L1 = @('gpt-5.6-luna', 'medium', 0)
-    L2 = @('gpt-5.6-terra', 'medium', 2)
-    L3 = @('gpt-5.6-terra', 'high', 4)
-    L4 = @('gpt-5.6-sol', 'high', 6)
-    L5 = @('gpt-5.6-sol', 'xhigh', 8)
-}
-Assert-Condition ($config.automations.worker_interval_minutes -eq 20) 'Worker 周期为 20 分钟'
-foreach ($level in $expectedWorkers.Keys) {
-    $worker = $config.automations.capabilities.$level
-    $expected = $expectedWorkers[$level]
-    Assert-Condition ($worker.scheduled -eq $true) "$level Worker 已登记为定时任务"
-    Assert-Condition ($worker.execution_policy -eq 'automatic') "$level Worker 策略为 automatic"
-    Assert-Condition ($worker.model -eq $expected[0]) "$level Worker 模型固定"
-    Assert-Condition ($worker.reasoning_effort -eq $expected[1]) "$level Worker reasoning 固定"
-    Assert-Condition ($worker.offset_minutes -eq $expected[2]) "$level Worker 错峰固定"
-}
-Assert-Condition ($config.automations.entry_prompt_template -match 'worker\\worker\.md') 'Worker 入口只引用权威提示词'
-Assert-Condition ($config.automations.entry_prompt_template -match 'capability_level=\{capability_level\}') 'Worker 入口显式传递能力等级'
-Assert-Condition ($config.automations.entry_prompt_template -match 'execution_policy=automatic') 'Worker 入口显式传递执行策略'
+$plannerScheduler = $config.planner.scheduler
+Assert-Condition ($plannerScheduler.scheduled -is [bool]) 'Planner Scheduler 开关为布尔值'
+Assert-Condition ($plannerScheduler.interval_minutes -ge 1) 'Planner Scheduler 周期有效'
+Assert-Condition ($plannerScheduler.heartbeat_interval_seconds -ge 1) 'Planner Scheduler heartbeat 周期有效'
+Assert-Condition ($config.planner.default_runtime_environment -eq 'codex_cli') 'Planner 默认目标为内部 Codex CLI 环境'
+Assert-Condition ($null -eq $config.automations) '初始化配置不包含外部客户端自动化定义'
+$runtimeNames = @($config.runtime_environments.PSObject.Properties.Name | Sort-Object)
+Assert-Condition (($runtimeNames -join '|') -eq 'codex_cli|self_hosted_agent') '只登记两个内部运行环境'
+$profileNames = @($config.execution_profiles.PSObject.Properties.Name | Sort-Object)
+Assert-Condition (($profileNames -join '|') -eq 'codex_cli|self_hosted_agent') '只登记两个内部 execution profile'
 
 $operatorPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.operator)
 $plannerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.planner)
@@ -166,9 +141,9 @@ if (-not $SkipCodexCliCheck) {
     checks = $script:Checks.Count
     codex_cli = $codexVersion
     operator_actions = @(
-        '创建并复核独立 Planner 自动化的 5 分钟周期、Terra/high 和 read-only 边界。',
-        '逐条更新并复核 L1-L5 Worker 的模型、reasoning、20 分钟周期、错峰和入口参数。',
+        '复核 Planner Scheduler 的启停、轮询周期和 heartbeat 边界。',
+        '逐条复核内部运行环境 L1-L5 的模型、reasoning 和 attempt 参数。',
         '确认 Planner 只暴露受控 loopctl preflight stdin 写回，不授予直接文件或 SQLite 写权限。',
-        '完成真实自动化切换后分别验证 Planner NO_TASK 与五条 Worker NO_TASK。'
+        '分别验证 Planner 和内部 Runner 的 NO_TASK 路径。'
     )
 } | ConvertTo-Json -Depth 5

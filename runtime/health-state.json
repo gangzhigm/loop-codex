@@ -1,12 +1,32 @@
 {
-  "component": "dashboard-server",
-  "status": "RESTARTED",
-  "pid": 27128,
-  "checked_at": "2026-08-11T18:10:27.868+08:00",
-  "last_checked_at": "2026-08-11T18:10:27.868+08:00",
+  "component": "supervisor",
+  "status": "HEALTHY",
+  "pid": 24792,
+  "checked_at": "2026-08-17T11:16:36.883+08:00",
+  "last_checked_at": "2026-08-17T11:16:36.883+08:00",
   "consecutive_failures": 0,
-  "message": "Supervisor 主进程已启动或恢复。",
+  "message": "Supervisor 主进程正常。",
   "events": [
+    {
+      "at": "2026-08-17T11:16:36.883+08:00",
+      "component": "supervisor",
+      "status": "HEALTHY",
+      "message": "Supervisor 主进程正常。",
+      "details": {
+        "pid": 24792,
+        "failures": 0
+      }
+    },
+    {
+      "at": "2026-08-17T11:16:16.712+08:00",
+      "component": "supervisor",
+      "status": "RESTARTED",
+      "message": "Supervisor 主进程已启动或恢复。",
+      "details": {
+        "pid": 24792,
+        "failures": 0
+      }
+    },
     {
       "at": "2026-08-11T18:10:27.868+08:00",
       "component": "dashboard-server",
@@ -988,52 +1008,41 @@
         "pid": 14228,
         "failures": 0
       }
-    },
-    {
-      "at": "2026-08-06T10:08:34.170+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 14228,
-        "failures": 0
-      }
-    },
-    {
-      "at": "2026-08-06T09:38:34.906+08:00",
-      "component": "dashboard-server",
-      "status": "HEALTHY",
-      "message": "Dashboard Server 正常。",
-      "details": {
-        "pid": 14228,
-        "failures": 0
-      }
     }
   ],
   "monitors": {
     "dashboard": {
       "component": "dashboard-server",
       "status": "HEALTHY",
-      "checked_at": "2026-08-14T18:26:24.111+08:00",
+      "checked_at": "2026-08-17T11:20:34.343+08:00",
       "message": "Dashboard 服务线程正在运行。"
     },
     "planner": {
       "component": "planner",
-      "status": "IDLE",
-      "checked_at": "2026-08-14T18:26:24.111+08:00",
-      "pending_tasks": 0,
-      "active_preflights": 0,
-      "message": "没有待预检草稿；Codex 自动化运行状态无法由本机 Supervisor 直接查询。"
+      "status": "RESTARTED",
+      "checked_at": "2026-08-17T11:20:34.343+08:00",
+      "pid": 29712,
+      "heartbeat": {
+        "component": "planner",
+        "pid": 29712,
+        "status": "RUNNING",
+        "checked_at": "2026-08-17T11:20:34.591+08:00"
+      },
+      "message": "Planner Scheduler 已启动或恢复。"
     },
     "dispatcher": {
-      "component": "codex-cli-dispatcher",
-      "status": "UNDEPLOYED",
-      "checked_at": "2026-08-14T18:26:24.111+08:00",
-      "pending_tasks": 0,
-      "task_name": "Local Agent Loop Codex CLI Dispatcher",
-      "message": "Dispatcher 计划任务尚未注册，无法自动调度待执行任务。",
-      "scheduled_task_registered": false
+      "component": "dispatcher",
+      "status": "RESTARTED",
+      "checked_at": "2026-08-17T11:20:38.446+08:00",
+      "pid": 23768,
+      "heartbeat": {
+        "component": "dispatcher",
+        "pid": 23768,
+        "status": "RUNNING",
+        "checked_at": "2026-08-17T11:20:38.781+08:00"
+      },
+      "message": "Dispatcher Scheduler 已启动或恢复。"
     }
   },
-  "monitor_checked_at": "2026-08-14T18:26:30.058+08:00"
+  "monitor_checked_at": "2026-08-17T11:20:42.702+08:00"
 }

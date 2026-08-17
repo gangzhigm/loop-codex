@@ -90,15 +90,13 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     deepseek = config.get("deepseek") or {}
     priority_policy = config.get("priority_policy") or {}
     dashboard = config.get("dashboard") or {}
-    automations = config.get("automations") or {}
-    planner_automation = automations.get("planner") or {}
+    planner_scheduler = planner.get("scheduler") or {}
     codex_cli = config.get("codex_cli") or {}
     dispatcher = codex_cli.get("dispatcher") or {}
     health = config.get("health") or {}
     supervisor = config.get("supervisor") or {}
     supervisor_components = supervisor.get("components") or {}
     platform_limits = execution.get("platform_max_active_executions") or {}
-    automation_capabilities = automations.get("capabilities") or {}
     runtime_environments = config.get("runtime_environments") or {}
     project_defaults = priority_policy.get("project_defaults") or {}
     expected_supervisor_components = {
@@ -137,17 +135,6 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
             for name, contract in expected_supervisor_components.items()
         )
     )
-    valid_automation_capabilities = set(automation_capabilities) == set(CAPABILITY_LEVELS) and all(
-        isinstance(automation_capabilities[level], dict)
-        and isinstance(automation_capabilities[level].get("name"), str)
-        and isinstance(automation_capabilities[level].get("model"), str)
-        and automation_capabilities[level].get("reasoning_effort") in {"medium", "high", "xhigh"}
-        and automation_capabilities[level].get("execution_policy") == "automatic"
-        and isinstance(automation_capabilities[level].get("automation_id"), str)
-        and automation_capabilities[level].get("scheduled") is True
-        and isinstance(automation_capabilities[level].get("offset_minutes"), int)
-        for level in CAPABILITY_LEVELS
-    )
     valid_runtime_environment_config = set(runtime_environments) == set(CANONICAL_RUNTIME_ENVIRONMENTS) and all(
         isinstance(runtime_environments[environment], dict)
         and isinstance(runtime_environments[environment].get("name"), str)
@@ -172,7 +159,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and execution_profiles[environment].get("provider_id") is None
         and set((execution_profiles[environment].get("capabilities") or {})) == set(CAPABILITY_LEVELS)
         and all(valid_profile_fields(item) for item in execution_profiles[environment]["capabilities"].values())
-        for environment in ("codex_automation", "codex_cli")
+        for environment in ("codex_cli",)
     )
     self_hosted_profiles = execution_profiles.get("self_hosted_agent") or {}
     providers = self_hosted_profiles.get("providers") or {}
@@ -187,7 +174,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
     )
     valid = (
-        config.get("config_version") == "4.3.0"
+        config.get("config_version") == "4.4.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -231,6 +218,11 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner["lease_seconds"] >= 60
         and isinstance(planner.get("attempt_timeout_seconds"), int)
         and planner["attempt_timeout_seconds"] >= planner["lease_seconds"]
+        and isinstance(planner_scheduler.get("scheduled"), bool)
+        and isinstance(planner_scheduler.get("interval_minutes"), int)
+        and planner_scheduler["interval_minutes"] >= 1
+        and isinstance(planner_scheduler.get("heartbeat_interval_seconds"), int)
+        and planner_scheduler["heartbeat_interval_seconds"] >= 1
         and planner_boundary.get("sandbox") == "read-only"
         and planner_boundary.get("approval_policy") == "never"
         and planner_boundary.get("network_access") is False
@@ -279,33 +271,9 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and 1 <= dashboard["port"] <= 65535
         and isinstance(dashboard.get("poll_interval_ms"), int)
         and dashboard["poll_interval_ms"] >= 500
-        and isinstance(automations.get("worker_interval_minutes"), int)
-        and automations["worker_interval_minutes"] >= 1
-        and isinstance(automations.get("entry_prompt_template"), str)
-        and "{capability_level}" in automations["entry_prompt_template"]
-        and automations.get("runtime_environment") == "codex_automation"
-        and "codex_automation" in automations["entry_prompt_template"]
-        and planner_automation.get("automation_id") == "loop-agent-planner"
-        and planner_automation.get("name") == "Loop Agent Planner"
-        and isinstance(planner_automation.get("scheduled"), bool)
-        and planner_automation.get("interval_minutes") == 5
-        and isinstance(planner_automation.get("heartbeat_interval_seconds"), int)
-        and planner_automation["heartbeat_interval_seconds"] >= 1
-        and planner_automation.get("model") == "gpt-5.6-terra"
-        and planner_automation.get("reasoning_effort") == "high"
-        and planner_automation.get("runtime_environment") == "codex_automation"
-        and planner_automation.get("execution_kind") == "PLANNER"
-        and planner_automation.get("sandbox") == "read-only"
-        and planner_automation.get("approval_policy") == "never"
-        and isinstance(planner_automation.get("entry_prompt"), str)
-        and "planner\\planner.md" in planner_automation["entry_prompt"]
-        and "runtime_environment=codex_automation" in planner_automation["entry_prompt"]
-        and "execution_kind=PLANNER" in planner_automation["entry_prompt"]
-        and "sandbox=read-only" in planner_automation["entry_prompt"]
         and isinstance(dispatcher.get("scheduled"), bool)
         and isinstance(dispatcher.get("heartbeat_interval_seconds"), int)
         and dispatcher["heartbeat_interval_seconds"] >= 1
-        and valid_automation_capabilities
         and valid_runtime_environment_config
         and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
         and direct_profiles_valid
@@ -327,7 +295,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and supervisor["component_stop_timeout_seconds"] >= 1
         and valid_supervisor_components
         and supervisor_components["planner"]["heartbeat_timeout_seconds"]
-        >= planner_automation["heartbeat_interval_seconds"]
+        >= planner_scheduler["heartbeat_interval_seconds"]
         and supervisor_components["dispatcher"]["heartbeat_timeout_seconds"]
         >= dispatcher["heartbeat_interval_seconds"]
     )

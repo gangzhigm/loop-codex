@@ -23,7 +23,6 @@ from loopdb import ARCHIVABLE_STATUSES, BASE_DIR, connect
 
 HEALTH_STATE = BASE_DIR / "runtime" / "health-state.json"
 TASK_ID_PATTERN = re.compile(r"[A-Z][A-Z0-9_-]*\Z")
-EXECUTION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 IMAGE_CONTENT_TYPES = {
     ".avif": "image/avif",
     ".gif": "image/gif",
@@ -156,80 +155,6 @@ def archive_dashboard_task(
         ],
     )
     return {"ok": True, "confirmed": confirmed, **archived}
-
-
-def recover_dashboard_task(
-    database_path: Path,
-    task_id: object,
-    execution_id: object,
-    recovery_action: object,
-    row_version: object,
-    confirmed_safe: object,
-) -> dict[str, object]:
-    """只有明确确认旧会话结束后，才恢复 Codex 任务。"""
-    if not isinstance(task_id, str) or TASK_ID_PATTERN.fullmatch(task_id) is None:
-        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "task_id 无效")
-    if (
-        not isinstance(execution_id, str)
-        or EXECUTION_ID_PATTERN.fullmatch(execution_id) is None
-    ):
-        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "execution_id 无效")
-    if recovery_action not in {"requeue", "failed", "wait"}:
-        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "recovery_action 无效")
-    if (
-        isinstance(row_version, bool)
-        or not isinstance(row_version, int)
-        or row_version < 1
-    ):
-        raise DashboardActionError(HTTPStatus.BAD_REQUEST, "row_version 无效")
-    if confirmed_safe is not True:
-        raise DashboardActionError(
-            HTTPStatus.FORBIDDEN, "必须明确确认旧 Codex 客户端会话已结束"
-        )
-
-    database = connect(database_path)
-    try:
-        task = database.execute(
-            "SELECT status, assigned_agent, runtime_environment, row_version FROM tasks WHERE id=?",
-            (task_id,),
-        ).fetchone()
-        execution = database.execute(
-            "SELECT task_id, status, recovery_required FROM executions WHERE execution_id=?",
-            (execution_id,),
-        ).fetchone()
-    finally:
-        database.close()
-    if task is None or execution is None or execution["task_id"] != task_id:
-        raise DashboardActionError(
-            HTTPStatus.NOT_FOUND, "待恢复 execution 不存在"
-        )
-    if task["row_version"] != row_version:
-        raise DashboardActionError(
-            HTTPStatus.CONFLICT, "任务状态已变化，请刷新后重试"
-        )
-    if (
-        task["status"] != "WAITING_HUMAN"
-        or task["assigned_agent"] != execution_id
-        or task["runtime_environment"] != "codex_automation"
-        or execution["status"] not in {"STALLED", "TIMED_OUT"}
-        or not execution["recovery_required"]
-    ):
-        raise DashboardActionError(
-            HTTPStatus.CONFLICT, "任务不处于 Codex 安全恢复状态"
-        )
-    recovered = run_loopctl(
-        database_path,
-        [
-            "recover",
-            execution_id,
-            "--human-confirmed-safe",
-            "--action",
-            str(recovery_action),
-            "--expected-row-version",
-            str(row_version),
-        ],
-    )
-    return {"ok": True, **recovered}
 
 
 def runtime_health(

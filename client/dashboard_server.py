@@ -102,7 +102,6 @@ from client.service.tasks import (
     HEALTH_STATE,
     DashboardActionError,
     archive_dashboard_task,
-    recover_dashboard_task,
     resolve_attachment_image,
     run_loopctl,
     runtime_health,
@@ -700,19 +699,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     payload["task_id"],
                     action,
                     payload["row_version"],
-                )
-            elif action == "recover":
-                if set(payload) != {
-                    "task_id", "action", "execution_id", "recovery_action", "row_version", "confirmed_safe"
-                }:
-                    raise DashboardActionError(HTTPStatus.BAD_REQUEST, "恢复请求字段无效")
-                result = recover_dashboard_task(
-                    self.server.database_path,
-                    payload["task_id"],
-                    payload["execution_id"],
-                    payload["recovery_action"],
-                    payload["row_version"],
-                    payload["confirmed_safe"],
                 )
             else:
                 raise DashboardActionError(HTTPStatus.BAD_REQUEST, "action 无效")

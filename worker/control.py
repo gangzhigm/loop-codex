@@ -253,16 +253,10 @@ def command_claim(args: argparse.Namespace) -> None:
                     }
                 )
                 return
-            outcome = (
-                "RECOVERY_REQUIRED"
-                if compatible_recoveries
-                and target["runtime_environment"] == "codex_automation"
-                else "NO_TASK"
-            )
             commit(database)
             output(
                 {
-                    "outcome": outcome,
+                    "outcome": "NO_TASK",
                     "capability_level": target["capability_level"],
                     "runtime_environment": target["runtime_environment"],
                     "provider_id": target["provider_id"],

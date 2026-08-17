@@ -1,5 +1,5 @@
 {
-  "config_version": "4.3.0",
+  "config_version": "4.4.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -17,13 +17,6 @@
     "cli_worker": "runner/cli-worker.md"
   },
   "runtime_environments": {
-    "codex_automation": {
-      "name": "Codex 客户端自动化",
-      "entry": {
-        "type": "codex_automation",
-        "claim_argument": "codex_automation"
-      }
-    },
     "codex_cli": {
       "name": "Codex CLI",
       "entry": {
@@ -40,16 +33,6 @@
     }
   },
   "execution_profiles": {
-    "codex_automation": {
-      "provider_id": null,
-      "capabilities": {
-        "L1": { "model": "gpt-5.6-luna", "reasoning": "medium", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L2": { "model": "gpt-5.6-terra", "reasoning": "medium", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L3": { "model": "gpt-5.6-terra", "reasoning": "high", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L4": { "model": "gpt-5.6-sol", "reasoning": "high", "attempt_timeout_seconds": 3600, "max_retries": 1 },
-        "L5": { "model": "gpt-5.6-sol", "reasoning": "xhigh", "attempt_timeout_seconds": 3600, "max_retries": 1 }
-      }
-    },
     "codex_cli": {
       "provider_id": null,
       "capabilities": {
@@ -81,7 +64,6 @@
     "max_attempts": 2,
     "global_max_active_executions": 8,
     "platform_max_active_executions": {
-      "codex_automation": 5,
       "codex_cli": 5,
       "self_hosted_agent": 5
     },
@@ -96,12 +78,17 @@
   },
   "planner": {
     "execution_kind": "PLANNER",
-    "default_runtime_environment": "codex_automation",
+    "default_runtime_environment": "codex_cli",
     "max_active_executions": 2,
     "heartbeat_interval_seconds": 30,
     "stalled_after_seconds": 300,
     "lease_seconds": 600,
     "attempt_timeout_seconds": 1800,
+    "scheduler": {
+      "scheduled": true,
+      "interval_minutes": 5,
+      "heartbeat_interval_seconds": 15
+    },
     "client_boundary": {
       "sandbox": "read-only",
       "approval_policy": "never",
@@ -192,32 +179,6 @@
       "enabled": true,
       "max_body_bytes": 16384,
       "replay_cache_size": 1024
-    }
-  },
-  "automations": {
-    "worker_interval_minutes": 20,
-    "runtime_environment": "codex_automation",
-    "entry_prompt_template": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\worker\\worker.md，并严格执行；runtime_environment=codex_automation，capability_level={capability_level}，execution_policy=automatic。",
-    "planner": {
-      "automation_id": "loop-agent-planner",
-      "name": "Loop Agent Planner",
-      "scheduled": true,
-      "interval_minutes": 5,
-      "heartbeat_interval_seconds": 15,
-      "model": "gpt-5.6-terra",
-      "reasoning_effort": "high",
-      "runtime_environment": "codex_automation",
-      "execution_kind": "PLANNER",
-      "sandbox": "read-only",
-      "approval_policy": "never",
-      "entry_prompt": "以 UTF-8 完整读取 E:\\code\\local-agent-loop\\planner\\planner.md，并严格执行；runtime_environment=codex_automation，execution_kind=PLANNER，sandbox=read-only。"
-    },
-    "capabilities": {
-      "L1": { "name": "Loop Agent Worker · L1", "model": "gpt-5.6-luna", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-routine", "scheduled": true, "offset_minutes": 0 },
-      "L2": { "name": "Loop Agent Worker · L2", "model": "gpt-5.6-terra", "reasoning_effort": "medium", "execution_policy": "automatic", "automation_id": "loop-agent-worker-standard", "scheduled": true, "offset_minutes": 2 },
-      "L3": { "name": "Loop Agent Worker · L3", "model": "gpt-5.6-terra", "reasoning_effort": "high", "execution_policy": "automatic", "automation_id": "loop-agent-worker-advanced", "scheduled": true, "offset_minutes": 4 },
-      "L4": { "name": "Loop Agent Worker · L4", "model": "gpt-5.6-sol", "reasoning_effort": "high", "execution_policy": "automatic", "automation_id": "loop-agent-worker-deep", "scheduled": true, "offset_minutes": 6 },
-      "L5": { "name": "Loop Agent Worker · L5", "model": "gpt-5.6-sol", "reasoning_effort": "xhigh", "execution_policy": "automatic", "automation_id": "loop-agent-worker-complex", "scheduled": true, "offset_minutes": 8 }
     }
   },
   "health": {
