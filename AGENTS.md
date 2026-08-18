@@ -16,9 +16,12 @@
 ## 权威数据边界
 
 - `data/loop-agent.sqlite3`：任务、Planner 预检及执行一致性数据的唯一事实来源；禁止重建运行时 `TASKS.json` 或 `INBOX.json`。
+- `data/assets/`：任务原始附件和派生附件的统一存储目录；SQLite 只记录相对路径、摘要和用途，不嵌入文件内容。
+- `data/backups/`：数据库迁移审计与灾难恢复快照目录；正常运行不得从备份读取任务。
+- `data/runtime/`：PID、heartbeat、锁、日志和健康状态目录；内容可重建，不是任务事实源。
 - `config/initialization.json`：内部运行环境、入口、模型映射、Scheduler 周期、执行参数、默认优先级和部署参数的唯一配置来源；不得把这些配置复制到 SQLite。
 - `E:\code\根目录清单.md`：项目路由的实时来源，不得缓存到 SQLite。
-- `runtime/health-state.json`：健康状态的唯一写入位置，不得把健康状态保存到 SQLite。
+- `data/runtime/health-state.json`：健康状态的唯一写入位置，不得把健康状态保存到 SQLite。
 
 ## 角色入口
 

@@ -136,8 +136,8 @@ Dashboard 异常：
 
 Supervisor 异常：
 
-1. `runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
-2. `runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
+1. `data/runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
+2. `data/runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
 3. `health_run.py` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
 4. Planner 与 Dispatcher 分别维护自己的 PID 和 heartbeat；Supervisor 不读取任务数量。
 

@@ -40,7 +40,7 @@ $root = Split-Path -Parent (Split-Path -Parent $resolvedConfig)
 $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
-Assert-Condition ($config.config_version -eq '5.0.0') 'config_version 为 5.0.0'
+Assert-Condition ($config.config_version -eq '5.1.0') 'config_version 为 5.1.0'
 Assert-Condition ($config.database.schema_version -eq '3.7.0') 'Schema 契约为 3.7.0'
 Assert-Condition ($config.prompts.planner -eq 'planner/planner.md') 'Planner 提示词路径唯一且已登记'
 

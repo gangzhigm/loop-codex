@@ -211,7 +211,7 @@ def resolve_attachment_image(
     if registered is None:
         raise FileNotFoundError("attachment not found")
 
-    task_root = (base_dir / "assets" / task_id).resolve()
+    task_root = (base_dir / "data" / "assets" / task_id).resolve()
     image_path = (base_dir / attachment_path).resolve()
     if not image_path.is_relative_to(task_root):
         raise PermissionError(

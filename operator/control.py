@@ -18,6 +18,7 @@ from __future__ import annotations
 # 本角色只管理任务事实，不领取任务，也不实现任务描述中的业务代码。
 
 import argparse
+import json
 from pathlib import Path
 
 from loop_agent.control.io import output, read_json, require_expected_row_version
@@ -43,6 +44,41 @@ from loopdb import (
     task_dict,
     transaction,
 )
+
+
+def _normalize_attachments(task_id: str, value: object) -> list[dict[str, object]]:
+    """校验新任务附件只能登记在该任务自己的 data/assets 目录。"""
+    if not isinstance(value, list):
+        raise LoopError("attachments 必须是数组")
+    task_prefix = f"data/assets/{task_id}/"
+    normalized: list[dict[str, object]] = []
+    for attachment in value:
+        if not isinstance(attachment, dict):
+            raise LoopError("attachments 每一项必须是对象")
+        path = attachment.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise LoopError("attachment.path 不能为空")
+        relative = Path(path.strip())
+        normalized_path = relative.as_posix()
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or not normalized_path.startswith(task_prefix)
+        ):
+            raise LoopError(
+                f"任务附件必须位于 {task_prefix}，当前路径: {normalized_path}"
+            )
+        normalized.append({**attachment, "path": normalized_path})
+    return normalized
+
+
+def _migrated_asset_path(value: str) -> str:
+    """把旧根级附件路径转换为 data 下的新相对路径。"""
+    if value.startswith("assets/"):
+        return "data/" + value
+    if value.startswith("local-agent-loop/assets/"):
+        return "local-agent-loop/data/" + value.removeprefix("local-agent-loop/")
+    return value
 
 
 def command_confirm(args: argparse.Namespace) -> None:
@@ -346,6 +382,9 @@ def command_enqueue(args: argparse.Namespace) -> None:
                 },
                 "result": item.get("result")
                 or {"summary": None, "verification": [], "error": None},
+                "attachments": _normalize_attachments(
+                    str(item["id"]), item.get("attachments") or []
+                ),
             }
             insert_task(
                 database,
@@ -569,6 +608,7 @@ def command_migrate_internal_runtime(args: argparse.Namespace) -> None:
                     "provider_id": provider_id,
                 }
             )
+            return
 
         stamp = now_shanghai()
         reason = (
@@ -605,6 +645,115 @@ def command_migrate_internal_runtime(args: argparse.Namespace) -> None:
                 "source_counts": source_counts,
                 "runtime_environment": runtime_environment,
                 "provider_id": provider_id,
+                "revision": revision,
+            }
+        )
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
+def command_migrate_assets_directory(args: argparse.Namespace) -> None:
+    """把旧根级附件记录迁移到 data/assets，且不改变任务生命周期。"""
+    database = connect(args.db)
+    try:
+        transaction(database)
+        tasks = database.execute(
+            "SELECT id, status, scope_hint_json, lock_mode, row_version FROM tasks "
+            "ORDER BY id"
+        ).fetchall()
+        attachments = database.execute(
+            "SELECT task_id, ordinal, path FROM task_attachments ORDER BY task_id, ordinal"
+        ).fetchall()
+        scopes = database.execute(
+            "SELECT task_id, ordinal, scope FROM task_scopes ORDER BY task_id, ordinal"
+        ).fetchall()
+
+        affected_task_ids: set[str] = set()
+        migrated_attachments = 0
+        migrated_scopes = 0
+        for attachment in attachments:
+            migrated_path = _migrated_asset_path(attachment["path"])
+            if migrated_path != attachment["path"]:
+                database.execute(
+                    "UPDATE task_attachments SET path=? WHERE task_id=? AND ordinal=?",
+                    (migrated_path, attachment["task_id"], attachment["ordinal"]),
+                )
+                affected_task_ids.add(attachment["task_id"])
+                migrated_attachments += 1
+
+        for scope in scopes:
+            migrated_scope = _migrated_asset_path(scope["scope"])
+            if migrated_scope == scope["scope"]:
+                continue
+            task = next(item for item in tasks if item["id"] == scope["task_id"])
+            if task["lock_mode"] != "project":
+                raise LoopError(
+                    f"任务 {task['id']} 的附件 scope 不是 project 锁，拒绝保留旧 scope_key"
+                )
+            database.execute(
+                "UPDATE task_scopes SET scope=? WHERE task_id=? AND ordinal=?",
+                (migrated_scope, scope["task_id"], scope["ordinal"]),
+            )
+            affected_task_ids.add(scope["task_id"])
+            migrated_scopes += 1
+
+        migrated_scope_hints = 0
+        changed_tasks: list[object] = []
+        for task in tasks:
+            scope_hints = json.loads(task["scope_hint_json"])
+            migrated_hints = [_migrated_asset_path(value) for value in scope_hints]
+            changed_hint_count = sum(
+                before != after
+                for before, after in zip(scope_hints, migrated_hints, strict=True)
+            )
+            if changed_hint_count:
+                database.execute(
+                    "UPDATE tasks SET scope_hint_json=? WHERE id=?",
+                    (json_dump(migrated_hints), task["id"]),
+                )
+                affected_task_ids.add(task["id"])
+                migrated_scope_hints += changed_hint_count
+            if task["id"] in affected_task_ids:
+                changed_tasks.append(task)
+
+        if not affected_task_ids:
+            commit(database)
+            output(
+                {
+                    "outcome": "ALREADY_MIGRATED",
+                    "migrated_attachments": 0,
+                    "migrated_scope_hints": 0,
+                    "migrated_scopes": 0,
+                }
+            )
+            return
+
+        stamp = now_shanghai()
+        reason = args.reason or "任务附件目录从 assets 迁移到 data/assets。"
+        for task in changed_tasks:
+            database.execute(
+                "UPDATE tasks SET updated_at=?, row_version=row_version+1 "
+                "WHERE id=? AND row_version=?",
+                (stamp, task["id"], task["row_version"]),
+            )
+            database.execute(
+                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+                "VALUES(?, ?, ?, ?, 'task-manager', ?)",
+                (task["id"], stamp, task["status"], task["status"], reason),
+            )
+
+        revision = bump_revision(database, "task-manager")
+        commit(database)
+        output(
+            {
+                "outcome": "ASSETS_DIRECTORY_MIGRATED",
+                "affected_tasks": len(affected_task_ids),
+                "migrated_attachments": migrated_attachments,
+                "migrated_scope_hints": migrated_scope_hints,
+                "migrated_scopes": migrated_scopes,
                 "revision": revision,
             }
         )

@@ -260,7 +260,7 @@ class LoopMigrationTests(LoopTestCase):
         )
         database.execute(
             "INSERT INTO task_attachments(task_id, ordinal, path, sha256, role, saved_at) "
-            "VALUES('SCHEMA-32-ROUTED', 0, 'assets/file.txt', 'abc', 'result', ?)",
+            "VALUES('SCHEMA-32-ROUTED', 0, 'data/assets/file.txt', 'abc', 'result', ?)",
             (stamp,),
         )
         database.execute(

@@ -88,6 +88,7 @@ command_archive = operator_control.command_archive
 command_cancel = operator_control.command_cancel
 command_confirm = operator_control.command_confirm
 command_enqueue = operator_control.command_enqueue
+command_migrate_assets_directory = operator_control.command_migrate_assets_directory
 command_migrate_internal_runtime = operator_control.command_migrate_internal_runtime
 command_requeue = operator_control.command_requeue
 command_resolve_human = operator_control.command_resolve_human
@@ -249,6 +250,11 @@ def parser() -> argparse.ArgumentParser:
     migrate_internal_runtime = commands.add_parser("migrate-internal-runtime")
     migrate_internal_runtime.add_argument("--reason")
     migrate_internal_runtime.set_defaults(handler=command_migrate_internal_runtime)
+
+    # 把根级任务附件路径迁移到 data，不改变任务状态、结果或归档属性。
+    migrate_assets_directory = commands.add_parser("migrate-assets-directory")
+    migrate_assets_directory.add_argument("--reason")
+    migrate_assets_directory.set_defaults(handler=command_migrate_assets_directory)
 
     # requeue 根据当前状态回到 DRAFT 或 PENDING；cancel 只做逻辑取消并保留历史。
     requeue = commands.add_parser("requeue")

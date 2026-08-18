@@ -413,7 +413,7 @@ def operations_config_payload(
                 "id": "supervisor",
                 "title": "Supervisor 管理",
                 "items": [
-                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "托管 Dashboard，并周期检查 Dashboard、Planner 与内部 Agent Dispatcher 的可核实状态。", "当前生效", "runtime/health-state.json", "active"),
+                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "托管 Dashboard，并周期检查 Dashboard、Planner 与内部 Agent Dispatcher 的可核实状态。", "当前生效", "data/runtime/health-state.json", "active"),
                     item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "健康任务只探测并恢复 Supervisor 主进程，不领取或执行任务。", "当前生效", "健康任务运行结果"),
                 ],
             },
@@ -421,7 +421,7 @@ def operations_config_payload(
                 "id": "dispatcher",
                 "title": "Dispatcher 管理",
                 "items": [
-                    item("dispatcher-service", "常驻 Dispatcher", "main.py serve", "dispatcher/main.py", "由 Supervisor 管理单实例、PID 与 heartbeat，并按配置周期检查是否需要分发 Runner。", "当前生效", "runtime/health-state.json", "active"),
+                    item("dispatcher-service", "常驻 Dispatcher", "main.py serve", "dispatcher/main.py", "由 Supervisor 管理单实例、PID 与 heartbeat，并按配置周期检查是否需要分发 Runner。", "当前生效", "data/runtime/health-state.json", "active"),
                     item("agent-dispatcher", "Runner 分发周期", f"每 {_config_value(dispatcher if isinstance(dispatcher, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "每轮最多创建一个内部 Agent Runner；创建成功后立即返回，不等待 Runner 执行结束。", "需重启 Dispatcher", "配置加载时校验"),
                 ],
             },

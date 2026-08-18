@@ -86,6 +86,10 @@ assert(!html.includes('task?.status !== "WAITING_CONFLICT"'), "旧 WAITING_CONFL
 
 assert(html.includes('task?.operator_definition'), "Dashboard 未验证 Operator 原始定义");
 assert(html.includes('task?.planner_supplement'), "Dashboard 未验证 Planner 补充");
+assert(html.includes('if (!task?.provider_id || !providerConfig)'), "Dashboard 未独立校验 self-hosted Provider");
+assert(html.includes('task.capability_level !== null && !executionConfig('), "Dashboard 会把未完成预检的空能力等级误判为 Provider 无效");
+assert(html.includes('function formatTaskDate(value)'), "任务时间列缺少日期格式化函数");
+assert(html.includes('<span class="task-time-label">日期</span>${taskDateValue(task.started_at)}'), "任务时间列未显示执行开始日期");
 assert(html.includes('function renderPlannerSupplement(task)'), "缺少 Planner 预检详情渲染");
 assert(html.includes('Operator 原始定义'), "详情没有区分 Operator 原始定义");
 assert(html.includes('Operator 业务验收'), "详情没有展示 Operator 业务验收");
@@ -122,7 +126,7 @@ assert(!html.includes('!key.startsWith("project:")'), "任务项目展示仍排�
 assert(html.includes("function hintedScopeProject(scope)"), "缺少预检前 scope hint 项目回退解析");
 assert(html.includes("if (!projectScopes.size)"), "最终 scope 缺失时未回退到 scope hint");
 assert(html.includes("right.length - left.length"), "scope hint 项目匹配未优先使用最长登记路径");
-assert(html.includes('scope.startsWith("local-agent-loop/assets/")'), "项目展示丢失纯附件项目排除规则");
+assert(html.includes('scope.startsWith("local-agent-loop/data/assets/")'), "项目展示丢失纯附件项目排除规则");
 
 assert(html.includes('function resetHeaderFilters()'), "缺少状态切换时的筛选重置");
 assert(html.includes('const nextFilter = ["draft", "review", "pending", "active", "closed", "archived"]'), "分类切换没有覆盖当前生命周期");

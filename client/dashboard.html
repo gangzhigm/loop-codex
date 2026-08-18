@@ -2357,6 +2357,20 @@
       return `${time.hour}:${time.minute}`;
     }
 
+    function formatTaskDate(value) {
+      if (!value) return "--";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "日期无效";
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).formatToParts(date);
+      const dateParts = Object.fromEntries(parts.map(({ type, value: partValue }) => [type, partValue]));
+      return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    }
+
     function formatTaskDuration(task) {
       const startTime = new Date(task?.started_at).getTime();
       if (!Number.isFinite(startTime)) return "--";
@@ -2367,6 +2381,11 @@
 
     function taskTimeValue(value) {
       const formatted = formatTaskTime(value);
+      return `<span class="task-time-value${formatted === "--" ? " is-placeholder" : ""}">${escapeHtml(formatted)}</span>`;
+    }
+
+    function taskDateValue(value) {
+      const formatted = formatTaskDate(value);
       return `<span class="task-time-value${formatted === "--" ? " is-placeholder" : ""}">${escapeHtml(formatted)}</span>`;
     }
 
@@ -2516,7 +2535,7 @@
       }
       if (projectScopes.size > 1) {
         const loopScopes = projectScopes.get("local-agent-loop") ?? [];
-        if (loopScopes.length && loopScopes.every((scope) => scope.startsWith("local-agent-loop/assets/"))) {
+        if (loopScopes.length && loopScopes.every((scope) => scope.startsWith("local-agent-loop/data/assets/"))) {
           projectScopes.delete("local-agent-loop");
         }
       }
@@ -2722,8 +2741,13 @@
         if (!task?.runtime_environment || !validRuntimeEnvironments.has(task.runtime_environment)) {
           errors.push(`任务 ${task?.id ?? index} 运行环境缺失或未知`);
         }
-        if (task?.runtime_environment === "self_hosted_agent" && (!task?.provider_id || !executionConfig(task.runtime_environment, task.provider_id, task.capability_level, candidate))) {
-          errors.push(`任务 ${task?.id ?? index} Provider 缺失或未知`);
+        if (task?.runtime_environment === "self_hosted_agent") {
+          const providerConfig = candidate?.runtime_config?.execution_profiles?.self_hosted_agent?.providers?.[task.provider_id];
+          if (!task?.provider_id || !providerConfig) {
+            errors.push(`任务 ${task?.id ?? index} Provider 缺失或未知`);
+          } else if (task.capability_level !== null && !executionConfig(task.runtime_environment, task.provider_id, task.capability_level, candidate)) {
+            errors.push(`任务 ${task?.id ?? index} 能力等级执行配置缺失或未知`);
+          }
         }
         if (task?.runtime_environment !== "self_hosted_agent" && task?.provider_id !== null) {
           errors.push(`任务 ${task?.id ?? index} Provider 路由无效`);
@@ -2964,6 +2988,7 @@
           <td data-label="运行环境">${environmentCell(task)}</td>
           <td data-label="项目">${projectCell(task)}</td>
           <td data-label="时间"><div class="task-time-info">
+            <div class="task-time-row"><span class="task-time-label">日期</span>${taskDateValue(task.started_at)}</div>
             <div class="task-time-row"><span class="task-time-label">开始</span>${taskTimeValue(task.started_at)}</div>
             <div class="task-time-row"><span class="task-time-label">完成</span>${taskTimeValue(task.completed_at)}</div>
             <div class="task-time-row"><span class="task-time-label">耗时</span>${taskDurationValue(task)}</div>

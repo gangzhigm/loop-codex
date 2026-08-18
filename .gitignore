@@ -2,5 +2,9 @@
 __pycache__/
 *.py[cod]
 
-# Operator 保存用户任务附件的目录；已有受审计附件可被 Git 跟踪，新增附件默认不自动入库。
-assets/
+# 数据目录只跟踪说明文件；附件、备份快照和运行产物不进入版本控制。
+data/assets/*
+!data/assets/README.md
+data/backups/*
+!data/backups/README.md
+data/runtime/

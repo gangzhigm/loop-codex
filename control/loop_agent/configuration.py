@@ -101,17 +101,17 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     expected_supervisor_components = {
         "planner": {
             "entry": "planner/main.py",
-            "pid_path": "runtime/planner.pid",
-            "heartbeat_path": "runtime/planner-heartbeat.json",
-            "stop_path": "runtime/planner-stop-request.json",
-            "log_path": "runtime/planner-scheduler.log",
+            "pid_path": "data/runtime/planner.pid",
+            "heartbeat_path": "data/runtime/planner-heartbeat.json",
+            "stop_path": "data/runtime/planner-stop-request.json",
+            "log_path": "data/runtime/planner-scheduler.log",
         },
         "dispatcher": {
             "entry": "dispatcher/main.py",
-            "pid_path": "runtime/dispatcher.pid",
-            "heartbeat_path": "runtime/dispatcher-heartbeat.json",
-            "stop_path": "runtime/dispatcher-stop-request.json",
-            "log_path": "runtime/dispatcher-scheduler.log",
+            "pid_path": "data/runtime/dispatcher.pid",
+            "heartbeat_path": "data/runtime/dispatcher-heartbeat.json",
+            "stop_path": "data/runtime/dispatcher-stop-request.json",
+            "log_path": "data/runtime/dispatcher-scheduler.log",
         },
     }
     valid_supervisor_components = (
@@ -174,7 +174,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
     )
     valid = (
-        config.get("config_version") == "5.0.0"
+        config.get("config_version") == "5.1.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -226,7 +226,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner_scheduler["interval_minutes"] >= 1
         and isinstance(planner_scheduler.get("heartbeat_interval_seconds"), int)
         and planner_scheduler["heartbeat_interval_seconds"] >= 1
-        and planner_scheduler.get("runner_log_path") == "runtime/planner-runner.log"
+        and planner_scheduler.get("runner_log_path") == "data/runtime/planner-runner.log"
         and (BASE_DIR / planner_scheduler["runner_log_path"]).resolve().is_relative_to(BASE_DIR)
         and planner_boundary.get("sandbox") == "read-only"
         and planner_boundary.get("approval_policy") == "never"
@@ -282,7 +282,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and isinstance(dispatcher.get("heartbeat_interval_seconds"), int)
         and dispatcher["heartbeat_interval_seconds"] >= 1
         and dispatcher.get("working_directory") == str(BASE_DIR)
-        and dispatcher.get("log_path") == "runtime/agent-dispatcher.log"
+        and dispatcher.get("log_path") == "data/runtime/agent-dispatcher.log"
         and (BASE_DIR / dispatcher["log_path"]).resolve().is_relative_to(BASE_DIR)
         and dispatcher.get("runtime_environment") == "self_hosted_agent"
         and dispatcher.get("provider_id") in providers

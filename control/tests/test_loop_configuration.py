@@ -9,7 +9,7 @@ from _loop_support import *  # noqa: F403
 class LoopConfigurationTests(LoopTestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "5.0.0")
+        self.assertEqual(config["config_version"], "5.1.0")
         self.assertEqual(config["prompts"]["operator"], "operator/operator.md")
         self.assertEqual(config["prompts"]["planner"], "planner/planner.md")
         self.assertEqual(config["prompts"]["worker"], "worker/worker.md")
@@ -61,7 +61,7 @@ class LoopConfigurationTests(LoopTestCase):
                 "scheduled": True,
                 "interval_minutes": 5,
                 "heartbeat_interval_seconds": 15,
-                "runner_log_path": "runtime/planner-runner.log",
+                "runner_log_path": "data/runtime/planner-runner.log",
             },
         )
         self.assertEqual(set(config["execution_profiles"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))

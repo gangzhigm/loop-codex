@@ -102,7 +102,7 @@ class AttachmentImageTests(unittest.TestCase):
         )
 
     def test_registered_image_inside_task_directory_is_resolved(self) -> None:
-        attachment_path = "assets/IMAGE-TASK/reference.png"
+        attachment_path = "data/assets/IMAGE-TASK/reference.png"
         self.add_task("IMAGE-TASK", attachment_path)
         image_path = self.base_dir / attachment_path
         image_path.parent.mkdir(parents=True)
@@ -119,7 +119,7 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(content_type, "image/png")
 
     def test_dashboard_state_exposes_l1_l5_routes_and_capacity_config(self) -> None:
-        self.add_task("DASHBOARD-AGENT-L2", "assets/DASHBOARD-AGENT-L2/reference.png")
+        self.add_task("DASHBOARD-AGENT-L2", "data/assets/DASHBOARD-AGENT-L2/reference.png")
         insert_task(
             self.database,
             {
@@ -166,15 +166,15 @@ class AttachmentImageTests(unittest.TestCase):
 
     def test_dashboard_state_projects_dynamic_scope_blockers_and_queue_positions(self) -> None:
         self.add_task(
-            "ACTIVE-FILE", "assets/ACTIVE-FILE/reference.png", priority="critical",
+            "ACTIVE-FILE", "data/assets/ACTIVE-FILE/reference.png", priority="critical",
             lock_mode="file", scope=["project/src/shared.py"],
         )
         self.add_task(
-            "PENDING-HIGH", "assets/PENDING-HIGH/reference.png", priority="high",
+            "PENDING-HIGH", "data/assets/PENDING-HIGH/reference.png", priority="high",
             lock_mode="file", scope=["PROJECT\\src\\.\\SHARED.py"],
         )
         self.add_task(
-            "PENDING-LOW", "assets/PENDING-LOW/reference.png", priority="low",
+            "PENDING-LOW", "data/assets/PENDING-LOW/reference.png", priority="low",
             lock_mode="file", scope=["project/src/shared.py"],
         )
         stamp = now_shanghai()
@@ -222,17 +222,17 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertNotIn('const TASK_SCHEMA_VERSION = "3.6.0";', html)
 
     def test_unregistered_path_is_rejected(self) -> None:
-        self.add_task("IMAGE-TASK", "assets/IMAGE-TASK/reference.png")
+        self.add_task("IMAGE-TASK", "data/assets/IMAGE-TASK/reference.png")
         with self.assertRaises(FileNotFoundError):
             resolve_attachment_image(
                 self.database,
                 "IMAGE-TASK",
-                "assets/IMAGE-TASK/other.png",
+                "data/assets/IMAGE-TASK/other.png",
                 self.base_dir,
             )
 
     def test_registered_path_outside_task_directory_is_rejected(self) -> None:
-        attachment_path = "assets/OTHER-TASK/reference.png"
+        attachment_path = "data/assets/OTHER-TASK/reference.png"
         self.add_task("IMAGE-TASK", attachment_path)
         with self.assertRaises(PermissionError):
             resolve_attachment_image(
@@ -243,7 +243,7 @@ class AttachmentImageTests(unittest.TestCase):
             )
 
     def test_registered_non_image_is_rejected(self) -> None:
-        attachment_path = "assets/IMAGE-TASK/notes.txt"
+        attachment_path = "data/assets/IMAGE-TASK/notes.txt"
         self.add_task("IMAGE-TASK", attachment_path)
         file_path = self.base_dir / attachment_path
         file_path.parent.mkdir(parents=True)
@@ -264,7 +264,7 @@ class AttachmentImageTests(unittest.TestCase):
         return self.database.execute("SELECT row_version FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
 
     def test_dashboard_archive_confirms_succeeded_before_archiving(self) -> None:
-        self.add_task("ARCHIVE-SUCCEEDED", "assets/ARCHIVE-SUCCEEDED/reference.png")
+        self.add_task("ARCHIVE-SUCCEEDED", "data/assets/ARCHIVE-SUCCEEDED/reference.png")
         row_version = self.set_status("ARCHIVE-SUCCEEDED", "SUCCEEDED")
 
         result = archive_dashboard_task(self.db_path, "ARCHIVE-SUCCEEDED", "archive", row_version)
@@ -291,7 +291,7 @@ class AttachmentImageTests(unittest.TestCase):
         )
 
     def test_dashboard_archive_preserves_existing_terminal_status(self) -> None:
-        self.add_task("ARCHIVE-FAILED", "assets/ARCHIVE-FAILED/reference.png")
+        self.add_task("ARCHIVE-FAILED", "data/assets/ARCHIVE-FAILED/reference.png")
         row_version = self.set_status("ARCHIVE-FAILED", "FAILED")
         self.database.execute(
             "UPDATE tasks SET result_summary='keep summary', result_error='keep error' WHERE id='ARCHIVE-FAILED'"
@@ -308,20 +308,20 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual((task["result_summary"], task["result_error"]), ("keep summary", "keep error"))
 
     def test_dashboard_archive_rejects_illegal_status_repeat_and_stale_version(self) -> None:
-        self.add_task("ARCHIVE-PENDING", "assets/ARCHIVE-PENDING/reference.png")
+        self.add_task("ARCHIVE-PENDING", "data/assets/ARCHIVE-PENDING/reference.png")
         pending_version = self.database.execute(
             "SELECT row_version FROM tasks WHERE id='ARCHIVE-PENDING'"
         ).fetchone()[0]
         with self.assertRaisesRegex(DashboardActionError, "不允许归档"):
             archive_dashboard_task(self.db_path, "ARCHIVE-PENDING", "archive", pending_version)
 
-        self.add_task("ARCHIVE-REPEAT", "assets/ARCHIVE-REPEAT/reference.png")
+        self.add_task("ARCHIVE-REPEAT", "data/assets/ARCHIVE-REPEAT/reference.png")
         archived_version = self.set_status("ARCHIVE-REPEAT", "CANCELLED")
         archive_dashboard_task(self.db_path, "ARCHIVE-REPEAT", "archive", archived_version)
         with self.assertRaisesRegex(DashboardActionError, "状态已变化"):
             archive_dashboard_task(self.db_path, "ARCHIVE-REPEAT", "archive", archived_version)
 
-        self.add_task("ARCHIVE-STALE", "assets/ARCHIVE-STALE/reference.png")
+        self.add_task("ARCHIVE-STALE", "data/assets/ARCHIVE-STALE/reference.png")
         stale_version = self.set_status("ARCHIVE-STALE", "CONFIRMED")
         self.set_status("ARCHIVE-STALE", "FAILED")
         with self.assertRaisesRegex(DashboardActionError, "状态已变化"):
@@ -341,7 +341,7 @@ class AttachmentImageTests(unittest.TestCase):
                     archive_dashboard_task(self.db_path, task_id, action, row_version)
 
     def make_recovery(self, task_id: str = "RECOVERY-TASK") -> tuple[str, int]:
-        self.add_task(task_id, f"assets/{task_id}/reference.png")
+        self.add_task(task_id, f"data/assets/{task_id}/reference.png")
         execution_id = f"L5-worker-{task_id.lower()}"
         stamp = now_shanghai()
         self.database.execute(

@@ -46,7 +46,7 @@
 4. 拆分已有任务时，先创建全部替代任务；确认全部创建成功后，再取消原任务并在原因中记录替代任务 ID。不得物理删除原任务或丢失历史；`RUNNING` 任务不得拆分，必须等待执行结束或用户先处理其状态。
 5. 新任务无论信息是否完整都以 `DRAFT/UNINSPECTED` 创建。保存用户原始业务描述、业务验收、priority、runtime_environment、依赖、附件、`scope_hint` 和 `estimated_capability_level`；最终 capability 与精确 scope 保持未定。未指定环境时使用初始化配置中的默认环境，用户指定时保持不变。
 6. Planner 提交 READY 后任务自动进入 `PENDING/READY`。Planner 提交 NEEDS_REVIEW 或 FAILED 时，只向用户呈现问题、证据和可选拆分建议；用户答复后使用 `update` 写回原始业务事实，或使用 `requeue` 将任务送回 `DRAFT/UNINSPECTED`。不得绕过 Planner 直接进入 PENDING。
-7. 用户提供文件或图片时，保存到 `assets/<task-id>/`，保留原始文件，计算 SHA-256，并写入 `task_attachments`。
+7. 用户提供文件或图片时，保存到 `data/assets/<task-id>/`，保留原始文件，计算 SHA-256，并写入 `task_attachments`。
 8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后从健康快照核对 Planner Scheduler；任务进入 `PENDING/READY` 后，只检查对应内部运行环境的 Dispatcher 和 Runner 可用证据。
 9. 从 `/api/state` 复核任务 ID、主状态、preflight_status、Operator 原始定义、Planner 补充、priority、runtime_environment、预估/最终等级、scope hint、精确 scope、lock_mode、拆分建议、附件和 archived_at。不要借复核读取或判断源码或业务实现。
 10. 最终只汇报任务管理结果；明确说明未检查或执行项目代码。
@@ -89,7 +89,7 @@
 - `blocker` 只用于系统无法运行、任务数据损坏、生产事故或安全问题，必须记录明确阻断原因；它只影响后续领取，不抢占 `RUNNING` 任务。
 - `critical` 用于紧急且高影响任务；`high` 用于近期交付或主要业务流程；`medium` 是普通默认；`low` 用于非紧急体验优化和待办。
 - 通用等级定义不得硬编码 RS 或其他项目名称。项目默认值从 `config/initialization.json` 的 `priority_policy.project_defaults` 读取，任务真实紧急程度可以覆盖默认值。
-- 项目默认优先级只从初始化配置读取；任务真实紧急程度可以覆盖默认值，但普通样式改动不得仅因项目默认值升级为 `blocker`。附件保存在系统项目的 `assets/` 不改变业务任务所属项目。
+- 项目默认优先级只从初始化配置读取；任务真实紧急程度可以覆盖默认值，但普通样式改动不得仅因项目默认值升级为 `blocker`。附件保存在系统项目的 `data/assets/` 不改变业务任务所属项目。
 
 ## 状态规则
 

@@ -1,5 +1,5 @@
 {
-  "config_version": "5.0.0",
+  "config_version": "5.1.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -72,7 +72,7 @@
       "scheduled": true,
       "interval_minutes": 5,
       "heartbeat_interval_seconds": 15,
-      "runner_log_path": "runtime/planner-runner.log"
+      "runner_log_path": "data/runtime/planner-runner.log"
     },
     "client_boundary": {
       "sandbox": "read-only",
@@ -114,7 +114,7 @@
     "interval_minutes": 15,
     "heartbeat_interval_seconds": 15,
     "working_directory": "E:\\code\\local-agent-loop",
-    "log_path": "runtime/agent-dispatcher.log",
+    "log_path": "data/runtime/agent-dispatcher.log",
     "runtime_environment": "self_hosted_agent",
     "provider_id": "deepseek",
     "supported_capability_levels": [
@@ -177,18 +177,18 @@
     "components": {
       "planner": {
         "entry": "planner/main.py",
-        "pid_path": "runtime/planner.pid",
-        "heartbeat_path": "runtime/planner-heartbeat.json",
-        "stop_path": "runtime/planner-stop-request.json",
-        "log_path": "runtime/planner-scheduler.log",
+        "pid_path": "data/runtime/planner.pid",
+        "heartbeat_path": "data/runtime/planner-heartbeat.json",
+        "stop_path": "data/runtime/planner-stop-request.json",
+        "log_path": "data/runtime/planner-scheduler.log",
         "heartbeat_timeout_seconds": 60
       },
       "dispatcher": {
         "entry": "dispatcher/main.py",
-        "pid_path": "runtime/dispatcher.pid",
-        "heartbeat_path": "runtime/dispatcher-heartbeat.json",
-        "stop_path": "runtime/dispatcher-stop-request.json",
-        "log_path": "runtime/dispatcher-scheduler.log",
+        "pid_path": "data/runtime/dispatcher.pid",
+        "heartbeat_path": "data/runtime/dispatcher-heartbeat.json",
+        "stop_path": "data/runtime/dispatcher-stop-request.json",
+        "log_path": "data/runtime/dispatcher-scheduler.log",
         "heartbeat_timeout_seconds": 60
       }
     }

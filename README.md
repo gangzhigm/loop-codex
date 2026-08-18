@@ -41,8 +41,8 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 | 任务、预检、execution、依赖和 scope 锁事实 | `data/loop-agent.sqlite3` |
 | Schema 与状态约束 | `schemas/loop-agent.sql`、`control/loop_agent/` |
 | 项目路由 | 实时读取 `E:\code\根目录清单.md` |
-| Dashboard 汇总健康状态 | `runtime/health-state.json` |
-| 动态 Runner 原始 heartbeat 登记 | `runtime/runners/` |
+| Dashboard 汇总健康状态 | `data/runtime/health-state.json` |
+| 动态 Runner 原始 heartbeat 登记 | `data/runtime/runners/` |
 | 脚本职责和回归命令 | `control/README.md` |
 
 README 只提供人工导航。若说明与配置、任务事实或控制代码冲突，以表中对应权威来源为准；
@@ -111,13 +111,16 @@ py -3 .\control\loopctl.py validate
 | `supervisor/` | Supervisor 主进程、健康检查与 Windows 计划任务安装器 |
 | `control/tests/` | Python 回归测试 |
 | `client/` | Dashboard 前端静态资源与本机 HTTP/API 服务 |
-| `runtime/` | PID、日志和健康状态，不是任务事实源 |
+| `data/` | SQLite、任务附件、备份、PID、日志和健康状态 |
 | `data/loop-agent.sqlite3` | 唯一任务事实源 |
+| `data/assets/` | 任务附件目录 |
+| `data/backups/` | 数据库迁移审计与灾难恢复快照 |
+| `data/runtime/` | PID、日志和健康状态，不是任务事实源 |
 
 ## 排障顺序
 
 1. 运行 `py -3 control/loopctl.py validate` 检查任务库和配置一致性。
-2. 查看 `runtime/supervisor-heartbeat.json` 和 `runtime/health-state.json`，必要时运行 `supervisor/health_run.py`。
+2. 查看 `data/runtime/supervisor-heartbeat.json` 和 `data/runtime/health-state.json`，必要时运行 `supervisor/health_run.py`。
 3. 根据失败角色读取对应角色目录中的提示词和 `control/README.md` 的职责导航。
 4. 使用 `loopctl.py state` 或 Dashboard 查看任务、execution、依赖和 scope 阻塞事实。
 
