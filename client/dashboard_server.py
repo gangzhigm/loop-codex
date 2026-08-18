@@ -64,7 +64,7 @@ from loop_agent.secrets.store import (
     SecretValidationError,
     create_secret_store,
 )
-from common.scheduler import SchedulerRuntimeFiles, install_shutdown_signals
+from common.service_runtime import ServiceRuntimeFiles, install_shutdown_signals
 from common.components import component_specs, ensure_component
 from common.health import (
     record as record_supervisor_health,
@@ -856,7 +856,7 @@ def main(
     if host != "127.0.0.1":
         raise SystemExit("Dashboard Server with Secret API must bind to 127.0.0.1")
     heartbeat_interval = float(dashboard_config["heartbeat_interval_seconds"])
-    runtime = SchedulerRuntimeFiles.from_config(config, "dashboard")
+    runtime = ServiceRuntimeFiles.from_component_config(config, "dashboard")
     pid = os.getpid()
     runtime.prepare()
     runtime.claim(pid, "Dashboard PID 文件已存在")
@@ -875,10 +875,8 @@ def main(
             """刷新 heartbeat，并把文件停止请求转换为 HTTP Server 关闭。"""
             while not service_shutdown.is_set():
                 runtime.write_heartbeat(pid)
-                if runtime.stop_requested():
-                    service_shutdown.set()
+                if runtime.wait(service_shutdown, pid, heartbeat_interval):
                     break
-                service_shutdown.wait(heartbeat_interval)
             # shutdown() 必须在 serve_forever 所在线程之外调用，否则会互相等待。
             threading.Thread(target=server.shutdown, daemon=True).start()
 

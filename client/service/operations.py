@@ -403,10 +403,10 @@ def operations_config_payload(
                 "id": "planner",
                 "title": "Planner 管理",
                 "items": [
-                    item("planner-prompt", "Planner 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "草稿任务的只读预检与结构化写回约束。", "读取时生效", "文件存在性检查"),
-                    item("planner-runtime", "运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "Planner 固定使用的只读预检环境。", "需重启", "配置加载时校验"),
-                    item("planner-cadence", "调度周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "Planner Scheduler 检查是否需要启动单次 Planner Runner 的周期。", "需重启 Planner Scheduler", "配置加载时校验"),
-                    item("planner-boundary", "安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "Planner 只能静态读取，不能直接修改任务库或业务文件。", "受保护", "配置加载时校验"),
+                    item("planner-prompt", "Planner 占位说明", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "Planner 业务重建期间的禁用状态说明。", "读取时生效", "文件存在性检查"),
+                    item("planner-runtime", "保留运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "为历史任务和后续开发保留，当前 heartbeat 服务不使用。", "保留", "配置加载时校验"),
+                    item("planner-cadence", "Heartbeat 周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'heartbeat_interval_seconds')} 秒", "config/initialization.json", "Planner 占位服务发布进程 heartbeat 的周期。", "需重启 Planner", "heartbeat 文件"),
+                    item("planner-boundary", "保留安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "为重新开发保留，当前没有 AI 预检入口。", "保留", "配置加载时校验"),
                 ],
             },
             {

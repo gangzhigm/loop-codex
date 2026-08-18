@@ -17,7 +17,6 @@ from common.windows import process_alive, windows_powershell
 
 
 RUNNER_ENTRIES = {
-    ("planner", "self_hosted_agent"): REPOSITORY_ROOT / "runner" / "planner_runner.py",
     ("worker", "self_hosted_agent"): REPOSITORY_ROOT / "runner" / "agent_runtime.py",
 }
 RUNNER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

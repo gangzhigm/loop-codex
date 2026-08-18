@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import copy
+import tempfile
+import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from _bootstrap import REPOSITORY_ROOT
 
 from common.components import component_specs
+from common.paths import HEARTBEAT_PATH, PID_PATH, SERVER_LOG, SUPERVISOR_STOP_REQUEST
+from common.service_runtime import ServiceRuntimeFiles
 from loopdb import load_initialization_config
 from supervisor import main as control
 
@@ -56,6 +61,69 @@ class SupervisorControlTests(unittest.TestCase):
         self.assertTrue(dashboard.enabled)
         self.assertFalse(planner.enabled)
         self.assertTrue(dispatcher.enabled)
+
+    def test_service_runtime_owns_pid_heartbeat_stop_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = ServiceRuntimeFiles(
+                component="test-service",
+                pid_path=root / "service.pid",
+                heartbeat_path=root / "service-heartbeat.json",
+                stop_path=root / "service-stop.json",
+                log_path=root / "service.log",
+            )
+            runtime.prepare()
+            runtime.claim(12345, "duplicate")
+            runtime.write_heartbeat(12345)
+            runtime.request_stop(12345)
+
+            self.assertEqual(runtime.recorded_pid(), 12345)
+            self.assertIsNone(runtime.heartbeat_problem(12345, 60))
+            self.assertTrue(runtime.stop_requested(12345))
+            self.assertFalse(runtime.stop_requested(54321))
+            shutdown_event = threading.Event()
+            self.assertTrue(runtime.wait(shutdown_event, 12345, 1))
+            self.assertTrue(shutdown_event.is_set())
+
+            runtime.cleanup(12345)
+            self.assertFalse(runtime.pid_path.exists())
+            self.assertFalse(runtime.heartbeat_path.exists())
+            self.assertFalse(runtime.stop_path.exists())
+
+    def test_supervisor_uses_the_common_runtime_contract(self) -> None:
+        runtime = ServiceRuntimeFiles.supervisor()
+        self.assertEqual(runtime.component, "supervisor")
+        self.assertEqual(runtime.pid_path, PID_PATH)
+        self.assertEqual(runtime.heartbeat_path, HEARTBEAT_PATH)
+        self.assertEqual(runtime.stop_path, SUPERVISOR_STOP_REQUEST)
+        self.assertEqual(runtime.log_path, SERVER_LOG)
+
+    def test_duplicate_claim_keeps_existing_instance_stop_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = ServiceRuntimeFiles(
+                component="test-service",
+                pid_path=root / "service.pid",
+                heartbeat_path=root / "service-heartbeat.json",
+                stop_path=root / "service-stop.json",
+                log_path=root / "service.log",
+            )
+            runtime.prepare()
+            runtime.claim(12345, "duplicate")
+            runtime.request_stop(12345)
+
+            duplicate = ServiceRuntimeFiles(
+                component="test-service",
+                pid_path=runtime.pid_path,
+                heartbeat_path=runtime.heartbeat_path,
+                stop_path=runtime.stop_path,
+                log_path=runtime.log_path,
+            )
+            duplicate.prepare()
+            with self.assertRaisesRegex(SystemExit, "duplicate"):
+                duplicate.claim(54321, "duplicate")
+
+            self.assertTrue(runtime.stop_requested(12345))
 
 
 if __name__ == "__main__":

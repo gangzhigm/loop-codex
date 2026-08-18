@@ -355,7 +355,7 @@
     .distribution .failed { background: var(--danger); }
     .distribution .queued { background: #98a2ad; }
 
-    /* 四、运行链路只消费 Supervisor 快照，不提供任何组件控制入口。 */
+    /* 四、运行身份汇总 PID 与 heartbeat；运行链路展示状态、关系和受控操作。 */
     .runtime-section {
       flex: 0 0 auto;
       margin-bottom: 16px;
@@ -380,6 +380,86 @@
     .runtime-updated {
       color: var(--muted);
       font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .process-snapshot {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 8px;
+      width: min(920px, 100%);
+      margin: 0 auto 10px;
+    }
+
+    .process-identity {
+      display: grid;
+      min-width: 0;
+      min-height: 78px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "name age"
+        "facts facts";
+      gap: 8px 12px;
+      align-content: center;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-subtle);
+    }
+
+    .process-identity[data-tone="healthy"] { border-top-color: var(--success); }
+    .process-identity[data-tone="active"] { border-top-color: var(--accent); }
+    .process-identity[data-tone="warning"] { border-top-color: var(--warning); }
+    .process-identity[data-tone="danger"] { border-top-color: var(--danger); }
+
+    .process-identity-name {
+      grid-area: name;
+      min-width: 0;
+      overflow: hidden;
+      font-size: 12px;
+      font-weight: 750;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .process-heartbeat-age {
+      grid-area: age;
+      align-self: center;
+      color: var(--muted);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .process-facts {
+      display: grid;
+      grid-area: facts;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0;
+    }
+
+    .process-fact {
+      display: grid;
+      min-width: 0;
+      gap: 2px;
+    }
+
+    .process-fact dt {
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 1.2;
+      text-transform: uppercase;
+    }
+
+    .process-fact dd {
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.3;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
 
@@ -1689,6 +1769,7 @@
       .header-actions { width: 100%; justify-content: space-between; }
       .main { padding: 16px 12px 28px; }
       .runtime-heading-row { align-items: flex-start; flex-direction: column; gap: 3px; }
+      .process-snapshot { grid-template-columns: minmax(0, 1fr); }
       .summary-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric { min-height: 44px; border-bottom: 1px solid var(--line); }
       .metric:nth-child(2n) { border-right: 0; }
@@ -1784,12 +1865,12 @@
         <h2 id="runtimeHeading">运行链路</h2>
         <span id="runtimeUpdated" class="runtime-updated">尚无快照</span>
       </div>
+      <div id="processSnapshot" class="process-snapshot" aria-label="PID 与心跳" aria-live="polite"></div>
       <div class="runtime-flow" aria-live="polite">
         <div id="runtimeSupervisor" class="runtime-stage"></div>
         <div class="runtime-connector" aria-hidden="true"></div>
         <div class="runtime-stage">
           <div id="runtimePlanner"></div>
-          <div id="runtimePlannerRunners" class="runtime-runner-list"></div>
         </div>
         <div class="runtime-connector" aria-hidden="true"></div>
         <div class="runtime-stage">
@@ -1964,10 +2045,10 @@
       metricArchived: document.querySelector("#metricArchived"),
       distribution: document.querySelector("#distribution"),
       runtimeUpdated: document.querySelector("#runtimeUpdated"),
+      processSnapshot: document.querySelector("#processSnapshot"),
       runtimeSupervisor: document.querySelector("#runtimeSupervisor"),
       runtimePlanner: document.querySelector("#runtimePlanner"),
       runtimeDispatcher: document.querySelector("#runtimeDispatcher"),
-      runtimePlannerRunners: document.querySelector("#runtimePlannerRunners"),
       runtimeWorkerRunners: document.querySelector("#runtimeWorkerRunners"),
       profileList: document.querySelector("#profileList"),
       profileCount: document.querySelector("#profileCount"),
@@ -2066,6 +2147,56 @@
       return "neutral";
     }
 
+    function heartbeatTimestamp(service) {
+      return service?.heartbeat?.checked_at ?? service?.checked_at ?? null;
+    }
+
+    function heartbeatAge(value) {
+      if (!value) return "无 heartbeat";
+      const milliseconds = Date.now() - new Date(value).getTime();
+      if (!Number.isFinite(milliseconds)) return "时间无效";
+      if (milliseconds < -1000) return "时间在未来";
+      const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+      if (seconds < 60) return `${seconds} 秒前`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes} 分前`;
+      const hours = Math.floor(minutes / 60);
+      return hours < 24 ? `${hours} 小时前` : `${Math.floor(hours / 24)} 天前`;
+    }
+
+    function processIdentityMarkup(name, service) {
+      const status = typeof service?.status === "string" ? service.status : "UNKNOWN";
+      const checkedAt = heartbeatTimestamp(service);
+      const heartbeatLabel = checkedAt ? formatDate(checkedAt, false) : "--";
+      return `<article class="process-identity" data-tone="${escapeHtml(runtimeTone(status))}">
+        <span class="process-identity-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+        <span class="process-heartbeat-age">${escapeHtml(heartbeatAge(checkedAt))}</span>
+        <dl class="process-facts">
+          <div class="process-fact"><dt>PID</dt><dd title="${escapeHtml(service?.pid ?? "--")}">${escapeHtml(service?.pid ?? "--")}</dd></div>
+          <div class="process-fact"><dt>心跳</dt><dd title="${escapeHtml(checkedAt ?? "无 heartbeat")}">${escapeHtml(heartbeatLabel)}</dd></div>
+        </dl>
+      </article>`;
+    }
+
+    function renderProcessSnapshot(services, byComponent) {
+      const entries = [
+        ["Supervisor", byComponent.get("supervisor") ?? null],
+        ["Planner Heartbeat", byComponent.get("planner") ?? null],
+        ["Dispatcher Scheduler", byComponent.get("dispatcher") ?? null]
+      ];
+      services
+        .filter((item) => String(item?.component ?? "").startsWith("runner:"))
+        .sort((left, right) => String(left?.started_at ?? "").localeCompare(String(right?.started_at ?? "")))
+        .forEach((runner, index) => {
+          const role = runner?.mode === "planner" ? "旧 Planner Runner" : "Worker Runner";
+          const identity = runner?.task_id || runner?.execution_id || String(index + 1);
+          entries.push([`${role} · ${identity}`, runner]);
+        });
+      elements.processSnapshot.innerHTML = entries
+        .map(([name, service]) => processIdentityMarkup(name, service))
+        .join("");
+    }
+
     function runtimeNodeMarkup(name, service, controlKey = null) {
       const status = typeof service?.status === "string" ? service.status : "UNKNOWN";
       const tone = runtimeTone(status);
@@ -2107,12 +2238,12 @@
       const supervisor = byComponent.get("supervisor") ?? null;
       const planner = byComponent.get("planner") ?? null;
       const dispatcher = byComponent.get("dispatcher") ?? null;
+      renderProcessSnapshot(values, byComponent);
       elements.runtimeSupervisor.innerHTML = runtimeNodeMarkup("Supervisor", supervisor, "supervisor");
-      elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Scheduler", planner, "planner");
+      elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Heartbeat", planner, "planner");
       elements.runtimeDispatcher.innerHTML = runtimeNodeMarkup("Dispatcher Scheduler", dispatcher, "dispatcher");
-      const plannerRunners = renderRunnerList(elements.runtimePlannerRunners, values, "planner", "Planner Runner");
       const workerRunners = renderRunnerList(elements.runtimeWorkerRunners, values, "worker", "Worker Runner");
-      const timestamps = [supervisor, planner, dispatcher, ...plannerRunners, ...workerRunners]
+      const timestamps = [supervisor, planner, dispatcher, ...workerRunners]
         .map((item) => item?.heartbeat?.checked_at ?? item?.checked_at)
         .map((value) => new Date(value ?? "").getTime())
         .filter(Number.isFinite);

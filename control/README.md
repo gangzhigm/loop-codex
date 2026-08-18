@@ -14,8 +14,8 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 | `loopctl.py` | CLI 参数、命令分发、`validate/state` | 具体任务状态机实现 |
 | `loopdb.py` | 导出当前数据库公共 API | SQL 业务实现 |
 | `../operator/secretctl.py` | 系统密钥库的人工管理入口 | 任务数据库 |
-| `../planner/control.py` | Planner 的只读静态预检状态机 | 业务实现与 scope 写锁 |
-| `../planner/main.py` | Planner Scheduler 单实例、PID 与 heartbeat | 任务预检业务实现 |
+| `../planner/control.py` | 旧 `preflight-*` 命令的禁用兼容入口 | 任务领取、预检和数据库写回 |
+| `../planner/main.py` | Planner 占位服务的单实例、PID 与 heartbeat | 任何 Planner 业务 |
 | `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
 | `../dispatcher/agent_dispatcher.py` | 只读选择一个内部 Provider 任务并启动一次 Runner | 原子 claim 与业务实现 |
 | `../dispatcher/main.py` | Dispatcher Scheduler 单实例、heartbeat 与周期调度 | Supervisor 探活 |
@@ -23,6 +23,7 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 | `../supervisor/main.py` | 按 PID 与 heartbeat 监控并恢复独立 Dashboard 与两个 Scheduler | 任务查询、领取与任务表写入 |
 | `../client/dashboard_server.py` | 独立本机 HTTP 进程、Secret API、静态资源服务、PID 与 heartbeat | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
+| `../common/service_runtime.py` | 四个常驻服务共用的 PID、heartbeat、停止请求和清理契约 | 业务调度与任务状态 |
 
 ## 目录分区
 
@@ -104,12 +105,12 @@ operator / planner / worker / supervisor / dispatcher / runner
 3. 检查 `database/task_store.py` 的任务与子表写入。
 4. 运行 `python control/loopctl.py validate` 查看跨表错误。
 
-Planner 无法把 DRAFT 变为 PENDING：
+Planner 状态说明：
 
-1. 检查 `../planner/control.py` 的 execution fencing 和 UTF-8 stdin 契约。
-2. 检查最终 capability、scope、lock mode、技术验收和 evidence 是否齐全。
-3. 检查 L5/manual 是否具有 Operator 明确批准标记。
-4. 运行 Planner 专项测试或标准 unittest discovery。
+1. 当前 Planner 只发布 PID 和 heartbeat，不会把 DRAFT 变为 PENDING。
+2. `../planner/control.py` 保留命令名但统一返回“Planner 业务尚未实现”。
+3. `runner/planner_runner.py` 已删除，Scheduler 不会启动任何 Planner Runner。
+4. 数据库中的旧预检字段和历史 execution 仅作兼容保留。
 
 Worker 无法领取任务：
 
@@ -140,7 +141,7 @@ Supervisor 异常：
 1. `data/runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
 2. `data/runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
 3. `health_run.py` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
-4. Dashboard、Planner 与 Dispatcher 分别维护自己的 PID 和 heartbeat；Supervisor 不读取任务数量，也不拥有这些进程的生命周期。
+4. Supervisor、Dashboard、Planner 与 Dispatcher 都通过 `common/service_runtime.py` 维护各自的 PID、heartbeat 和停止请求；Supervisor 不读取任务数量，也不拥有其他进程的生命周期。
 5. 停止 Supervisor 不会停止 Dashboard；Dashboard 异常退出时，运行中的 Supervisor 会重新启动它。
 
 ## 回归测试
@@ -153,7 +154,7 @@ Supervisor 异常：
 | `_loop_support.py` | UTF-8 路径、临时数据库、任务构造、CLI 调用和历史 Schema fixture；不定义独立测试场景 |
 | `test_loop_configuration.py` | 初始化配置、状态投影和执行路由 |
 | `test_loop_migrations.py` | 旧 JSON、SQLite Schema 和混合锁迁移 |
-| `test_loop_planner.py` | Planner 预检、契约、诊断和迟到写回 fencing |
+| `test_loop_planner.py` | Planner 兼容入口禁用和历史数据只读保留 |
 | `test_loop_claiming.py` | 领取、容量、优先级、依赖和 scope 锁 |
 | `test_loop_recovery.py` | 心跳、租约、超时、隔离和人工恢复 |
 | `test_loop_lifecycle.py` | 人工确认、阻塞答复、归档和重新排队 |

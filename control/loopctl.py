@@ -6,7 +6,7 @@
 2. 将子命令绑定到 Operator、Planner、Worker 或共享控制模块；
 3. 把可公开的控制面异常统一转换为 UTF-8 JSON。
 
-实际状态机不在这里：Operator 位于 ``operator/control.py``，Planner
+实际状态机不在这里：Operator 位于 ``operator/control.py``，Planner 的禁用兼容入口
 位于 ``planner/control.py``，Worker 位于 ``worker/control.py``，
 迁移和恢复等共享逻辑位于 ``loop_agent/control``。
 
@@ -55,7 +55,7 @@ from loop_agent.control.io import output
 from loop_agent.control.migration import command_migrate
 from loop_agent.control.recovery import command_recover
 
-# Planner 子命令只处理独立静态预检 execution，不占用 Worker execution 容量。
+# Planner 业务重建期间保留旧命令名，handler 会在访问数据库前明确拒绝执行。
 from planner.control import (
     command_preflight_claim,
     command_preflight_fail,
@@ -139,8 +139,7 @@ def parser() -> argparse.ArgumentParser:
     state = commands.add_parser("state")
     state.set_defaults(handler=command_state)
 
-    # 二、Planner 静态预检协议。
-    # Planner 预检目标必须属于当前内部运行环境，且自身始终保持只读。
+    # 二、Planner 预留命令。参数契约暂时保留，所有 handler 当前均拒绝业务执行。
     preflight_claim = commands.add_parser("preflight-claim")
     preflight_claim.add_argument("execution_id")
     preflight_claim.add_argument(
@@ -154,8 +153,7 @@ def parser() -> argparse.ArgumentParser:
     preflight_heartbeat.add_argument("--expected-row-version", type=int)
     preflight_heartbeat.set_defaults(handler=command_preflight_heartbeat)
 
-    # 三个预检结束命令共享相同的 execution/task/report 参数。
-    # report 默认使用 '-'，即从 UTF-8 stdin 读取，防止大段 JSON 和业务文本出现在命令行。
+    # 三个旧结束命令继续解析原参数，便于调用方得到稳定的禁用错误。
     for name, handler in (
         ("preflight-ready", command_preflight_ready),
         ("preflight-needs-review", command_preflight_needs_review),

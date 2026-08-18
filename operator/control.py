@@ -376,9 +376,9 @@ def command_enqueue(args: argparse.Namespace) -> None:
                 "progress": item.get("progress")
                 or {
                     "percent": 0,
-                    "summary": "任务已创建，等待 Planner 静态预检。",
+                    "summary": "任务已创建；Planner 业务重建期间保持草稿状态。",
                     "completed": [],
-                    "next_step": "等待 Planner 原子预留。",
+                    "next_step": "等待 Planner 新版本形成执行契约。",
                 },
                 "result": item.get("result")
                 or {"summary": None, "verification": [], "error": None},
@@ -526,7 +526,8 @@ def command_update(args: argparse.Namespace) -> None:
             "preflight_started_at=NULL, preflight_completed_at=NULL, preflight_failure=NULL, "
             "scope_hint_json=?, lock_mode=NULL, split_suggestions_json='[]', assigned_agent=NULL, "
             "heartbeat_at=NULL, completed_at=NULL, updated_at=?, progress_percent=0, "
-            "progress_summary='任务定义已更新，等待重新预检。', progress_next_step='等待 Planner 原子预留。', "
+            "progress_summary='任务定义已更新；Planner 业务重建期间保持草稿状态。', "
+            "progress_next_step='等待 Planner 新版本形成执行契约。', "
             "result_summary=NULL, result_error=NULL, result_diagnostic_json=NULL, human_required=0, "
             "human_question=NULL, human_options_json='[]', human_requested_at=NULL, "
             "human_responded_at=NULL, human_response=NULL, row_version=row_version+1 WHERE id=?",
@@ -808,7 +809,8 @@ def command_requeue(args: argparse.Namespace) -> None:
                 "preflight_execution_id=NULL, preflight_started_at=NULL, preflight_completed_at=NULL, "
                 "preflight_failure=NULL, capability_level=NULL, lock_mode=NULL, split_suggestions_json='[]', "
                 "assigned_agent=NULL, heartbeat_at=NULL, completed_at=NULL, updated_at=?, progress_percent=0, "
-                "progress_summary='任务已人工送回 Planner 预检。', progress_next_step='等待 Planner 原子预留。', "
+                "progress_summary='任务已人工送回草稿；Planner 业务正在重建。', "
+                "progress_next_step='等待 Planner 新版本形成执行契约。', "
                 "result_diagnostic_json=NULL, human_required=0, human_question=NULL, human_options_json='[]', "
                 "human_requested_at=NULL, human_responded_at=NULL, human_response=NULL, "
                 "row_version=row_version+1 WHERE id=?",

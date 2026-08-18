@@ -8,7 +8,6 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,19 +16,19 @@ from loopdb import json_dump, now_shanghai
 from common.files import (
     append_utf8_line,
     read_json_object,
-    read_pid,
     write_json_atomic,
 )
 from common.paths import (
     FALLBACK_LOG,
     HEALTH_LOCK,
     HEALTH_STATE,
-    HEARTBEAT_PATH,
-    PID_PATH,
     REPOSITORY_ROOT,
-    SERVER_LOG,
 )
+from common.service_runtime import ServiceRuntimeFiles
 from common.windows import process_alive, windows_powershell
+
+
+SUPERVISOR_RUNTIME = ServiceRuntimeFiles.supervisor()
 
 
 def output(payload: dict[str, Any], exit_code: int = 0) -> None:
@@ -91,18 +90,12 @@ def is_supervisor_process(pid: int) -> bool:
 
 def recorded_pid() -> int | None:
     """读取 Supervisor PID 文件，内容不可信时返回 ``None``。"""
-    return read_pid(PID_PATH)
+    return SUPERVISOR_RUNTIME.recorded_pid()
 
 
 def read_supervisor_heartbeat() -> dict[str, Any] | None:
-    """读取主循环 heartbeat，并把关键字段转换为稳定类型。"""
-    value = read_json_object(HEARTBEAT_PATH)
-    if value is None:
-        return None
-    try:
-        return {"pid": int(value["pid"]), "checked_at": str(value["checked_at"])}
-    except (KeyError, TypeError, ValueError):
-        return None
+    """通过公共服务运行时读取 Supervisor 标准 heartbeat。"""
+    return SUPERVISOR_RUNTIME.read_heartbeat()
 
 
 def supervisor_health(
@@ -116,17 +109,9 @@ def supervisor_health(
     if not is_supervisor_process(pid):
         return None, None
     heartbeat = read_supervisor_heartbeat()
-    if heartbeat is None or heartbeat["pid"] != pid:
+    if heartbeat is None:
         return None, heartbeat
-    try:
-        checked_at = datetime.fromisoformat(heartbeat["checked_at"])
-        current = datetime.fromisoformat(now_shanghai())
-        if checked_at.tzinfo is None or current.tzinfo is None:
-            return None, heartbeat
-    except (TypeError, ValueError):
-        return None, heartbeat
-    age = (current - checked_at).total_seconds()
-    if age < 0 or age > heartbeat_timeout_seconds:
+    if SUPERVISOR_RUNTIME.heartbeat_problem(pid, heartbeat_timeout_seconds) is not None:
         return None, heartbeat
     return pid, heartbeat
 
@@ -138,6 +123,13 @@ def stop_previous_process() -> None:
     if pid is not None and is_supervisor_process(pid):
         targets.add(pid)
     for target in targets:
+        SUPERVISOR_RUNTIME.request_stop(target)
+    graceful_deadline = time.monotonic() + 5.0
+    while any(process_alive(target) for target in targets) and time.monotonic() < graceful_deadline:
+        time.sleep(0.1)
+    for target in targets:
+        if not process_alive(target):
+            continue
         try:
             os.kill(target, signal.SIGTERM)
         except OSError:
@@ -154,19 +146,18 @@ def stop_previous_process() -> None:
         )
     for _ in range(20):
         try:
-            PID_PATH.unlink(missing_ok=True)
-            HEARTBEAT_PATH.unlink(missing_ok=True)
+            SUPERVISOR_RUNTIME.clear(pid)
             return
         except PermissionError:
             time.sleep(0.1)
-    PID_PATH.unlink(missing_ok=True)
-    HEARTBEAT_PATH.unlink(missing_ok=True)
+    SUPERVISOR_RUNTIME.clear(pid)
 
 
 def start_server(database_path: Path, config_path: Path) -> int:
     """清理旧实例后，在后台启动 Supervisor 主进程并追加服务日志。"""
     stop_previous_process()
-    log_stream = SERVER_LOG.open("a", encoding="utf-8", newline="\n")
+    SUPERVISOR_RUNTIME.log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_stream = SUPERVISOR_RUNTIME.log_path.open("a", encoding="utf-8", newline="\n")
     creation_flags = (
         subprocess.CREATE_NEW_PROCESS_GROUP
         | subprocess.DETACHED_PROCESS

@@ -169,5 +169,5 @@ if (errors.length) {
   errors.forEach((error, index) => console.error(`${index + 1}. ${error}`));
   process.exitCode = 1;
 } else {
-  console.log(`监控页检查通过：${ids.size} 个唯一 DOM id，Planner 生命周期与队列阻塞展示有效`);
+  console.log(`监控页检查通过：${ids.size} 个唯一 DOM id，Planner heartbeat 与队列阻塞展示有效`);
 }

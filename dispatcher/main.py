@@ -24,7 +24,7 @@ if str(CONTROL_ROOT) not in sys.path:
     sys.path.insert(0, str(CONTROL_ROOT))
 
 from loopdb import CONFIG_PATH, DEFAULT_DB, load_initialization_config, now_shanghai
-from common.scheduler import SchedulerRuntimeFiles, install_shutdown_signals
+from common.service_runtime import ServiceRuntimeFiles, install_shutdown_signals
 from dispatcher.agent_dispatcher import AgentDispatcher, DispatcherSettings
 
 
@@ -51,7 +51,7 @@ def serve_dispatcher(args: argparse.Namespace) -> None:
 
     heartbeat_interval = float(settings.heartbeat_interval_seconds)
     dispatch_interval = float(settings.interval_minutes) * 60
-    runtime = SchedulerRuntimeFiles.from_config(config, "dispatcher")
+    runtime = ServiceRuntimeFiles.from_component_config(config, "dispatcher")
     runtime.prepare()
     pid = os.getpid()
     shutdown_event = threading.Event()
@@ -64,7 +64,7 @@ def serve_dispatcher(args: argparse.Namespace) -> None:
         next_dispatch = time.monotonic()
         while not shutdown_event.is_set():
             # 停止 Scheduler 只会阻止后续分发，已经启动的 Runner 独立完成自己的任务。
-            if runtime.stop_requested():
+            if runtime.stop_requested(pid):
                 break
             current = time.monotonic()
             if current >= next_heartbeat:
@@ -80,7 +80,7 @@ def serve_dispatcher(args: argparse.Namespace) -> None:
                 max(0.0, next_heartbeat - current),
                 max(0.0, next_dispatch - current),
             )
-            shutdown_event.wait(wait_seconds)
+            runtime.wait(shutdown_event, pid, wait_seconds)
     finally:
         shutdown_event.set()
         runtime.cleanup(pid)

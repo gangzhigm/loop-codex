@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,18 +16,16 @@ from loopdb import now_shanghai
 
 from common.files import (
     append_utf8_line,
-    heartbeat_belongs_to as file_heartbeat_belongs_to,
     read_json_object,
-    read_pid,
     write_json_atomic,
 )
 from common.paths import (
     FALLBACK_LOG,
     HEALTH_STATE,
-    HEARTBEAT_PATH,
     REPOSITORY_ROOT,
 )
 from common.runners import runner_snapshot
+from common.service_runtime import ServiceRuntimeFiles
 from common.windows import process_alive, windows_powershell
 
 
@@ -41,10 +38,7 @@ class ComponentSpec:
     enabled: bool
     entry: Path
     arguments: tuple[str, ...]
-    pid_path: Path
-    heartbeat_path: Path
-    stop_path: Path
-    log_path: Path
+    runtime: ServiceRuntimeFiles
     heartbeat_timeout_seconds: float
 
 
@@ -94,16 +88,6 @@ def record_monitor_state(
         append_monitor_fallback(f"MONITOR_STATE_WRITE_FAILED {type(error).__name__}")
 
 
-def write_supervisor_heartbeat(pid: int) -> None:
-    """一轮组件检查结束后刷新 Supervisor heartbeat。"""
-    write_json_atomic(HEARTBEAT_PATH, {"pid": pid, "checked_at": now_shanghai()})
-
-
-def heartbeat_belongs_to(pid: int) -> bool:
-    """退出清理前确认 heartbeat 仍属于当前 Supervisor 实例。"""
-    return file_heartbeat_belongs_to(HEARTBEAT_PATH, pid)
-
-
 def component_specs(
     config: dict[str, Any],
     desired_states: dict[str, bool] | None = None,
@@ -125,17 +109,14 @@ def component_specs(
             enabled=enabled,
             entry=(REPOSITORY_ROOT / raw["entry"]).resolve(),
             arguments=arguments,
-            pid_path=(REPOSITORY_ROOT / raw["pid_path"]).resolve(),
-            heartbeat_path=(REPOSITORY_ROOT / raw["heartbeat_path"]).resolve(),
-            stop_path=(REPOSITORY_ROOT / raw["stop_path"]).resolve(),
-            log_path=(REPOSITORY_ROOT / raw["log_path"]).resolve(),
+            runtime=ServiceRuntimeFiles.from_component_config(config, key),
             heartbeat_timeout_seconds=float(raw["heartbeat_timeout_seconds"]),
         )
 
     dashboard = build("dashboard", "Dashboard", True, ())
     planner = build(
         "planner",
-        "Planner Scheduler",
+        "Planner Heartbeat",
         config["planner"]["scheduler"]["scheduled"] is True
         and desired.get("planner", True),
         ("serve",),
@@ -168,49 +149,23 @@ def is_component_process(pid: int, spec: ComponentSpec) -> bool:
     return has_entry and has_arguments
 
 
-def read_component_heartbeat(path: Path) -> dict[str, Any] | None:
-    """读取组件 heartbeat，并把关键字段转换为稳定类型。"""
-    value = read_json_object(path)
-    if value is None:
-        return None
-    try:
-        return {
-            "component": str(value["component"]),
-            "pid": int(value["pid"]),
-            "status": str(value["status"]),
-            "checked_at": str(value["checked_at"]),
-        }
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
 def component_health(
     spec: ComponentSpec,
     expected_pid: int | None = None,
 ) -> tuple[int | None, dict[str, Any] | None, str]:
     """联合 PID、heartbeat 和命令行身份判断组件是否可信。"""
-    pid = read_pid(spec.pid_path)
+    pid = spec.runtime.recorded_pid()
     if pid is None:
         return None, None, "PID 文件缺失或无效。"
     if expected_pid is not None and pid != expected_pid:
         return None, None, "PID 文件不属于刚启动的进程。"
-    heartbeat = read_component_heartbeat(spec.heartbeat_path)
-    if heartbeat is None:
-        return None, None, "heartbeat 文件缺失或无效。"
-    if heartbeat["component"] != spec.key or heartbeat["pid"] != pid:
-        return None, heartbeat, "heartbeat 与组件身份或 PID 不一致。"
-    if heartbeat["status"] != "RUNNING":
-        return None, heartbeat, "heartbeat 未声明 RUNNING 状态。"
-    try:
-        checked_at = datetime.fromisoformat(heartbeat["checked_at"])
-        current = datetime.fromisoformat(now_shanghai())
-        if checked_at.tzinfo is None or current.tzinfo is None:
-            return None, heartbeat, "heartbeat 时间缺少时区。"
-    except (TypeError, ValueError):
-        return None, heartbeat, "heartbeat 时间格式无效。"
-    age = (current - checked_at).total_seconds()
-    if age < 0 or age > spec.heartbeat_timeout_seconds:
-        return None, heartbeat, "heartbeat 已超时或时间位于未来。"
+    heartbeat = spec.runtime.read_heartbeat()
+    heartbeat_problem = spec.runtime.heartbeat_problem(
+        pid,
+        spec.heartbeat_timeout_seconds,
+    )
+    if heartbeat_problem is not None:
+        return None, heartbeat, heartbeat_problem
     if not is_component_process(pid, spec):
         return None, heartbeat, "PID 对应进程不存在或身份不匹配。"
     return pid, heartbeat, "组件正常运行。"
@@ -218,13 +173,7 @@ def component_health(
 
 def remove_runtime_files(spec: ComponentSpec, pid: int | None) -> None:
     """只清理已停止实例拥有的运行文件，避免删除新实例状态。"""
-    recorded = read_pid(spec.pid_path)
-    if pid is None or recorded == pid:
-        spec.pid_path.unlink(missing_ok=True)
-    heartbeat = read_component_heartbeat(spec.heartbeat_path)
-    if pid is None or (heartbeat is not None and heartbeat["pid"] == pid):
-        spec.heartbeat_path.unlink(missing_ok=True)
-    spec.stop_path.unlink(missing_ok=True)
+    spec.runtime.clear(pid)
 
 
 def request_component_stop(
@@ -240,8 +189,7 @@ def request_component_stop(
         return True
     if not is_component_process(pid, spec):
         raise RuntimeError("PID 对应进程身份无法确认，拒绝发送停止请求。")
-    request = {"component": spec.key, "pid": pid, "requested_at": now_shanghai()}
-    write_json_atomic(spec.stop_path, request)
+    spec.runtime.request_stop(pid)
     deadline = time.monotonic() + timeout_seconds
     while process_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
@@ -265,9 +213,9 @@ def start_component(
     config_path: Path,
 ) -> subprocess.Popen[str]:
     """以隐藏的独立后台进程启动组件，并把输出追加到其专用日志。"""
-    spec.log_path.parent.mkdir(parents=True, exist_ok=True)
-    spec.stop_path.unlink(missing_ok=True)
-    log_stream = spec.log_path.open("a", encoding="utf-8", newline="\n")
+    spec.runtime.log_path.parent.mkdir(parents=True, exist_ok=True)
+    spec.runtime.stop_path.unlink(missing_ok=True)
+    log_stream = spec.runtime.log_path.open("a", encoding="utf-8", newline="\n")
     creation_flags = (
         subprocess.CREATE_NEW_PROCESS_GROUP
         | subprocess.DETACHED_PROCESS
@@ -314,7 +262,7 @@ def wait_component_started(
         if process.poll() is not None:
             return None, heartbeat, f"组件启动后退出，退出码 {process.returncode}。"
         time.sleep(0.2)
-    return None, read_component_heartbeat(spec.heartbeat_path), last_reason
+    return None, spec.runtime.read_heartbeat(), last_reason
 
 
 def ensure_component(
@@ -326,7 +274,7 @@ def ensure_component(
 ) -> dict[str, Any]:
     """按配置开关确保组件已停止或处于健康运行状态。"""
     checked_at = now_shanghai()
-    recorded = read_pid(spec.pid_path)
+    recorded = spec.runtime.recorded_pid()
 
     if not spec.enabled:
         if recorded is None:

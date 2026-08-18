@@ -42,7 +42,6 @@ class InstructionAuthorityTests(unittest.TestCase):
 
     def test_runtime_authorities_are_documented_and_exist(self) -> None:
         authorities = (
-            "runner/planner_runner.py",
             "runner/agent_runtime.py",
             "dispatcher/agent_dispatcher.py",
             "control/loop_agent/providers/deepseek.py",

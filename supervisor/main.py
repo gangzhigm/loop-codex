@@ -1,6 +1,6 @@
 """仅支持 Windows 的 Supervisor 常驻监控进程。
 
-``serve`` 根据初始化配置监控并恢复独立运行的 Dashboard、Planner Scheduler 与
+``serve`` 根据初始化配置监控并恢复独立运行的 Dashboard、Planner heartbeat 服务与
 Dispatcher Scheduler。组件管理、运行文件和 Windows 进程方法集中在根目录
 ``common``，本文件只保留命令行入口和长期监控循环。
 """
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import signal
 import sys
 import threading
 from pathlib import Path
@@ -28,16 +27,10 @@ from loopdb import CONFIG_PATH, DEFAULT_DB, load_initialization_config, now_shan
 from common.components import (
     component_snapshot,
     component_specs,
-    heartbeat_belongs_to,
     record_monitor_state,
-    write_supervisor_heartbeat,
-)
-from common.paths import (
-    HEARTBEAT_PATH,
-    PID_PATH,
-    RUNTIME_DIR,
 )
 from common.service_control import service_control_state
+from common.service_runtime import ServiceRuntimeFiles, install_shutdown_signals
 
 
 def parser() -> argparse.ArgumentParser:
@@ -66,28 +59,20 @@ def serve_supervisor(args: argparse.Namespace) -> None:
     monitor_interval = args.monitor_interval_seconds or initial_interval
     shutdown_event = threading.Event()
     pid = os.getpid()
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    runtime = ServiceRuntimeFiles.supervisor()
+    runtime.prepare()
+    runtime.claim(
+        pid,
+        "Supervisor PID 文件已存在；请通过 health 任务检查或恢复现有主进程",
+    )
 
     try:
-        descriptor = os.open(PID_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        raise SystemExit(
-            "Supervisor PID 文件已存在；请通过 health 任务检查或恢复现有主进程"
-        ) from None
-    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-        stream.write(str(pid))
-
-    def stop(signum: int, frame: object) -> None:
-        """把系统终止信号转换为主循环可观察的停止事件。"""
-        del signum, frame
-        shutdown_event.set()
-
-    try:
-        signal.signal(signal.SIGTERM, stop)
-        signal.signal(signal.SIGINT, stop)
+        install_shutdown_signals(shutdown_event)
         print(f"{now_shanghai()} supervisor monitoring started", flush=True)
 
         while not shutdown_event.is_set():
+            if runtime.stop_requested(pid):
+                break
             # 每轮重读配置，使 Planner 和 Dispatcher 开关无需重启 Supervisor 即可生效。
             config = load_initialization_config(config_path)
             desired_states = service_control_state()
@@ -110,13 +95,10 @@ def serve_supervisor(args: argparse.Namespace) -> None:
                 runner_heartbeat_timeout_seconds=runner_timeout,
             )
             record_monitor_state(monitors, supervisor_pid=pid)
-            write_supervisor_heartbeat(pid)
-            shutdown_event.wait(monitor_interval)
+            runtime.write_heartbeat(pid)
+            runtime.wait(shutdown_event, pid, monitor_interval)
     finally:
-        if PID_PATH.exists() and PID_PATH.read_text(encoding="utf-8").strip() == str(pid):
-            PID_PATH.unlink()
-        if heartbeat_belongs_to(pid):
-            HEARTBEAT_PATH.unlink(missing_ok=True)
+        runtime.cleanup(pid)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
