@@ -385,52 +385,21 @@
 
     .runtime-flow {
       display: grid;
-      justify-items: center;
+      width: min(920px, 100%);
+      margin: 0 auto;
       min-width: 0;
     }
 
-    .runtime-root {
-      width: min(360px, 100%);
-    }
-
-    .runtime-stem {
-      width: 1px;
-      height: 18px;
-      background: var(--line-strong);
-    }
-
-    .runtime-targets {
-      position: relative;
-      display: grid;
+    .runtime-stage {
       width: 100%;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-      padding-top: 18px;
-    }
-
-    .runtime-targets::before {
-      position: absolute;
-      top: 0;
-      right: 25%;
-      left: 25%;
-      height: 1px;
-      background: var(--line-strong);
-      content: "";
-    }
-
-    .runtime-target {
-      position: relative;
       min-width: 0;
     }
 
-    .runtime-target::before {
-      position: absolute;
-      top: -18px;
-      left: 50%;
+    .runtime-connector {
+      justify-self: center;
       width: 1px;
-      height: 18px;
+      height: 14px;
       background: var(--line-strong);
-      content: "";
     }
 
     .runtime-node {
@@ -459,6 +428,34 @@
       gap: 10px;
       min-width: 0;
     }
+
+    .runtime-node-tools {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .service-control-button {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      padding: 0;
+      color: var(--muted);
+      background: var(--surface);
+      cursor: pointer;
+      font: inherit;
+      line-height: 1;
+    }
+
+    .service-control-button[data-action="start"] { color: var(--success); }
+    .service-control-button[data-action="stop"] { color: var(--danger); }
+    .service-control-button:hover { background: var(--surface-subtle); }
+    .service-control-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .service-control-button:disabled { cursor: wait; opacity: 0.5; }
 
     .runtime-node-name {
       min-width: 0;
@@ -694,6 +691,30 @@
     }
 
     .header-filter-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+    .header-sort-button {
+      display: inline-grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .header-sort-button:hover,
+    .header-sort-button:focus-visible,
+    .header-sort-button.is-active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .header-sort-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
     .header-filter-menu {
       position: fixed;
@@ -1668,9 +1689,6 @@
       .header-actions { width: 100%; justify-content: space-between; }
       .main { padding: 16px 12px 28px; }
       .runtime-heading-row { align-items: flex-start; flex-direction: column; gap: 3px; }
-      .runtime-targets { grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 14px; }
-      .runtime-targets::before { display: none; }
-      .runtime-target::before { top: -14px; display: block; height: 14px; }
       .summary-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric { min-height: 44px; border-bottom: 1px solid var(--line); }
       .metric:nth-child(2n) { border-right: 0; }
@@ -1760,24 +1778,23 @@
       <button id="dismissNotice" type="button" aria-label="关闭提示" title="关闭">×</button>
     </div>
 
-    <!-- 运行链路只展示 /api/state 中已有的健康快照，不提供启动、停止或恢复操作。 -->
+    <!-- 运行链路展示健康快照；三个常驻控制按钮通过受保护 API 写入持久化期望状态。 -->
     <section class="runtime-section" aria-labelledby="runtimeHeading">
       <div class="runtime-heading-row">
         <h2 id="runtimeHeading">运行链路</h2>
         <span id="runtimeUpdated" class="runtime-updated">尚无快照</span>
       </div>
       <div class="runtime-flow" aria-live="polite">
-        <div id="runtimeSupervisor" class="runtime-root"></div>
-        <div class="runtime-stem" aria-hidden="true"></div>
-        <div class="runtime-targets">
-          <div class="runtime-target">
-            <div id="runtimePlanner"></div>
-            <div id="runtimePlannerRunners" class="runtime-runner-list"></div>
-          </div>
-          <div class="runtime-target">
-            <div id="runtimeDispatcher"></div>
-            <div id="runtimeWorkerRunners" class="runtime-runner-list"></div>
-          </div>
+        <div id="runtimeSupervisor" class="runtime-stage"></div>
+        <div class="runtime-connector" aria-hidden="true"></div>
+        <div class="runtime-stage">
+          <div id="runtimePlanner"></div>
+          <div id="runtimePlannerRunners" class="runtime-runner-list"></div>
+        </div>
+        <div class="runtime-connector" aria-hidden="true"></div>
+        <div class="runtime-stage">
+          <div id="runtimeDispatcher"></div>
+          <div id="runtimeWorkerRunners" class="runtime-runner-list"></div>
         </div>
       </div>
     </section>
@@ -1801,7 +1818,7 @@
                 <th style="width: 10%"><span class="table-header-label">能力等级 <button id="profileFilter" class="header-filter-button" type="button" aria-label="筛选能力等级" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选能力等级"></button></span></th>
                 <th style="width: 15%"><span class="table-header-label">运行环境 <button id="environmentFilter" class="header-filter-button" type="button" aria-label="筛选运行环境" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选运行环境"></button></span></th>
                 <th style="width: 15%"><span class="table-header-label">项目 <button id="projectFilter" class="header-filter-button" type="button" aria-label="筛选项目" aria-expanded="false" aria-controls="headerFilterMenu" title="筛选项目"></button></span></th>
-                <th style="width: 15%">时间</th>
+                <th style="width: 15%"><span class="table-header-label">时间 <button id="timeSort" class="header-sort-button is-active" type="button" aria-label="按日期倒序" title="按日期倒序，点击切换正序" aria-pressed="true">↓</button></span></th>
                 <th class="task-action-heading" style="width: 10%">操作</th>
               </tr>
             </thead>
@@ -1888,6 +1905,7 @@
     const TASK_SCHEMA_VERSION = "3.7.0";
     const STATE_ENDPOINT = "/api/state";
     const TASK_ACTION_ENDPOINT = "/api/task-action";
+    const SERVICE_ACTION_ENDPOINT = "/api/service-action";
     const SECRET_API_ENDPOINT = "/api/secrets";
     const SECRET_STATUS_LABELS = {
       not_configured: "未配置",
@@ -1957,7 +1975,8 @@
       dialogTitle: document.querySelector("#dialogTitle"),
       dialogSubtitle: document.querySelector("#dialogSubtitle"),
       dialogBody: document.querySelector("#dialogBody"),
-      closeDialog: document.querySelector("#closeDialog")
+      closeDialog: document.querySelector("#closeDialog"),
+      timeSort: document.querySelector("#timeSort")
     };
 
     // 三、纯前端临时状态。这里不是真实任务状态，刷新页面后可以安全丢失。
@@ -1976,8 +1995,11 @@
     let archivingTaskId = null;
     let secretProviders = [];
     let secretCsrfToken = null;
+    let serviceCsrfToken = null;
+    let serviceActionInFlight = null;
     let secretRequestInFlight = false;
     let activeSecretForm = null;
+    let timeSortDirection = "desc";
 
     // 四、通用展示工具。所有进入 innerHTML 模板的服务端或任务文本都必须先 escapeHtml()。
     function escapeHtml(value) {
@@ -2044,7 +2066,7 @@
       return "neutral";
     }
 
-    function runtimeNodeMarkup(name, service) {
+    function runtimeNodeMarkup(name, service, controlKey = null) {
       const status = typeof service?.status === "string" ? service.status : "UNKNOWN";
       const tone = runtimeTone(status);
       const checkedAt = service?.heartbeat?.checked_at ?? service?.checked_at ?? null;
@@ -2052,10 +2074,14 @@
       const message = typeof service?.message === "string" && service.message.trim()
         ? service.message
         : "尚未收到组件状态。";
+      const desiredEnabled = controlKey ? state?.service_control?.[controlKey] !== false : true;
+      const action = desiredEnabled ? "stop" : "start";
+      const actionLabel = action === "start" ? "启动" : "停止";
+      const control = controlKey ? `<button class="service-control-button" type="button" data-service="${escapeHtml(controlKey)}" data-action="${action}" aria-label="${actionLabel}${escapeHtml(name)}" title="${actionLabel}${escapeHtml(name)}" ${serviceActionInFlight === controlKey ? "disabled" : ""}>${action === "start" ? "&#9654;" : "&#9632;"}</button>` : "";
       return `<article class="runtime-node" data-tone="${escapeHtml(tone)}">
         <div class="runtime-node-header">
           <span class="runtime-node-name">${escapeHtml(name)}</span>
-          <span class="runtime-state" data-tone="${escapeHtml(tone)}"><span class="runtime-state-dot" aria-hidden="true"></span>${escapeHtml(statusLabel)}</span>
+          <span class="runtime-node-tools"><span class="runtime-state" data-tone="${escapeHtml(tone)}"><span class="runtime-state-dot" aria-hidden="true"></span>${escapeHtml(statusLabel)}</span>${control}</span>
         </div>
         <div class="runtime-node-meta"><span>PID ${escapeHtml(service?.pid ?? "--")}</span><span>${escapeHtml(formatDate(checkedAt))}</span></div>
         <p class="runtime-node-message">${escapeHtml(message)}</p>
@@ -2081,9 +2107,9 @@
       const supervisor = byComponent.get("supervisor") ?? null;
       const planner = byComponent.get("planner") ?? null;
       const dispatcher = byComponent.get("dispatcher") ?? null;
-      elements.runtimeSupervisor.innerHTML = runtimeNodeMarkup("Supervisor", supervisor);
-      elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Scheduler", planner);
-      elements.runtimeDispatcher.innerHTML = runtimeNodeMarkup("Dispatcher Scheduler", dispatcher);
+      elements.runtimeSupervisor.innerHTML = runtimeNodeMarkup("Supervisor", supervisor, "supervisor");
+      elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Scheduler", planner, "planner");
+      elements.runtimeDispatcher.innerHTML = runtimeNodeMarkup("Dispatcher Scheduler", dispatcher, "dispatcher");
       const plannerRunners = renderRunnerList(elements.runtimePlannerRunners, values, "planner", "Planner Runner");
       const workerRunners = renderRunnerList(elements.runtimeWorkerRunners, values, "worker", "Worker Runner");
       const timestamps = [supervisor, planner, dispatcher, ...plannerRunners, ...workerRunners]
@@ -2713,6 +2739,9 @@
       if (!Array.isArray(candidate?.agents)) errors.push("agents 必须是数组");
       if (!Array.isArray(candidate?.recoveries)) errors.push("recoveries 必须是数组");
       if (!Array.isArray(candidate?.services)) errors.push("services 必须是数组");
+      if (!candidate?.service_control || ["supervisor", "planner", "dispatcher"].some((service) => typeof candidate.service_control[service] !== "boolean")) {
+        errors.push("service_control 无效");
+      }
       const environmentConfig = candidate?.runtime_config?.runtime_environments;
       if (!environmentConfig || typeof environmentConfig !== "object" || Array.isArray(environmentConfig) || !Object.keys(environmentConfig).length) {
         errors.push("runtime_config.runtime_environments 无效");
@@ -2812,10 +2841,40 @@
       try {
         const response = await fetch(STATE_ENDPOINT, { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        serviceCsrfToken = response.headers.get("X-CSRF-Token");
         return applyState(await response.json());
       } catch (error) {
         showNotice(`无法读取 ${STATE_ENDPOINT}。${error instanceof Error ? error.message : String(error)}`);
         return false;
+      }
+    }
+
+    async function controlService(service, action) {
+      if (serviceActionInFlight || !serviceCsrfToken || !crypto.randomUUID) return;
+      serviceActionInFlight = service;
+      renderRuntimeChain(state?.services ?? []);
+      try {
+        const response = await fetch(SERVICE_ACTION_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": serviceCsrfToken
+          },
+          body: JSON.stringify({
+            service,
+            action,
+            request_id: crypto.randomUUID(),
+            confirmation: action.toUpperCase()
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        await refreshState();
+      } catch (error) {
+        showNotice(`服务操作失败。${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        serviceActionInFlight = null;
+        if (state) renderRuntimeChain(state.services);
       }
     }
 
@@ -2951,11 +3010,31 @@
       renderProfiles(currentTasks, state.agents ?? []);
     }
 
-    // 任务排序固定为优先级、更新时间；任务名、ID、状态、项目和结果文本必须经过 HTML 转义。
+    function taskSortTimestamp(task) {
+      const timestamp = new Date(task?.started_at ?? "").getTime();
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    function renderTimeSortButton() {
+      const ascending = timeSortDirection === "asc";
+      elements.timeSort.textContent = ascending ? "↑" : "↓";
+      elements.timeSort.setAttribute("aria-label", `按日期${ascending ? "正序" : "倒序"}`);
+      elements.timeSort.title = `按日期${ascending ? "正序" : "倒序"}，点击切换${ascending ? "倒序" : "正序"}`;
+      elements.timeSort.setAttribute("aria-pressed", "true");
+    }
+
+    // 任务排序按执行开始日期；无日期任务置底，同日再按优先级和更新时间稳定排序。
     function renderTasks(tasks) {
       const visible = tasks
         .filter(taskMatches)
         .sort((left, right) => {
+          const leftTime = taskSortTimestamp(left);
+          const rightTime = taskSortTimestamp(right);
+          if (leftTime === null || rightTime === null) {
+            if (leftTime !== rightTime) return leftTime === null ? 1 : -1;
+          } else if (leftTime !== rightTime) {
+            return timeSortDirection === "asc" ? leftTime - rightTime : rightTime - leftTime;
+          }
           const priorityDifference = (PRIORITY_ORDER[left.priority] ?? 9) - (PRIORITY_ORDER[right.priority] ?? 9);
           if (priorityDifference !== 0) return priorityDifference;
           return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
@@ -3228,6 +3307,11 @@
       submitSecretForm(form);
     });
     elements.dismissNotice.addEventListener("click", hideNotice);
+    document.querySelector(".runtime-flow").addEventListener("click", (event) => {
+      const button = event.target.closest(".service-control-button");
+      if (!button) return;
+      controlService(button.dataset.service, button.dataset.action);
+    });
     elements.search.addEventListener("input", (event) => {
       currentQuery = event.target.value.trim().toLocaleLowerCase("zh-CN");
       if (state) {
@@ -3241,6 +3325,11 @@
     elements.environmentFilter.addEventListener("click", () => openHeaderFilter("environment"));
     elements.projectFilter.addEventListener("click", () => openHeaderFilter("project"));
     elements.profileFilter.addEventListener("click", () => openHeaderFilter("profile"));
+    elements.timeSort.addEventListener("click", () => {
+      timeSortDirection = timeSortDirection === "asc" ? "desc" : "asc";
+      renderTimeSortButton();
+      if (state) renderTasks(state.tasks);
+    });
     elements.headerFilterMenu.addEventListener("click", (event) => {
       const option = event.target.closest(".header-filter-option");
       if (option) setHeaderFilter(option.dataset.headerFilterKind, option.dataset.headerFilterValue);

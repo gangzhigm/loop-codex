@@ -20,8 +20,8 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 | `../dispatcher/agent_dispatcher.py` | 只读选择一个内部 Provider 任务并启动一次 Runner | 原子 claim 与业务实现 |
 | `../dispatcher/main.py` | Dispatcher Scheduler 单实例、heartbeat 与周期调度 | Supervisor 探活 |
 | `../runner/agent_runtime.py` | 内部 Agent 的 claim、heartbeat、Provider 工具循环和 finish | 周期调度 |
-| `../supervisor/main.py` | 托管 Dashboard，并按 PID 与 heartbeat 管理两个 Scheduler | 任务查询、领取与任务表写入 |
-| `../client/dashboard_server.py` | 本机 HTTP 路由、Secret API、静态资源服务 | 任务状态直接写入 |
+| `../supervisor/main.py` | 按 PID 与 heartbeat 监控并恢复独立 Dashboard 与两个 Scheduler | 任务查询、领取与任务表写入 |
+| `../client/dashboard_server.py` | 独立本机 HTTP 进程、Secret API、静态资源服务、PID 与 heartbeat | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
 
 ## 目录分区
@@ -29,11 +29,12 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 ```text
 control/
 ├─ deployment_checks/       当前真实部署、配置与前端文件的只读校验
-├─ tests/                   Python 回归测试与测试路径引导
 ├─ loop_agent/              跨角色可复用内部实现
 ├─ loopctl.py               共享任务控制 CLI
 └─ loopdb.py                共享数据库公共 API
 ```
+
+Python 回归测试与测试路径引导位于仓库根目录 `../tests/`。
 
 ## 内部模块
 
@@ -139,7 +140,8 @@ Supervisor 异常：
 1. `data/runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
 2. `data/runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
 3. `health_run.py` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
-4. Planner 与 Dispatcher 分别维护自己的 PID 和 heartbeat；Supervisor 不读取任务数量。
+4. Dashboard、Planner 与 Dispatcher 分别维护自己的 PID 和 heartbeat；Supervisor 不读取任务数量，也不拥有这些进程的生命周期。
+5. 停止 Supervisor 不会停止 Dashboard；Dashboard 异常退出时，运行中的 Supervisor 会重新启动它。
 
 ## 回归测试
 
@@ -158,12 +160,12 @@ Supervisor 异常：
 
 ```powershell
 $env:PYTHONUTF8 = '1'
-python -m unittest discover -s control/tests -p "test_loop_*.py"
-python control/tests/test_dashboard_server.py
-python control/tests/test_agent_runtime.py
-python control/tests/test_deepseek_provider.py
-python control/tests/test_secret_store.py
-python control/tests/test_instruction_authority.py
+python -m unittest discover -s tests -p "test_loop_*.py"
+python tests/test_dashboard_server.py
+python tests/test_agent_runtime.py
+python tests/test_deepseek_provider.py
+python tests/test_secret_store.py
+python tests/test_instruction_authority.py
 powershell -NoProfile -ExecutionPolicy Bypass -File control/deployment_checks/check-initialization.ps1
 node control/deployment_checks/check-dashboard.mjs
 python control/loopctl.py validate

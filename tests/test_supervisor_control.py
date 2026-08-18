@@ -14,9 +14,9 @@ from supervisor import main as control
 
 
 class SupervisorControlTests(unittest.TestCase):
-    """验证 Supervisor 只解析 serve 并按配置管理两个 Scheduler。"""
+    """验证 Supervisor 只解析 serve 并管理三个独立服务进程。"""
 
-    def test_serve_arguments_forward_explicit_host_and_port(self) -> None:
+    def test_serve_arguments_only_control_supervisor(self) -> None:
         args = control.parser().parse_args(
             [
                 "serve",
@@ -24,43 +24,36 @@ class SupervisorControlTests(unittest.TestCase):
                 "test.sqlite3",
                 "--config",
                 "test-config.json",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "4999",
+                "--monitor-interval-seconds",
+                "5",
             ]
         )
-        self.assertEqual(
-            control.command_arguments(args),
-            [
-                "--db",
-                "test.sqlite3",
-                "--config",
-                "test-config.json",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "4999",
-            ],
-        )
+        self.assertEqual(args.db, "test.sqlite3")
+        self.assertEqual(args.config, "test-config.json")
+        self.assertEqual(args.monitor_interval_seconds, 5)
 
     def test_main_dispatches_serve(self) -> None:
         with patch.object(control, "serve_supervisor") as serve:
-            control.main(["serve", "--port", "4999"])
+            control.main(["serve", "--monitor-interval-seconds", "5"])
         serve.assert_called_once()
-        self.assertEqual(serve.call_args.args[0].port, 4999)
+        self.assertEqual(serve.call_args.args[0].monitor_interval_seconds, 5)
 
-    def test_component_specs_read_scheduler_switches(self) -> None:
-        planner, dispatcher = component_specs(load_initialization_config())
+    def test_component_specs_read_service_switches(self) -> None:
+        dashboard, planner, dispatcher = component_specs(load_initialization_config())
+        self.assertTrue(dashboard.enabled)
         self.assertTrue(planner.enabled)
         self.assertTrue(dispatcher.enabled)
+        self.assertEqual(dashboard.entry, REPOSITORY_ROOT / "client" / "dashboard_server.py")
+        self.assertEqual(dashboard.arguments, ())
         self.assertEqual(planner.entry, REPOSITORY_ROOT / "planner" / "main.py")
+        self.assertEqual(planner.arguments, ("serve",))
         self.assertEqual(dispatcher.entry, REPOSITORY_ROOT / "dispatcher" / "main.py")
 
     def test_planner_switch_does_not_change_dispatcher(self) -> None:
         config = copy.deepcopy(load_initialization_config())
         config["planner"]["scheduler"]["scheduled"] = False
-        planner, dispatcher = component_specs(config)
+        dashboard, planner, dispatcher = component_specs(config)
+        self.assertTrue(dashboard.enabled)
         self.assertFalse(planner.enabled)
         self.assertTrue(dispatcher.enabled)
 

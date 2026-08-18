@@ -29,7 +29,7 @@ from common.paths import (
     REPOSITORY_ROOT,
     SERVER_LOG,
 )
-from common.windows import listener_pids, process_alive, windows_powershell
+from common.windows import process_alive, windows_powershell
 
 
 def output(payload: dict[str, Any], exit_code: int = 0) -> None:
@@ -131,17 +131,10 @@ def supervisor_health(
     return pid, heartbeat
 
 
-def stop_previous_process(port: int) -> None:
-    """停止本项目旧 Supervisor，并拒绝终止占用端口的外部进程。"""
+def stop_previous_process() -> None:
+    """只停止 PID 文件指向且身份可信的旧 Supervisor。"""
     pid = recorded_pid()
-    listeners = listener_pids(port)
-    targets = {item for item in listeners if is_supervisor_process(item)}
-    foreign_listeners = listeners - targets
-    if foreign_listeners:
-        raise RuntimeError(
-            "Dashboard 端口被非本项目进程占用: "
-            + ", ".join(str(item) for item in sorted(foreign_listeners))
-        )
+    targets: set[int] = set()
     if pid is not None and is_supervisor_process(pid):
         targets.add(pid)
     for target in targets:
@@ -170,9 +163,9 @@ def stop_previous_process(port: int) -> None:
     HEARTBEAT_PATH.unlink(missing_ok=True)
 
 
-def start_server(database_path: Path, config_path: Path, port: int) -> int:
+def start_server(database_path: Path, config_path: Path) -> int:
     """清理旧实例后，在后台启动 Supervisor 主进程并追加服务日志。"""
-    stop_previous_process(port)
+    stop_previous_process()
     log_stream = SERVER_LOG.open("a", encoding="utf-8", newline="\n")
     creation_flags = (
         subprocess.CREATE_NEW_PROCESS_GROUP

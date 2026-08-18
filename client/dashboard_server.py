@@ -22,9 +22,9 @@ import hmac
 import json
 import os
 import secrets
-import signal
 import sys
 import threading
+import time
 import uuid
 from collections import deque
 from http import HTTPStatus
@@ -64,12 +64,22 @@ from loop_agent.secrets.store import (
     SecretValidationError,
     create_secret_store,
 )
+from common.scheduler import SchedulerRuntimeFiles, install_shutdown_signals
+from common.components import component_specs, ensure_component
+from common.health import (
+    record as record_supervisor_health,
+    start_server as start_supervisor,
+    stop_previous_process as stop_supervisor,
+    supervisor_health,
+)
+from common.service_control import service_control_state, set_service_enabled
 
 
 TASK_ACTION_PATH = "/api/task-action"
 SECRET_API_PATH = "/api/secrets"
 OPERATIONS_API_PATH = "/api/operations-config"
 OPERATIONS_ACTION_PATH = "/api/operations-config/action"
+SERVICE_ACTION_PATH = "/api/service-action"
 OPERATIONS_ASSETS = {
     "/operations.html": ("operations.html", "text/html; charset=utf-8"),
     "/operations.js": ("operations.js", "application/javascript; charset=utf-8"),
@@ -402,6 +412,86 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.server.runtime_config = updated
         self.send_json(HTTPStatus.OK, {"ok": True, "outcome": "UPDATED", "task_root": str(root)})
 
+    def _handle_service_action(self, request: object) -> None:
+        """持久化人工启停意图，并立即执行对应服务动作。"""
+        if getattr(request, "query", ""):
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作接口不接受查询参数")
+        self._require_secret_host()
+        self._require_secret_origin()
+        self._require_csrf_token()
+        payload = self._read_operations_json()
+        if set(payload) != {"service", "action", "request_id", "confirmation"}:
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作字段无效")
+        service = payload.get("service")
+        action = payload.get("action")
+        if service not in {"supervisor", "planner", "dispatcher"} or action not in {"start", "stop"}:
+            raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作无效")
+        if payload.get("confirmation") != action.upper():
+            raise OperationsApiError(HTTPStatus.FORBIDDEN, "服务操作未获得明确确认")
+        self.server.reserve_request_id(payload["request_id"])
+        enabled = action == "start"
+
+        with self.server._operations_config_lock:
+            desired = set_service_enabled(service, enabled)
+            config = load_initialization_config(self.server.runtime_config_path)
+            if service == "supervisor":
+                if enabled:
+                    timeout = int(config["health"]["heartbeat_timeout_seconds"])
+                    pid, heartbeat = supervisor_health(timeout)
+                    if pid is None:
+                        launched_pid = start_supervisor(
+                            self.server.database_path,
+                            self.server.runtime_config_path,
+                        )
+                        deadline = time.monotonic() + float(
+                            config["supervisor"]["component_start_timeout_seconds"]
+                        ) + 10
+                        while time.monotonic() < deadline:
+                            pid, heartbeat = supervisor_health(timeout, expected_pid=launched_pid)
+                            if pid is not None:
+                                break
+                            time.sleep(0.2)
+                        if pid is None:
+                            raise OperationsApiError(
+                                HTTPStatus.SERVICE_UNAVAILABLE,
+                                "Supervisor 启动后未通过探活",
+                            )
+                    result = {
+                        "component": "supervisor",
+                        "status": "HEALTHY",
+                        "pid": pid,
+                        "heartbeat": heartbeat,
+                    }
+                else:
+                    stop_supervisor()
+                    record_supervisor_health("DISABLED", "Supervisor 已由人工停止。", 0)
+                    result = {"component": "supervisor", "status": "DISABLED", "pid": None}
+            else:
+                if enabled:
+                    configured = (
+                        config["planner"]["scheduler"]["scheduled"]
+                        if service == "planner"
+                        else config["dispatcher"]["scheduled"]
+                    )
+                    if configured is not True:
+                        set_service_enabled(service, False)
+                        raise OperationsApiError(
+                            HTTPStatus.CONFLICT,
+                            f"{service} 的配置调度开关已关闭",
+                        )
+                specs = {spec.key: spec for spec in component_specs(config, desired)}
+                result = ensure_component(
+                    specs[service],
+                    self.server.database_path,
+                    self.server.runtime_config_path,
+                    float(config["supervisor"]["component_start_timeout_seconds"]),
+                    float(config["supervisor"]["component_stop_timeout_seconds"]),
+                )
+        self.send_json(
+            HTTPStatus.OK,
+            {"ok": True, "service_control": service_control_state(), "service": result},
+        )
+
     def _handle_secret_get(self, request: object) -> None:
         """返回非敏感 Secret 状态，并通过响应头下发本进程 CSRF token。"""
         if getattr(request, "query", ""):
@@ -579,8 +669,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     payload = state_payload(database, self.server.runtime_config)
                     payload["services"], payload["health_events"] = runtime_health()
+                    payload["service_control"] = service_control_state()
                     payload["runtime_config"] = self.server.runtime_config
-                    self.send_json(HTTPStatus.OK, payload)
+                    self.send_json(
+                        HTTPStatus.OK,
+                        payload,
+                        headers={"X-CSRF-Token": self.server.csrf_token},
+                    )
                 finally:
                     database.close()
             except (sqlite3.Error, OSError, ValueError) as error:
@@ -670,6 +765,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": "运维配置服务不可用"},
                 )
             return
+        if request.path == SERVICE_ACTION_PATH:
+            try:
+                self._handle_service_action(request)
+            except (OperationsApiError, SecretApiError) as error:
+                self.send_json(error.status, {"ok": False, "error": str(error)})
+            except (OSError, RuntimeError, ValueError):
+                self.send_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "error": "服务操作失败"},
+                )
+            return
         if request.path != TASK_ACTION_PATH:
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
             return
@@ -712,7 +818,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:
         """显式拒绝敏感接口的 CORS 预检，其余路由返回方法不允许。"""
-        if urlparse(self.path).path in {SECRET_API_PATH, OPERATIONS_ACTION_PATH}:
+        if urlparse(self.path).path in {SECRET_API_PATH, OPERATIONS_ACTION_PATH, SERVICE_ACTION_PATH}:
             self.send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "CORS 请求已拒绝"})
             return
         self.send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"ok": False, "error": "method not allowed"})
@@ -734,11 +840,11 @@ def main(
     install_signal_handlers: bool = True,
     shutdown_event: threading.Event | None = None,
 ) -> None:
-    """加载配置、强制本机监听、写 PID 文件并运行 HTTP 服务。
+    """加载配置、声明独立进程运行状态并运行 HTTP 服务。
 
-    独立运行时，SIGTERM/SIGINT 通过独立线程调用 shutdown，避免在 serve_forever
-    所在线程死锁。由 Supervisor 托管时，调用方会传入 shutdown_event，并由 Supervisor
-    主线程统一处理信号。服务退出后关闭 socket，并且仅在 PID 文件仍属于当前进程时删除它。
+    SIGTERM、SIGINT 和 Supervisor 停止请求都会通过独立线程调用 ``shutdown``，避免在
+    ``serve_forever`` 所在线程死锁。PID 与 heartbeat 始终写入 ``data/runtime``，退出时
+    只清理仍属于当前进程的文件。
     """
     args = parser().parse_args(argv)
     database_path = Path(args.db).resolve()
@@ -749,38 +855,48 @@ def main(
     port = args.port or int(dashboard_config["port"])
     if host != "127.0.0.1":
         raise SystemExit("Dashboard Server with Secret API must bind to 127.0.0.1")
-    runtime = BASE_DIR / "runtime"
-    runtime.mkdir(parents=True, exist_ok=True)
-    pid_path = runtime / "dashboard-server.pid"
-    server = DashboardServer(
-        (host, port), database_path, BASE_DIR / "client" / "dashboard.html", config,
-        runtime_config_path=config_path,
-    )
-    pid_path.write_text(str(os.getpid()), encoding="utf-8")
-
-    def stop_server(signum: int, frame: object) -> None:
-        """把进程信号转换为异步 HTTP Server 关闭请求。"""
-
-        del signum, frame
-        # shutdown() 必须在 serve_forever 所在线程之外调用，否则会互相等待形成死锁。
-        threading.Thread(target=server.shutdown, daemon=True).start()
-
-    if install_signal_handlers:
-        signal.signal(signal.SIGTERM, stop_server)
-        signal.signal(signal.SIGINT, stop_server)
-    if shutdown_event is not None:
-        def stop_on_supervisor_shutdown() -> None:
-            shutdown_event.wait()
-            stop_server(0, None)
-
-        threading.Thread(target=stop_on_supervisor_shutdown, daemon=True).start()
-    print(f"{now_shanghai()} dashboard server listening on http://{host}:{port}", flush=True)
+    heartbeat_interval = float(dashboard_config["heartbeat_interval_seconds"])
+    runtime = SchedulerRuntimeFiles.from_config(config, "dashboard")
+    pid = os.getpid()
+    runtime.prepare()
+    runtime.claim(pid, "Dashboard PID 文件已存在")
+    service_shutdown = shutdown_event or threading.Event()
+    server: DashboardServer | None = None
+    monitor: threading.Thread | None = None
     try:
+        server = DashboardServer(
+            (host, port), database_path, BASE_DIR / "client" / "dashboard.html", config,
+            runtime_config_path=config_path,
+        )
+        if install_signal_handlers:
+            install_shutdown_signals(service_shutdown)
+
+        def publish_runtime_state() -> None:
+            """刷新 heartbeat，并把文件停止请求转换为 HTTP Server 关闭。"""
+            while not service_shutdown.is_set():
+                runtime.write_heartbeat(pid)
+                if runtime.stop_requested():
+                    service_shutdown.set()
+                    break
+                service_shutdown.wait(heartbeat_interval)
+            # shutdown() 必须在 serve_forever 所在线程之外调用，否则会互相等待。
+            threading.Thread(target=server.shutdown, daemon=True).start()
+
+        monitor = threading.Thread(
+            target=publish_runtime_state,
+            name="dashboard-runtime-monitor",
+            daemon=True,
+        )
+        monitor.start()
+        print(f"{now_shanghai()} dashboard server listening on http://{host}:{port}", flush=True)
         server.serve_forever(poll_interval=0.5)
     finally:
-        server.server_close()
-        if pid_path.exists() and pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
-            pid_path.unlink()
+        service_shutdown.set()
+        if monitor is not None:
+            monitor.join(timeout=max(1.0, heartbeat_interval))
+        if server is not None:
+            server.server_close()
+        runtime.cleanup(pid)
 
 
 if __name__ == "__main__":

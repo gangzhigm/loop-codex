@@ -19,9 +19,9 @@ from http import HTTPStatus
 from pathlib import Path
 
 from loopdb import ARCHIVABLE_STATUSES, BASE_DIR, connect
+from common.paths import HEALTH_STATE
 
 
-HEALTH_STATE = BASE_DIR / "runtime" / "health-state.json"
 TASK_ID_PATTERN = re.compile(r"[A-Z][A-Z0-9_-]*\Z")
 IMAGE_CONTENT_TYPES = {
     ".avif": "image/avif",

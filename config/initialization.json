@@ -156,6 +156,7 @@
     "host": "127.0.0.1",
     "port": 4178,
     "poll_interval_ms": 2000,
+    "heartbeat_interval_seconds": 15,
     "secret_api": {
       "enabled": true,
       "max_body_bytes": 16384,
@@ -175,6 +176,14 @@
     "component_stop_timeout_seconds": 5,
     "runner_heartbeat_timeout_seconds": 120,
     "components": {
+      "dashboard": {
+        "entry": "client/dashboard_server.py",
+        "pid_path": "data/runtime/dashboard-server.pid",
+        "heartbeat_path": "data/runtime/dashboard-server-heartbeat.json",
+        "stop_path": "data/runtime/dashboard-server-stop-request.json",
+        "log_path": "data/runtime/dashboard-server.log",
+        "heartbeat_timeout_seconds": 60
+      },
       "planner": {
         "entry": "planner/main.py",
         "pid_path": "data/runtime/planner.pid",

@@ -34,12 +34,13 @@ from common.windows import process_alive, windows_powershell
 
 @dataclass(frozen=True)
 class ComponentSpec:
-    """冻结一个 Scheduler 的进程入口、运行文件和监控阈值。"""
+    """冻结一个独立服务的进程入口、参数、运行文件和监控阈值。"""
 
     key: str
     display_name: str
     enabled: bool
     entry: Path
+    arguments: tuple[str, ...]
     pid_path: Path
     heartbeat_path: Path
     stop_path: Path
@@ -66,10 +67,25 @@ def append_monitor_fallback(message: str) -> None:
     append_utf8_line(FALLBACK_LOG, f"{now_shanghai()} {message}")
 
 
-def record_monitor_state(monitors: dict[str, dict[str, Any]]) -> None:
-    """保存组件快照，同时保留健康检查拥有的状态字段。"""
+def record_monitor_state(
+    monitors: dict[str, dict[str, Any]],
+    *,
+    supervisor_pid: int | None = None,
+) -> None:
+    """保存组件快照，并同步当前 Supervisor 的可展示状态。"""
     try:
         state = read_monitor_state()
+        if supervisor_pid is not None:
+            state.update(
+                {
+                    "component": "supervisor",
+                    "status": "HEALTHY",
+                    "pid": supervisor_pid,
+                    "checked_at": now_shanghai(),
+                    "consecutive_failures": 0,
+                    "message": "Supervisor 主进程正常。",
+                }
+            )
         state["monitors"] = monitors
         state["monitor_checked_at"] = now_shanghai()
         write_monitor_state(state)
@@ -88,17 +104,27 @@ def heartbeat_belongs_to(pid: int) -> bool:
     return file_heartbeat_belongs_to(HEARTBEAT_PATH, pid)
 
 
-def component_specs(config: dict[str, Any]) -> tuple[ComponentSpec, ComponentSpec]:
-    """从已校验配置构造两个 Scheduler 的稳定运行契约。"""
+def component_specs(
+    config: dict[str, Any],
+    desired_states: dict[str, bool] | None = None,
+) -> tuple[ComponentSpec, ...]:
+    """从已校验配置构造 Dashboard 与两个 Scheduler 的稳定运行契约。"""
     components = config["supervisor"]["components"]
+    desired = desired_states or {}
 
-    def build(key: str, display_name: str, enabled: bool) -> ComponentSpec:
+    def build(
+        key: str,
+        display_name: str,
+        enabled: bool,
+        arguments: tuple[str, ...],
+    ) -> ComponentSpec:
         raw = components[key]
         return ComponentSpec(
             key=key,
             display_name=display_name,
             enabled=enabled,
             entry=(REPOSITORY_ROOT / raw["entry"]).resolve(),
+            arguments=arguments,
             pid_path=(REPOSITORY_ROOT / raw["pid_path"]).resolve(),
             heartbeat_path=(REPOSITORY_ROOT / raw["heartbeat_path"]).resolve(),
             stop_path=(REPOSITORY_ROOT / raw["stop_path"]).resolve(),
@@ -106,21 +132,26 @@ def component_specs(config: dict[str, Any]) -> tuple[ComponentSpec, ComponentSpe
             heartbeat_timeout_seconds=float(raw["heartbeat_timeout_seconds"]),
         )
 
+    dashboard = build("dashboard", "Dashboard", True, ())
     planner = build(
         "planner",
         "Planner Scheduler",
-        config["planner"]["scheduler"]["scheduled"] is True,
+        config["planner"]["scheduler"]["scheduled"] is True
+        and desired.get("planner", True),
+        ("serve",),
     )
     dispatcher = build(
         "dispatcher",
         "Dispatcher Scheduler",
-        config["dispatcher"]["scheduled"] is True,
+        config["dispatcher"]["scheduled"] is True
+        and desired.get("dispatcher", True),
+        ("serve",),
     )
-    return planner, dispatcher
+    return dashboard, planner, dispatcher
 
 
 def is_component_process(pid: int, spec: ComponentSpec) -> bool:
-    """核对 PID 存活，且命令行明确指向对应入口的 serve 子命令。"""
+    """核对 PID 存活，且命令行明确指向对应服务入口与固定参数。"""
     if not process_alive(pid):
         return False
     command_line = windows_powershell(
@@ -129,12 +160,16 @@ def is_component_process(pid: int, spec: ComponentSpec) -> bool:
     if not command_line:
         return False
     has_entry = str(spec.entry).casefold() in command_line.casefold()
-    has_serve = re.search(r"(?:^|\s)serve(?:\s|$)", command_line, re.IGNORECASE) is not None
-    return has_entry and has_serve
+    has_arguments = all(
+        re.search(rf"(?:^|\s){re.escape(argument)}(?:\s|$)", command_line, re.IGNORECASE)
+        is not None
+        for argument in spec.arguments
+    )
+    return has_entry and has_arguments
 
 
 def read_component_heartbeat(path: Path) -> dict[str, Any] | None:
-    """读取 Scheduler heartbeat，并把关键字段转换为稳定类型。"""
+    """读取组件 heartbeat，并把关键字段转换为稳定类型。"""
     value = read_json_object(path)
     if value is None:
         return None
@@ -153,7 +188,7 @@ def component_health(
     spec: ComponentSpec,
     expected_pid: int | None = None,
 ) -> tuple[int | None, dict[str, Any] | None, str]:
-    """联合 PID、heartbeat 和命令行身份判断 Scheduler 是否可信。"""
+    """联合 PID、heartbeat 和命令行身份判断组件是否可信。"""
     pid = read_pid(spec.pid_path)
     if pid is None:
         return None, None, "PID 文件缺失或无效。"
@@ -178,7 +213,7 @@ def component_health(
         return None, heartbeat, "heartbeat 已超时或时间位于未来。"
     if not is_component_process(pid, spec):
         return None, heartbeat, "PID 对应进程不存在或身份不匹配。"
-    return pid, heartbeat, "Scheduler 正常运行。"
+    return pid, heartbeat, "组件正常运行。"
 
 
 def remove_runtime_files(spec: ComponentSpec, pid: int | None) -> None:
@@ -199,7 +234,7 @@ def request_component_stop(
     *,
     force_after_timeout: bool,
 ) -> bool:
-    """向可信 Scheduler 请求正常退出，恢复场景超时后才终止 Scheduler 进程。"""
+    """向可信组件请求正常退出，恢复场景超时后才终止组件进程。"""
     if not process_alive(pid):
         remove_runtime_files(spec, pid)
         return True
@@ -229,7 +264,7 @@ def start_component(
     database_path: Path,
     config_path: Path,
 ) -> subprocess.Popen[str]:
-    """以隐藏的独立后台进程启动 Scheduler，并把输出追加到其专用日志。"""
+    """以隐藏的独立后台进程启动组件，并把输出追加到其专用日志。"""
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     spec.stop_path.unlink(missing_ok=True)
     log_stream = spec.log_path.open("a", encoding="utf-8", newline="\n")
@@ -244,7 +279,7 @@ def start_component(
                 sys.executable,
                 "-B",
                 str(spec.entry),
-                "serve",
+                *spec.arguments,
                 "--db",
                 str(database_path),
                 "--config",
@@ -271,13 +306,13 @@ def wait_component_started(
 ) -> tuple[int | None, dict[str, Any] | None, str]:
     """等待新进程写出与其 PID 匹配的新鲜 heartbeat。"""
     deadline = time.monotonic() + timeout_seconds
-    last_reason = "Scheduler 尚未写入 heartbeat。"
+    last_reason = "组件尚未写入 heartbeat。"
     while time.monotonic() < deadline:
         pid, heartbeat, last_reason = component_health(spec, expected_pid=process.pid)
         if pid is not None:
             return pid, heartbeat, last_reason
         if process.poll() is not None:
-            return None, heartbeat, f"Scheduler 启动后退出，退出码 {process.returncode}。"
+            return None, heartbeat, f"组件启动后退出，退出码 {process.returncode}。"
         time.sleep(0.2)
     return None, read_component_heartbeat(spec.heartbeat_path), last_reason
 
@@ -289,7 +324,7 @@ def ensure_component(
     start_timeout_seconds: float,
     stop_timeout_seconds: float,
 ) -> dict[str, Any]:
-    """按配置开关确保 Scheduler 已停止或处于健康运行状态。"""
+    """按配置开关确保组件已停止或处于健康运行状态。"""
     checked_at = now_shanghai()
     recorded = read_pid(spec.pid_path)
 
@@ -409,30 +444,15 @@ def ensure_component(
 
 
 def component_snapshot(
-    specs: tuple[ComponentSpec, ComponentSpec],
+    specs: tuple[ComponentSpec, ...],
     database_path: Path,
     config_path: Path,
     *,
-    dashboard_running: bool,
-    dashboard_error: str | None,
     start_timeout_seconds: float,
     stop_timeout_seconds: float,
     runner_heartbeat_timeout_seconds: float = 120,
 ) -> dict[str, dict[str, Any]]:
-    """管理三个常驻组件，并只读汇总动态 Runner 状态。"""
-    checked_at = now_shanghai()
-    dashboard = {
-        "component": "dashboard-server",
-        "status": "HEALTHY" if dashboard_running else "RESTARTING",
-        "checked_at": checked_at,
-        "message": (
-            "Dashboard 服务线程正在运行。"
-            if dashboard_running
-            else "Dashboard 服务线程已退出，Supervisor 正在重启。"
-        ),
-    }
-    if dashboard_error:
-        dashboard["last_error"] = dashboard_error
+    """管理三个独立常驻组件，并只读汇总动态 Runner 状态。"""
 
     def inspect(spec: ComponentSpec) -> dict[str, Any]:
         """把单个组件的意外监控异常限制在本轮状态中。"""
@@ -452,7 +472,7 @@ def component_snapshot(
                 "message": f"{spec.display_name} 监控失败：{type(error).__name__}",
             }
 
-    planner, dispatcher = (inspect(spec) for spec in specs)
+    managed = {spec.key: inspect(spec) for spec in specs}
     try:
         runners = runner_snapshot(runner_heartbeat_timeout_seconds)
     except Exception as error:
@@ -467,8 +487,6 @@ def component_snapshot(
             "instances": [],
         }
     return {
-        "dashboard": dashboard,
-        "planner": planner,
-        "dispatcher": dispatcher,
+        **managed,
         "runners": runners,
     }

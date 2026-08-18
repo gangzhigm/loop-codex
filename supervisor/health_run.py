@@ -36,7 +36,6 @@ from common.health import (
     recorded_pid,
     release_lock,
     start_server,
-    stop_previous_process,
     supervisor_health,
     write_state,
 )
@@ -49,7 +48,8 @@ from common.paths import (
     RUNTIME_DIR,
     SERVER_LOG,
 )
-from common.windows import listener_pids, process_alive, windows_powershell
+from common.windows import process_alive
+from common.service_control import service_control_state
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -64,7 +64,9 @@ def main(argv: list[str] | None = None) -> None:
     acquire_lock()
     try:
         config = load_initialization_config(config_path)
-        port = int(config["dashboard"]["port"])
+        if not service_control_state()["supervisor"]:
+            record("DISABLED", "Supervisor 已由人工停止。", 0)
+            output({"outcome": "DISABLED", "message": "Supervisor 已由人工停止。"})
         threshold = int(config["health"]["failure_threshold"])
         heartbeat_timeout = int(config["health"]["heartbeat_timeout_seconds"])
         pid, heartbeat = supervisor_health(heartbeat_timeout)
@@ -76,7 +78,7 @@ def main(argv: list[str] | None = None) -> None:
         state = read_state()
         failures = int(state.get("consecutive_failures", 0)) + 1
         try:
-            pid = start_server(database_path, config_path, port)
+            pid = start_server(database_path, config_path)
         except (OSError, RuntimeError) as error:
             status = "NEEDS_ATTENTION" if failures >= threshold else "UNHEALTHY"
             message = f"Supervisor 主进程恢复启动失败：{error}"

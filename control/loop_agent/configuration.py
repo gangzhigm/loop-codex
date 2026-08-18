@@ -99,6 +99,13 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     runtime_environments = config.get("runtime_environments") or {}
     project_defaults = priority_policy.get("project_defaults") or {}
     expected_supervisor_components = {
+        "dashboard": {
+            "entry": "client/dashboard_server.py",
+            "pid_path": "data/runtime/dashboard-server.pid",
+            "heartbeat_path": "data/runtime/dashboard-server-heartbeat.json",
+            "stop_path": "data/runtime/dashboard-server-stop-request.json",
+            "log_path": "data/runtime/dashboard-server.log",
+        },
         "planner": {
             "entry": "planner/main.py",
             "pid_path": "data/runtime/planner.pid",
@@ -276,6 +283,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and 1 <= dashboard["port"] <= 65535
         and isinstance(dashboard.get("poll_interval_ms"), int)
         and dashboard["poll_interval_ms"] >= 500
+        and isinstance(dashboard.get("heartbeat_interval_seconds"), int)
+        and dashboard["heartbeat_interval_seconds"] >= 1
         and isinstance(dispatcher.get("scheduled"), bool)
         and isinstance(dispatcher.get("interval_minutes"), int)
         and dispatcher["interval_minutes"] >= 1
@@ -311,6 +320,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
             execution["heartbeat_interval_seconds"], planner["heartbeat_interval_seconds"]
         )
         and valid_supervisor_components
+        and supervisor_components["dashboard"]["heartbeat_timeout_seconds"]
+        >= dashboard["heartbeat_interval_seconds"]
         and supervisor_components["planner"]["heartbeat_timeout_seconds"]
         >= planner_scheduler["heartbeat_interval_seconds"]
         and supervisor_components["dispatcher"]["heartbeat_timeout_seconds"]

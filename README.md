@@ -14,10 +14,12 @@ py -3 .\control\loopctl.py validate
 py -3 .\control\loopctl.py state
 py -3 .\supervisor\health_run.py
 py -3 .\supervisor\main.py serve
+py -3 .\client\dashboard_server.py
 ```
 
 Dashboard 默认地址、端口及其他部署参数以 `config/initialization.json` 为准。
-`serve` 用于人工前台运行，托管 Dashboard，并周期检查 Dashboard、Planner、内部 Agent Dispatcher 和动态 Runner；
+Supervisor `serve` 用于人工前台运行，周期检查并恢复独立的 Dashboard、Planner、内部 Agent Dispatcher，并观察动态 Runner；
+Dashboard 也可通过 `client/dashboard_server.py` 单独启动，停止 Supervisor 不会停止 Dashboard；
 Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活和必要恢复。
 
 ## 工作流程
@@ -61,7 +63,8 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | 内部 Agent 单轮调度 | `dispatcher/agent_dispatcher.py` |
 | 内部 Agent 单任务运行 | `runner/agent_runtime.py` |
 | DeepSeek Provider 适配 | `control/loop_agent/providers/deepseek.py` |
-| Dashboard 健康与前台服务 | `supervisor/main.py`、`client/dashboard_server.py` |
+| Dashboard 独立 HTTP 服务 | `client/dashboard_server.py` |
+| Dashboard 与 Scheduler 进程监控 | `supervisor/main.py` |
 | Supervisor 健康检查实现 | `supervisor/health_run.py` |
 
 各运行环境只领取与自身路由、能力等级和执行策略匹配的 READY 任务。具体模型、超时、
@@ -88,7 +91,7 @@ py -3 .\control\loopctl.py recover EXECUTION-ID --runner-confirmed-terminated --
 
 ```powershell
 $env:PYTHONUTF8 = '1'
-py -3 -m unittest discover -s control/tests -p "test_*.py"
+py -3 -m unittest discover -s tests -p "test_*.py"
 py -3 .\control\loopctl.py validate
 ```
 
@@ -109,7 +112,7 @@ py -3 .\control\loopctl.py validate
 | `control/loopctl.py` | 任务控制 CLI |
 | `control/loop_agent/` | 控制面、数据库、运行时、Provider 和 Dashboard 内部实现 |
 | `supervisor/` | Supervisor 主进程、健康检查与 Windows 计划任务安装器 |
-| `control/tests/` | Python 回归测试 |
+| `tests/` | Python 回归测试 |
 | `client/` | Dashboard 前端静态资源与本机 HTTP/API 服务 |
 | `data/` | SQLite、任务附件、备份、PID、日志和健康状态 |
 | `data/loop-agent.sqlite3` | 唯一任务事实源 |

@@ -37,6 +37,9 @@ assert(!html.includes("workspaceUpdated"), "已移除的顶部更新时间仍被
 assert(!html.includes("connectionLabel"), "已移除的数据库状态标签仍被 DOM 或脚本引用");
 assert(!html.includes("DB.V."), "顶部数据库版本文案仍存在");
 assert(html.includes("grid-template-columns: 36px minmax(0, 1fr) auto;"), "桌面头部品牌列未收紧为 LA 标记宽度");
+assert((html.match(/class="runtime-stage"/g) ?? []).length === 3, "运行链路未按三个角色拆成独立行");
+assert((html.match(/class="runtime-connector" aria-hidden="true"/g) ?? []).length === 2, "运行链路缺少角色间纵向连接");
+assert(!html.includes('class="runtime-targets"'), "运行链路仍保留 Planner 与 Dispatcher 双列分叉");
 assert((html.match(/<button class="metric metric-filter"[^>]+data-filter="(?:draft|review|pending|active|closed|archived)"/g) ?? []).length === 6, "顶部统计入口数量不完整");
 assert((html.match(/class="metric-help"/g) ?? []).length === 6, "顶部统计项的状态说明图标数量不完整");
 assert((html.match(/class="metric-tooltip" role="tooltip"/g) ?? []).length === 6, "顶部统计项的状态说明浮层数量不完整");
@@ -90,6 +93,9 @@ assert(html.includes('if (!task?.provider_id || !providerConfig)'), "Dashboard �
 assert(html.includes('task.capability_level !== null && !executionConfig('), "Dashboard 会把未完成预检的空能力等级误判为 Provider 无效");
 assert(html.includes('function formatTaskDate(value)'), "任务时间列缺少日期格式化函数");
 assert(html.includes('<span class="task-time-label">日期</span>${taskDateValue(task.started_at)}'), "任务时间列未显示执行开始日期");
+assert(html.includes('id="timeSort"'), "时间列表缺少日期排序按钮");
+assert(html.includes('let timeSortDirection = "desc"'), "时间列表默认排序方向不正确");
+assert(html.includes('timeSortDirection === "asc" ? leftTime - rightTime : rightTime - leftTime'), "时间列表缺少正倒日期排序逻辑");
 assert(html.includes('function renderPlannerSupplement(task)'), "缺少 Planner 预检详情渲染");
 assert(html.includes('Operator 原始定义'), "详情没有区分 Operator 原始定义");
 assert(html.includes('Operator 业务验收'), "详情没有展示 Operator 业务验收");
