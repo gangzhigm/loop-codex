@@ -2234,11 +2234,15 @@
         .map((item) => [item.component, item]));
       const supervisor = byComponent.get("supervisor") ?? null;
       const planner = byComponent.get("planner") ?? null;
+      const runnerPool = byComponent.get("runners") ?? null;
       renderProcessSnapshot(values, byComponent);
       elements.runtimeSupervisor.innerHTML = runtimeNodeMarkup("Supervisor", supervisor, "supervisor");
       elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Scheduler", planner, "planner");
       const workerRunners = renderRunnerList(elements.runtimeWorkerRunners, values, "worker", "Worker Runner");
-      const timestamps = [supervisor, planner, ...workerRunners]
+      if (!workerRunners.length) {
+        elements.runtimeWorkerRunners.innerHTML = runtimeNodeMarkup("Worker Runner", runnerPool);
+      }
+      const timestamps = [supervisor, planner, runnerPool, ...workerRunners]
         .map((item) => item?.heartbeat?.checked_at ?? item?.checked_at)
         .map((value) => new Date(value ?? "").getTime())
         .filter(Number.isFinite);

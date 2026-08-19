@@ -261,6 +261,49 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
         self.assertIn(str(REPOSITORY_ROOT / "runner" / "agent_runtime.py"), command)
         self.assertNotIn("claim", command)
 
+    def test_execution_dispatch_respects_global_and_platform_capacity(self) -> None:
+        config = load_initialization_config()
+        settings = replace(
+            ExecutionDispatchSettings.from_config(config),
+            database_path=self.db_path,
+            global_max_active_executions=1,
+            platform_max_active_executions=1,
+        )
+        task = {
+            "id": "CAPACITY-READY",
+            "status": "PENDING",
+            "preflight_status": "READY",
+            "runtime_environment": "self_hosted_agent",
+            "provider_id": "deepseek",
+            "capability_level": "L3",
+            "execution_policy": "automatic",
+            "depends_on": [],
+        }
+
+        global_result = ExecutionDispatcher(
+            settings,
+            config,
+            snapshot_reader=lambda _settings, _config: (
+                [task],
+                [{"runtime_environment": "self_hosted_agent"}],
+            ),
+            launcher=lambda _command, _cwd: self.fail("容量已满时不得启动 Runner"),
+            logger=EventLogger(None),
+        ).run()
+        platform_result = ExecutionDispatcher(
+            replace(settings, global_max_active_executions=2),
+            config,
+            snapshot_reader=lambda _settings, _config: (
+                [task],
+                [{"runtime_environment": "self_hosted_agent"}],
+            ),
+            launcher=lambda _command, _cwd: self.fail("容量已满时不得启动 Runner"),
+            logger=EventLogger(None),
+        ).run()
+
+        self.assertEqual((global_result["outcome"], global_result["limit_scope"]), ("SLOT_FULL", "global"))
+        self.assertEqual((platform_result["outcome"], platform_result["limit_scope"]), ("SLOT_FULL", "platform"))
+
     def test_schedule_atomically_queues_only_configured_capacity(self) -> None:
         for task_id in ("QUEUE-A", "QUEUE-B", "QUEUE-C"):
             self.enqueue_draft(task_id)
