@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,9 +9,8 @@ from _loop_support import *  # noqa: F403
 from loopdb import CONFIG_PATH, list_tasks
 from planner.main import (
     REPOSITORY_ROOT,
-    handoff_selected_drafts,
     run_planner_schedule,
-    start_planner_runner,
+    schedule_preflights,
 )
 from planner.task_query import load_draft_tasks, select_draft_tasks
 from runner.planner_runner import receive_planner_task
@@ -112,7 +112,7 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
             self.selection_task("LOW-OLD", priority="low"),
             self.selection_task("CRITICAL-NEW", priority="critical", created_at="2026-08-19T11:00:00+08:00"),
             self.selection_task("CRITICAL-OLD", priority="critical"),
-            self.selection_task("PROCESSING", priority="blocker", preflight_status="INSPECTING"),
+            self.selection_task("QUEUED", priority="blocker", preflight_status="QUEUED"),
         ]
         with patch("planner.task_query.load_draft_tasks", return_value=drafts):
             selection = select_draft_tasks(
@@ -170,45 +170,71 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
         self.assertEqual(runtime.heartbeats[0], 0.0)
         self.assertEqual(runtime.heartbeats[-1], 300.0)
 
-    def test_selected_tasks_are_handed_to_distinct_runner_processes_without_ai(self) -> None:
-        self.enqueue_draft("HANDOFF-A")
-        self.enqueue_draft("HANDOFF-B")
-        received: list[tuple[str, str, Path, Path, Path]] = []
+    def test_schedule_atomically_queues_only_configured_capacity(self) -> None:
+        for task_id in ("QUEUE-A", "QUEUE-B", "QUEUE-C"):
+            self.enqueue_draft(task_id)
 
-        def start(
-            task_id: str,
-            execution_id: str,
-            database_path: Path,
-            config_path: Path,
-            log_path: Path,
-        ) -> int:
-            received.append(
-                (task_id, execution_id, database_path, config_path, log_path)
-            )
-            return 2000 + len(received)
+        result = self.run_ctl("schedule-preflight", "--config", str(CONFIG_PATH))
 
-        config = load_initialization_config()
-        results = handoff_selected_drafts(
-            self.db_path,
-            CONFIG_PATH,
-            config,
-            start_action=start,
-        )
-
-        self.assertEqual([item[0] for item in received], ["HANDOFF-A", "HANDOFF-B"])
-        self.assertEqual(len({item[1] for item in received}), 2)
-        self.assertTrue(all(item[1].startswith("planner-") for item in received))
-        self.assertTrue(all(result["ai_preflight_enabled"] is False for result in results))
+        self.assertEqual(result["outcome"], "QUEUED")
+        self.assertEqual(result["queued_count"], 2)
         database = connect(self.db_path)
         states = database.execute(
-            "SELECT preflight_status FROM tasks ORDER BY id"
+            "SELECT id, preflight_status, preflight_execution_id FROM tasks ORDER BY id"
         ).fetchall()
-        preflight_count = database.execute(
-            "SELECT count(*) FROM preflight_executions"
+        executions = database.execute(
+            "SELECT execution_id, task_id, status FROM preflight_executions ORDER BY task_id"
+        ).fetchall()
+        validation = validate_database(database)
+        database.close()
+        self.assertEqual(
+            [row["preflight_status"] for row in states],
+            ["QUEUED", "QUEUED", "UNINSPECTED"],
+        )
+        self.assertEqual([row["status"] for row in executions], ["QUEUED", "QUEUED"])
+        self.assertEqual(
+            {row["preflight_execution_id"] for row in states[:2]},
+            {row["execution_id"] for row in executions},
+        )
+        self.assertTrue(validation["ok"], validation["errors"])
+
+    def test_repeated_schedule_does_not_duplicate_queued_tasks(self) -> None:
+        self.enqueue_draft("QUEUE-ONCE")
+        first = self.run_ctl("schedule-preflight", "--config", str(CONFIG_PATH))
+        second = self.run_ctl("schedule-preflight", "--config", str(CONFIG_PATH))
+
+        self.assertEqual(first["queued_count"], 1)
+        self.assertEqual(second["queued_count"], 0)
+        database = connect(self.db_path)
+        count = database.execute(
+            "SELECT count(*) FROM preflight_executions WHERE task_id='QUEUE-ONCE'"
         ).fetchone()[0]
         database.close()
-        self.assertEqual([row[0] for row in states], ["UNINSPECTED", "UNINSPECTED"])
-        self.assertEqual(preflight_count, 0)
+        self.assertEqual(count, 1)
+
+    def test_scheduler_calls_loopctl_without_starting_runner(self) -> None:
+        captured: dict[str, object] = {}
+
+        def run(command, **options):
+            captured.update(command=command, options=options)
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"outcome":"NO_TASK","queued_count":0}',
+                stderr="",
+            )
+
+        result = schedule_preflights(
+            self.db_path,
+            CONFIG_PATH,
+            command_runner=run,
+        )
+
+        command = captured["command"]
+        self.assertEqual(result["event"], "planner.preflight_schedule.completed")
+        self.assertIn(str(REPOSITORY_ROOT / "control" / "loopctl.py"), command)
+        self.assertIn("schedule-preflight", command)
+        self.assertNotIn("planner_runner.py", " ".join(command))
 
     def test_planner_runner_receipt_is_read_only_and_stops_before_ai(self) -> None:
         self.enqueue_draft("HANDOFF-RECEIVER")
@@ -240,44 +266,21 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
         self.assertEqual(tuple(after), tuple(before))
         self.assertEqual(preflight_count, 0)
 
-    def test_runner_launcher_passes_exact_task_and_execution_ids(self) -> None:
-        captured: dict[str, object] = {}
-
-        def launch(command, working_directory, **streams):
-            captured.update(
-                command=command,
-                working_directory=working_directory,
-                streams=streams,
-            )
-            return 4321
-
-        log_path = Path(self.temporary.name) / "planner-runner.log"
-        pid = start_planner_runner(
-            "HANDOFF-TASK",
-            "planner-handoff",
-            self.db_path,
-            CONFIG_PATH,
-            log_path,
-            launcher=launch,
-        )
-
-        self.assertEqual(pid, 4321)
-        command = captured["command"]
-        self.assertEqual(command[command.index("--task-id") + 1], "HANDOFF-TASK")
-        self.assertEqual(
-            command[command.index("--execution-id") + 1], "planner-handoff"
-        )
-        self.assertEqual(command[command.index("--log") + 1], str(log_path))
-        self.assertEqual(captured["working_directory"], REPOSITORY_ROOT)
-        self.assertEqual(captured["streams"], {})
-
     def test_targeted_preflight_claim_and_ready_publish_worker_contract(self) -> None:
         self.enqueue_draft("PLANNER-FIRST")
         self.enqueue_draft("PLANNER-TARGET")
+        scheduled = self.run_ctl(
+            "schedule-preflight", "--config", str(CONFIG_PATH)
+        )
+        execution_id = next(
+            item["execution_id"]
+            for item in scheduled["queued"]
+            if item["task_id"] == "PLANNER-TARGET"
+        )
 
         claimed = self.run_ctl(
             "preflight-claim",
-            "planner-targeted",
+            execution_id,
             "--task-id",
             "PLANNER-TARGET",
             "--runtime-environment",
@@ -291,14 +294,14 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
         self.assertEqual(claimed["task"]["preflight_status"], "INSPECTING")
         heartbeat = self.run_ctl(
             "preflight-heartbeat",
-            "planner-targeted",
+            execution_id,
             "PLANNER-TARGET",
             "--expected-row-version",
             str(claimed["task"]["row_version"]),
         )
         ready = self.run_ctl(
             "preflight-ready",
-            "planner-targeted",
+            execution_id,
             "PLANNER-TARGET",
             "--expected-row-version",
             str(heartbeat["row_version"]),
@@ -310,10 +313,14 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
 
     def test_targeted_preflight_claim_does_not_substitute_another_task(self) -> None:
         self.enqueue_draft("PLANNER-AVAILABLE")
+        scheduled = self.run_ctl(
+            "schedule-preflight", "--config", str(CONFIG_PATH)
+        )
+        execution_id = scheduled["queued"][0]["execution_id"]
 
         result = self.run_ctl(
             "preflight-claim",
-            "planner-missing",
+            execution_id,
             "--task-id",
             "DOES-NOT-EXIST",
             "--runtime-environment",
@@ -328,7 +335,34 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
             "SELECT preflight_status FROM tasks WHERE id='PLANNER-AVAILABLE'"
         ).fetchone()
         database.close()
-        self.assertEqual(task["preflight_status"], "UNINSPECTED")
+        self.assertEqual(task["preflight_status"], "QUEUED")
+
+    def test_preflight_claim_cannot_bypass_planner_queue(self) -> None:
+        self.enqueue_draft("NOT-QUEUED")
+
+        result = self.run_ctl(
+            "preflight-claim",
+            "planner-not-queued",
+            "--task-id",
+            "NOT-QUEUED",
+            "--runtime-environment",
+            "self_hosted_agent",
+            "--sandbox",
+            "read-only",
+        )
+
+        self.assertEqual(result["outcome"], "NO_TASK")
+        database = connect(self.db_path)
+        task = database.execute(
+            "SELECT preflight_status, preflight_execution_id FROM tasks "
+            "WHERE id='NOT-QUEUED'"
+        ).fetchone()
+        execution_count = database.execute(
+            "SELECT count(*) FROM preflight_executions"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(tuple(task), ("UNINSPECTED", None))
+        self.assertEqual(execution_count, 0)
 
 
 if __name__ == "__main__":

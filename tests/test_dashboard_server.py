@@ -146,7 +146,7 @@ class AttachmentImageTests(unittest.TestCase):
             for task in payload["tasks"]
         }
 
-        self.assertEqual(payload["schema_version"], "3.7.0")
+        self.assertEqual(payload["schema_version"], "3.8.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
             {"self_hosted_agent": 8},
@@ -213,13 +213,13 @@ class AttachmentImageTests(unittest.TestCase):
             tasks["PENDING-HIGH"]["blocking_scopes"][0]["blocker_lock_status"], "ACTIVE"
         )
 
-    def test_served_dashboard_accepts_schema_3_7(self) -> None:
+    def test_served_dashboard_accepts_schema_3_8(self) -> None:
         html = (REPOSITORY_ROOT / "client" / "dashboard.html").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn('const TASK_SCHEMA_VERSION = "3.7.0";', html)
-        self.assertNotIn('const TASK_SCHEMA_VERSION = "3.6.0";', html)
+        self.assertIn('const TASK_SCHEMA_VERSION = "3.8.0";', html)
+        self.assertNotIn('const TASK_SCHEMA_VERSION = "3.7.0";', html)
 
     def test_unregistered_path_is_rejected(self) -> None:
         self.add_task("IMAGE-TASK", "data/assets/IMAGE-TASK/reference.png")

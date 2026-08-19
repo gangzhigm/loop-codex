@@ -57,6 +57,7 @@ from loop_agent.control.recovery import command_recover
 
 # Planner 预检通过独立状态机领取草稿、维护心跳并发布 Worker 执行契约。
 from planner.control import (
+    command_schedule_preflight,
     command_preflight_claim,
     command_preflight_fail,
     command_preflight_heartbeat,
@@ -139,8 +140,11 @@ def parser() -> argparse.ArgumentParser:
     state = commands.add_parser("state")
     state.set_defaults(handler=command_state)
 
-    # 二、Planner 预检协议。Scheduler 可用 task-id 把本轮选择精确交给 Runner；
-    # 省略时保留人工阶段检查所需的最高优先级领取行为。
+    # 二、Planner 预检协议。Scheduler 只排队；预检 Runner 必须用已排队的
+    # execution-id 领取，不能从 UNINSPECTED 直接跳到 INSPECTING。
+    schedule_preflight = commands.add_parser("schedule-preflight")
+    schedule_preflight.add_argument("--config", default=str(CONFIG_PATH))
+    schedule_preflight.set_defaults(handler=command_schedule_preflight)
     preflight_claim = commands.add_parser("preflight-claim")
     preflight_claim.add_argument("execution_id")
     preflight_claim.add_argument("--task-id")

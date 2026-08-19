@@ -248,7 +248,7 @@ class LoopTestCase(unittest.TestCase):
     @staticmethod
     def schema_36() -> str:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
-        schema = schema.replace("PRAGMA user_version = 30700;", "PRAGMA user_version = 30600;")
+        schema = schema.replace("PRAGMA user_version = 30800;", "PRAGMA user_version = 30600;")
         schema = schema.replace("    'DRAFT', 'NEEDS_REVIEW', 'PENDING'", "    'DRAFT', 'PENDING'")
         schema = schema.replace(
             "  estimated_capability_level TEXT CHECK (estimated_capability_level IS NULL OR estimated_capability_level IN (\n"
@@ -263,7 +263,7 @@ class LoopTestCase(unittest.TestCase):
         )
         schema = schema.replace(
             "  preflight_status TEXT NOT NULL DEFAULT 'UNINSPECTED' CHECK (preflight_status IN (\n"
-            "    'UNINSPECTED', 'INSPECTING', 'READY', 'FAILED'\n"
+            "    'UNINSPECTED', 'QUEUED', 'INSPECTING', 'READY', 'FAILED'\n"
             "  )),\n"
             "  preflight_execution_id TEXT,\n"
             "  preflight_started_at TEXT,\n"

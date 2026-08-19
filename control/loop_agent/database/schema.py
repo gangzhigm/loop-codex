@@ -30,6 +30,7 @@ from loop_agent.constants import (
     PROFILE_ROUTING_SCHEMA_USER_VERSION,
     RECOVERY_SCHEMA_USER_VERSION,
     ROUTING_SCHEMA_USER_VERSION,
+    SCHEDULING_SCHEMA_USER_VERSION,
     SCHEMA_USER_VERSION,
     SCHEMA_VERSION,
 )
@@ -92,8 +93,74 @@ def _create_preflight_schema_objects(database: sqlite3.Connection) -> None:
     )
     database.execute(
         "CREATE UNIQUE INDEX idx_preflight_one_active_task "
-        "ON preflight_executions(task_id) WHERE status='INSPECTING'"
+        "ON preflight_executions(task_id) WHERE status IN ('QUEUED', 'INSPECTING')"
     )
+
+
+def _migrate_scheduling_schema(database: sqlite3.Connection) -> dict[str, Any]:
+    """为 Planner 增加持久 QUEUED 交付状态，并完整保留 3.7 数据。"""
+    task_count = int(database.execute("SELECT count(*) FROM tasks").fetchone()[0])
+    preflight_count = int(
+        database.execute("SELECT count(*) FROM preflight_executions").fetchone()[0]
+    )
+    database.execute("PRAGMA foreign_keys = OFF")
+    try:
+        transaction(database)
+        database.execute(TASKS_TABLE_SQL)
+        database.execute("INSERT INTO tasks_new SELECT * FROM tasks")
+        database.execute("DROP TABLE tasks")
+        database.execute("ALTER TABLE tasks_new RENAME TO tasks")
+        database.execute(
+            PREFLIGHT_EXECUTIONS_TABLE_SQL.replace(
+                "CREATE TABLE preflight_executions (",
+                "CREATE TABLE preflight_executions_new (",
+                1,
+            )
+        )
+        database.execute(
+            "INSERT INTO preflight_executions_new SELECT * FROM preflight_executions"
+        )
+        database.execute("DROP TABLE preflight_executions")
+        database.execute(
+            "ALTER TABLE preflight_executions_new RENAME TO preflight_executions"
+        )
+        database.execute(
+            "CREATE INDEX idx_tasks_queue ON tasks(status, preflight_status, runtime_environment, provider_id, "
+            "capability_level, execution_policy, priority, created_at, id)"
+        )
+        database.execute(
+            "CREATE INDEX idx_tasks_preflight ON tasks(status, preflight_status, priority, created_at, id)"
+        )
+        database.execute("CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)")
+        database.execute(
+            "CREATE INDEX idx_preflight_executions_active "
+            "ON preflight_executions(status, lease_expires_at, attempt_deadline_at)"
+        )
+        database.execute(
+            "CREATE UNIQUE INDEX idx_preflight_one_active_task "
+            "ON preflight_executions(task_id) WHERE status IN ('QUEUED', 'INSPECTING')"
+        )
+        database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
+        foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise LoopError(
+                f"Planner QUEUED Schema 迁移产生外键错误: {len(foreign_key_errors)}"
+            )
+        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise LoopError("Planner QUEUED Schema 迁移后 quick_check 失败")
+        commit(database)
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+    return {
+        "from": "3.7.0",
+        "to": SCHEMA_VERSION,
+        "migrated": True,
+        "tasks_preserved": task_count,
+        "preflight_executions_preserved": preflight_count,
+    }
 
 
 def _migrate_preflight_schema(database: sqlite3.Connection, source_version: str = "3.6.0") -> dict[str, Any]:
@@ -393,6 +460,20 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
             "archived": 0, "tasks_mapped": 0, "executions_snapshotted": 0,
         }
+    if current == SCHEDULING_SCHEMA_USER_VERSION:
+        hybrid_result: dict[str, Any] = {}
+        if not uses_hybrid_scope_schema(database):
+            hybrid_result = _migrate_hybrid_scope_schema(database)
+        result = _migrate_scheduling_schema(database)
+        if hybrid_result:
+            result.update(
+                {
+                    key: value
+                    for key, value in hybrid_result.items()
+                    if key not in {"from", "to", "migrated"}
+                }
+            )
+        return result
     if current == PREFLIGHT_SCHEMA_USER_VERSION:
         return _migrate_preflight_schema(database)
     if current == DIAGNOSTIC_SCHEMA_USER_VERSION:

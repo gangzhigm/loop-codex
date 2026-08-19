@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -43,13 +44,127 @@ PLANNER_ESCALATION_MARKERS = {
 }
 
 
-def recover_timed_out_preflights(database: sqlite3.Connection) -> list[str]:
+def command_schedule_preflight(args: argparse.Namespace) -> None:
+    """按公共容量和优先级原子地把草稿排入 Planner 预检队列。"""
+    config = load_initialization_config(args.config)
+    settings = config["planner"]
+    priority_levels = config["priority_policy"]["levels"]
+    priority_rank = {
+        priority: index for index, priority in enumerate(priority_levels)
+    }
+    database = connect(args.db)
+    try:
+        transaction(database)
+        recovered = recover_timed_out_preflights(database, settings)
+        active = int(
+            database.execute(
+                "SELECT count(*) FROM preflight_executions "
+                "WHERE status IN ('QUEUED', 'INSPECTING')"
+            ).fetchone()[0]
+        )
+        maximum = int(settings["max_active_executions"])
+        available = max(0, maximum - active)
+        draft_total = int(
+            database.execute(
+                "SELECT count(*) FROM tasks WHERE status='DRAFT'"
+            ).fetchone()[0]
+        )
+        candidates = database.execute(
+            "SELECT * FROM tasks WHERE status='DRAFT' "
+            "AND preflight_status='UNINSPECTED' AND runtime_environment=? "
+            "AND provider_id=?",
+            (
+                settings["default_runtime_environment"],
+                settings["provider_id"],
+            ),
+        ).fetchall()
+        ordered = sorted(
+            candidates,
+            key=lambda task: (
+                priority_rank.get(str(task["priority"]), len(priority_rank)),
+                str(task["created_at"]),
+                str(task["id"]),
+            ),
+        )
+        selected = ordered[:available]
+        stamp = now_shanghai()
+        start = datetime.fromisoformat(stamp)
+        lease = (
+            start + timedelta(seconds=int(settings["lease_seconds"]))
+        ).isoformat(timespec="milliseconds")
+        deadline = (
+            start + timedelta(seconds=int(settings["attempt_timeout_seconds"]))
+        ).isoformat(timespec="milliseconds")
+        queued: list[dict[str, Any]] = []
+        for task in selected:
+            execution_id = f"planner-{uuid.uuid4()}"
+            database.execute(
+                "INSERT INTO preflight_executions(execution_id, task_id, status, "
+                "started_at, heartbeat_at, lease_expires_at, attempt_deadline_at, "
+                "claimed_task_row_version) VALUES(?, ?, 'QUEUED', ?, ?, ?, ?, ?)",
+                (
+                    execution_id,
+                    task["id"],
+                    stamp,
+                    stamp,
+                    lease,
+                    deadline,
+                    task["row_version"],
+                ),
+            )
+            changed = database.execute(
+                "UPDATE tasks SET preflight_status='QUEUED', preflight_execution_id=?, "
+                "preflight_started_at=NULL, preflight_completed_at=NULL, preflight_failure=NULL, "
+                "updated_at=?, progress_summary='Planner 已将任务排入预检队列。', "
+                "progress_next_step='等待预检 Runner 领取。', row_version=row_version+1 "
+                "WHERE id=? AND status='DRAFT' AND preflight_status='UNINSPECTED' "
+                "AND row_version=?",
+                (execution_id, stamp, task["id"], task["row_version"]),
+            ).rowcount
+            if changed != 1:
+                raise LoopError("Planner 排队时任务发生并发变化")
+            database.execute(
+                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+                "VALUES(?, ?, 'DRAFT', 'DRAFT', ?, 'Planner 原子地将任务排入预检队列。')",
+                (task["id"], stamp, execution_id),
+            )
+            queued.append(
+                {"task_id": str(task["id"]), "execution_id": execution_id}
+            )
+        revision = bump_revision(database, "planner-scheduler")
+        commit(database)
+        output(
+            {
+                "outcome": "QUEUED" if queued else "NO_TASK",
+                "execution_kind": "PLANNER",
+                "draft_total": draft_total,
+                "active_before": active,
+                "maximum": maximum,
+                "available_slots": available,
+                "candidate_count": len(candidates),
+                "queued_count": len(queued),
+                "queued": queued,
+                "recovered": recovered,
+                "revision": revision,
+            }
+        )
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
+def recover_timed_out_preflights(
+    database: sqlite3.Connection,
+    settings: dict[str, Any] | None = None,
+) -> list[str]:
     """回收心跳停滞、租约过期或超过总时限的活动预检。"""
-    settings = load_initialization_config()["planner"]
+    planner_settings = settings or load_initialization_config()["planner"]
     stamp = now_shanghai()
     current = datetime.fromisoformat(stamp)
     stalled_cutoff = current - timedelta(
-        seconds=int(settings["stalled_after_seconds"])
+        seconds=int(planner_settings["stalled_after_seconds"])
     )
     recovered: list[str] = []
     executions = database.execute(
@@ -130,7 +245,7 @@ def planner_escalation_is_approved(
 
 
 def command_preflight_claim(args: argparse.Namespace) -> None:
-    """原子领取指定草稿；未指定 task-id 时兼容地领取最高优先级草稿。"""
+    """让预检 Runner 原子领取 Planner 已排队的 execution。"""
     if not args.execution_id or len(args.execution_id) > 128:
         raise LoopError("Planner execution-id 无效")
     config = load_initialization_config()
@@ -144,14 +259,6 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        duplicate = database.execute(
-            "SELECT 1 FROM preflight_executions WHERE execution_id=?",
-            (args.execution_id,),
-        ).fetchone() or database.execute(
-            "SELECT 1 FROM executions WHERE execution_id=?", (args.execution_id,)
-        ).fetchone()
-        if duplicate:
-            raise LoopError("execution-id 已存在")
         recovered = recover_timed_out_preflights(database)
         active = int(
             database.execute(
@@ -159,36 +266,21 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
             ).fetchone()[0]
         )
         maximum = int(settings["max_active_executions"])
-        if active >= maximum:
-            commit(database)
-            output(
-                {
-                    "outcome": "SLOT_FULL",
-                    "execution_kind": "PLANNER",
-                    "active": active,
-                    "maximum": maximum,
-                    "recovered": recovered,
-                }
-            )
-            return
-
-        parameters: list[Any] = [
-            settings["default_runtime_environment"],
-            settings["provider_id"],
-        ]
-        task_filter = ""
         task_id = getattr(args, "task_id", None)
-        if task_id:
-            task_filter = "AND id=? "
-            parameters.append(task_id)
         task = database.execute(
-            "SELECT * FROM tasks WHERE status='DRAFT' "
-            "AND preflight_status='UNINSPECTED' AND runtime_environment=? "
-            "AND provider_id=? "
-            + task_filter
-            + "ORDER BY CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 "
-            "WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at, id LIMIT 1",
-            parameters,
+            "SELECT t.* FROM tasks t JOIN preflight_executions p ON p.task_id=t.id "
+            "WHERE p.execution_id=? AND p.status='QUEUED' "
+            "AND t.status='DRAFT' AND t.preflight_status='QUEUED' "
+            "AND t.preflight_execution_id=p.execution_id "
+            "AND t.runtime_environment=? AND t.provider_id=? "
+            "AND (? IS NULL OR t.id=?)",
+            (
+                args.execution_id,
+                settings["default_runtime_environment"],
+                settings["provider_id"],
+                task_id,
+                task_id,
+            ),
         ).fetchone()
         if task is None:
             commit(database)
@@ -212,41 +304,44 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
         deadline = (
             start + timedelta(seconds=int(settings["attempt_timeout_seconds"]))
         ).isoformat(timespec="milliseconds")
-        database.execute(
-            "INSERT INTO preflight_executions(execution_id, task_id, status, "
-            "started_at, heartbeat_at, lease_expires_at, attempt_deadline_at, "
-            "claimed_task_row_version) VALUES(?, ?, 'INSPECTING', ?, ?, ?, ?, ?)",
+        execution_changed = database.execute(
+            "UPDATE preflight_executions SET status='INSPECTING', started_at=?, "
+            "heartbeat_at=?, lease_expires_at=?, attempt_deadline_at=?, "
+            "claimed_task_row_version=? WHERE execution_id=? AND task_id=? "
+            "AND status='QUEUED'",
             (
-                args.execution_id,
-                task["id"],
                 stamp,
                 stamp,
                 lease,
                 deadline,
                 task["row_version"],
+                args.execution_id,
+                task["id"],
             ),
-        )
+        ).rowcount
+        if execution_changed != 1:
+            raise LoopError("AI 领取时 Planner execution 发生并发变化")
         changed = database.execute(
-            "UPDATE tasks SET preflight_status='INSPECTING', preflight_execution_id=?, "
+            "UPDATE tasks SET preflight_status='INSPECTING', "
             "preflight_started_at=?, preflight_completed_at=NULL, preflight_failure=NULL, "
             "updated_at=?, progress_summary=?, "
-            "progress_next_step='Planner 正在进行只读静态预检。', "
+            "progress_next_step='AI 正在进行只读静态预检。', "
             "row_version=row_version+1 WHERE id=? AND status='DRAFT' "
-            "AND preflight_status='UNINSPECTED' AND row_version=?",
+            "AND preflight_status='QUEUED' AND preflight_execution_id=? AND row_version=?",
             (
-                args.execution_id,
                 stamp,
                 stamp,
-                f"Planner {args.execution_id} 已预留任务。",
+                f"AI 已领取 Planner 排队任务 {args.execution_id}。",
                 task["id"],
+                args.execution_id,
                 task["row_version"],
             ),
         ).rowcount
         if changed != 1:
-            raise LoopError("Planner 预留时任务发生并发变化")
+            raise LoopError("AI 领取时任务发生并发变化")
         database.execute(
             "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
-            "VALUES(?, ?, 'DRAFT', 'DRAFT', ?, 'Planner 原子预留任务并开始静态预检。')",
+            "VALUES(?, ?, 'DRAFT', 'DRAFT', ?, '预检 Runner 领取排队任务，AI 开始静态预检。')",
             (task["id"], stamp, args.execution_id),
         )
         claimed = database.execute(

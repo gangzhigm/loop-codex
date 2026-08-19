@@ -4,9 +4,65 @@ from __future__ import annotations
 # 公共 fixture 位于 _loop_support.py；业务行为断言保留在各职责模块中。
 
 from _loop_support import *  # noqa: F403
+from loopdb import CONFIG_PATH
 
 
 class LoopMigrationTests(LoopTestCase):
+    def test_migrate_schema_37_preserves_tasks_and_enables_planner_queue(self) -> None:
+        legacy_path = Path(self.temporary.name) / "schema-37.sqlite3"
+        schema = SCHEMA_PATH.read_text(encoding="utf-8")
+        schema = schema.replace("PRAGMA user_version = 30800;", "PRAGMA user_version = 30700;")
+        schema = schema.replace(
+            "'UNINSPECTED', 'QUEUED', 'INSPECTING', 'READY', 'FAILED'",
+            "'UNINSPECTED', 'INSPECTING', 'READY', 'FAILED'",
+        )
+        schema = schema.replace(
+            "'QUEUED', 'INSPECTING', 'FINISHED', 'FAILED', 'TIMED_OUT'",
+            "'INSPECTING', 'FINISHED', 'FAILED', 'TIMED_OUT'",
+        )
+        schema = schema.replace(
+            "WHERE status IN ('QUEUED', 'INSPECTING');",
+            "WHERE status='INSPECTING';",
+        )
+        database = connect(legacy_path)
+        database.executescript(schema)
+        stamp = now_shanghai()
+        database.execute(
+            "INSERT INTO tasks(id, title, description, status, priority, "
+            "estimated_capability_level, runtime_environment, provider_id, execution_policy, "
+            "scope_hint_json, created_at, updated_at) VALUES("
+            "'MIGRATE-QUEUE', 'MIGRATE-QUEUE', 'preserve me', 'DRAFT', 'critical', "
+            "'L3', 'self_hosted_agent', 'deepseek', 'automatic', "
+            "'[\"local-agent-loop/planner/main.py\"]', ?, ?)",
+            (stamp, stamp),
+        )
+        database.execute(
+            "INSERT INTO task_acceptance(task_id, ordinal, text) "
+            "VALUES('MIGRATE-QUEUE', 0, 'queued')"
+        )
+        database.close()
+
+        migrated = self.run_ctl("migrate", db_path=legacy_path)
+        queued = self.run_ctl(
+            "schedule-preflight", "--config", str(CONFIG_PATH), db_path=legacy_path
+        )
+
+        self.assertEqual((migrated["from"], migrated["to"]), ("3.7.0", "3.8.0"))
+        self.assertEqual(migrated["tasks_preserved"], 1)
+        self.assertEqual(queued["queued_count"], 1)
+        database = connect(legacy_path)
+        task = database.execute(
+            "SELECT description, preflight_status FROM tasks WHERE id='MIGRATE-QUEUE'"
+        ).fetchone()
+        execution_status = database.execute(
+            "SELECT status FROM preflight_executions WHERE task_id='MIGRATE-QUEUE'"
+        ).fetchone()[0]
+        validation = validate_database(database)
+        database.close()
+        self.assertEqual(tuple(task), ("preserve me", "QUEUED"))
+        self.assertEqual(execution_status, "QUEUED")
+        self.assertTrue(validation["ok"], validation["errors"])
+
     def test_migrate_schema_36_moves_old_draft_to_review_and_keeps_pending_ready(self) -> None:
         legacy_path = Path(self.temporary.name) / "schema-36.sqlite3"
         database = connect(legacy_path)
@@ -33,7 +89,7 @@ class LoopMigrationTests(LoopTestCase):
         database.close()
 
         migrated = self.run_ctl("migrate", db_path=legacy_path)
-        self.assertEqual((migrated["from"], migrated["to"]), ("3.6.0", "3.7.0"))
+        self.assertEqual((migrated["from"], migrated["to"]), ("3.6.0", "3.8.0"))
         self.assertEqual(migrated["old_drafts_moved_to_review"], 1)
         database = connect(legacy_path)
         draft = database.execute(
@@ -93,7 +149,7 @@ class LoopMigrationTests(LoopTestCase):
         migrated = self.run_ctl("migrate", db_path=legacy_path)
 
         self.assertEqual(migrated["from"], "3.5.0")
-        self.assertEqual(migrated["to"], "3.7.0")
+        self.assertEqual(migrated["to"], "3.8.0")
         self.assertEqual(migrated["active_executions_preserved"], 1)
         database = connect(legacy_path)
         columns = {row[1] for row in database.execute("PRAGMA table_info(tasks)")}
@@ -148,7 +204,7 @@ class LoopMigrationTests(LoopTestCase):
         migrated = self.run_ctl("migrate", db_path=legacy_path)
 
         self.assertEqual(migrated["from"], "3.4.0")
-        self.assertEqual(migrated["to"], "3.7.0")
+        self.assertEqual(migrated["to"], "3.8.0")
         self.assertEqual(migrated["active_executions_preserved"], 1)
         self.assertEqual(migrated["quarantines_created"], 0)
         database = connect(legacy_path)
@@ -187,7 +243,7 @@ class LoopMigrationTests(LoopTestCase):
         migrated = self.run_ctl("migrate", db_path=legacy_path)
         self.assertEqual(migrated["outcome"], "MIGRATED")
         self.assertEqual(migrated["from"], "3.3.0")
-        self.assertEqual(migrated["to"], "3.7.0")
+        self.assertEqual(migrated["to"], "3.8.0")
         self.assertEqual(migrated["tasks_mapped"], 2)
         self.assertEqual(migrated["executions_snapshotted"], 1)
         database = connect(legacy_path)
@@ -288,7 +344,7 @@ class LoopMigrationTests(LoopTestCase):
 
         migrated = self.run_ctl("migrate", db_path=schema_32_path)
         self.assertEqual(migrated["from"], "3.2.0")
-        self.assertEqual(migrated["to"], "3.7.0")
+        self.assertEqual(migrated["to"], "3.8.0")
         self.assertEqual(migrated["tasks_mapped"], 2)
         self.assertEqual(migrated["executions_snapshotted"], 1)
 

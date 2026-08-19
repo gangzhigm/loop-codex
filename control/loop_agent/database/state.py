@@ -136,7 +136,7 @@ def state_payload(
             for row in database.execute(
                 "SELECT execution_id AS id, task_id AS current_task_id, execution_kind, status, "
                 "started_at, heartbeat_at AS last_seen_at, lease_expires_at, attempt_deadline_at "
-                "FROM preflight_executions WHERE status='INSPECTING' ORDER BY started_at"
+                "FROM preflight_executions WHERE status IN ('QUEUED', 'INSPECTING') ORDER BY started_at"
             ).fetchall()
         ]
     recoveries: list[dict[str, Any]] = []

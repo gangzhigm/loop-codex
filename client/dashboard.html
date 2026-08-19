@@ -3,7 +3,7 @@
   Local Agent Loop 主监控页。
 
   运行链路：dashboard_server.py 提供本文件 -> 浏览器轮询 /api/state ->
-  validateState() 校验 Schema 3.7.0 -> applyState() 保留最后一次有效快照 -> render() 渲染。
+  validateState() 校验 Schema 3.8.0 -> applyState() 保留最后一次有效快照 -> render() 渲染。
 
   本文件是单文件模板，CSS 和 JavaScript 均内嵌。任务事实不在浏览器中维护：筛选、弹窗、
   抽屉等变量都只是临时界面状态；归档和恢复必须调用 /api/task-action，由服务端进入 loopctl
@@ -1973,7 +1973,7 @@
     const PRIORITY_LABELS = { blocker: "阻断", critical: "紧急", high: "高", medium: "中", low: "低" };
     const CAPABILITY_LEVELS = ["L1", "L2", "L3", "L4", "L5"];
     const CAPABILITY_LABELS = Object.fromEntries(CAPABILITY_LEVELS.map((level) => [level, level]));
-    const PREFLIGHT_LABELS = { UNINSPECTED: "待静态检查", INSPECTING: "静态检查中", READY: "已就绪", FAILED: "预检未通过" };
+    const PREFLIGHT_LABELS = { UNINSPECTED: "待静态检查", QUEUED: "等待静态检查", INSPECTING: "静态检查中", READY: "已就绪", FAILED: "预检未通过" };
     const PREFLIGHT_STATUSES = new Set(Object.keys(PREFLIGHT_LABELS));
     const REVIEW_STATUSES = new Set(["NEEDS_REVIEW", "WAITING_HUMAN", "STALLED"]);
     const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"]);
@@ -1983,7 +1983,7 @@
     const VALID_STATUSES = new Set(Object.keys(STATUS_LABELS));
     const HEADER_FILTER_STATUSES = ["DRAFT", "NEEDS_REVIEW", "PENDING", "CLAIMED", "RUNNING", "WAITING_HUMAN", "STALLED", "SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED", "WAITING_CONFLICT", "BLOCKED"];
     const HEADER_FILTER_PRIORITIES = ["blocker", "critical", "high", "medium", "low"];
-    const TASK_SCHEMA_VERSION = "3.7.0";
+    const TASK_SCHEMA_VERSION = "3.8.0";
     const STATE_ENDPOINT = "/api/state";
     const TASK_ACTION_ENDPOINT = "/api/task-action";
     const SERVICE_ACTION_ENDPOINT = "/api/service-action";

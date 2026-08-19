@@ -441,8 +441,8 @@ def command_update(args: argparse.Namespace) -> None:
             raise LoopError("任务不存在")
         if task["status"] in {"RUNNING", "CONFIRMED", "CANCELLED"}:
             raise LoopError(f"{task['status']} 任务不能修改")
-        if task["preflight_status"] == "INSPECTING":
-            raise LoopError("Planner 正在预检，任务不能并发修改")
+        if task["preflight_status"] in {"QUEUED", "INSPECTING"}:
+            raise LoopError("任务已进入 Planner 队列，不能并发修改")
         if task["archived_at"] is not None:
             raise LoopError("已归档任务必须先取消归档")
         require_expected_row_version(args, task["row_version"])
@@ -790,8 +790,8 @@ def command_requeue(args: argparse.Namespace) -> None:
         if row["archived_at"] is not None:
             raise LoopError("已归档任务必须先取消归档")
         require_expected_row_version(args, row["row_version"])
-        if row["preflight_status"] == "INSPECTING":
-            raise LoopError("Planner 正在预检，任务不能重新排队")
+        if row["preflight_status"] in {"QUEUED", "INSPECTING"}:
+            raise LoopError("任务已进入 Planner 队列，不能重新排队")
         stamp = now_shanghai()
         database.execute("DELETE FROM task_conflicts WHERE task_id=?", (args.task_id,))
         needs_preflight = row["status"] in {
@@ -865,7 +865,7 @@ def command_cancel(args: argparse.Namespace) -> None:
     """取消未运行、未预检占用且未归档的任务。
 
     命令将状态改为 ``CANCELLED``、清除下一步提示并写入历史。它不会终止活动进程，
-    因此 ``RUNNING`` 或 ``INSPECTING`` 必须先由各自的恢复流程释放后才能取消。
+    因此 ``RUNNING``、``QUEUED`` 或 ``INSPECTING`` 必须先由对应恢复流程释放后才能取消。
     """
     database = connect(args.db)
     try:
@@ -877,8 +877,8 @@ def command_cancel(args: argparse.Namespace) -> None:
             raise LoopError("任务不存在")
         if row["status"] == "RUNNING":
             raise LoopError("RUNNING 任务不能取消")
-        if row["preflight_status"] == "INSPECTING":
-            raise LoopError("Planner 正在预检，任务不能取消")
+        if row["preflight_status"] in {"QUEUED", "INSPECTING"}:
+            raise LoopError("任务已进入 Planner 队列，不能取消")
         if row["archived_at"] is not None:
             raise LoopError("已归档任务必须先取消归档")
         stamp = now_shanghai()

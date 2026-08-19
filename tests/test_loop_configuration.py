@@ -115,7 +115,7 @@ class LoopConfigurationTests(LoopTestCase):
         result = validate_database(database)
         database.close()
         self.assertTrue(result["ok"], result["errors"])
-        self.assertEqual(result["schema_version"], "3.7.0")
+        self.assertEqual(result["schema_version"], "3.8.0")
 
     def test_fresh_schema_has_capability_routing_and_execution_snapshot(self) -> None:
         database = connect(self.db_path)

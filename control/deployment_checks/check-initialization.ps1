@@ -41,7 +41,7 @@ $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
 Assert-Condition ($config.config_version -eq '5.1.0') 'config_version 为 5.1.0'
-Assert-Condition ($config.database.schema_version -eq '3.7.0') 'Schema 契约为 3.7.0'
+Assert-Condition ($config.database.schema_version -eq '3.8.0') 'Schema 契约为 3.8.0'
 Assert-Condition ($config.prompts.planner -eq 'planner/planner.md') 'Planner 提示词路径唯一且已登记'
 
 $promptPaths = @(
@@ -98,9 +98,8 @@ $loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'control\loopctl.py')
 $plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'planner\control.py')
 $plannerMainSource = Read-Utf8Strict -Path (Join-Path $root 'planner\main.py')
 $plannerQuerySource = Read-Utf8Strict -Path (Join-Path $root 'planner\task_query.py')
-$plannerRunnerSource = Read-Utf8Strict -Path (Join-Path $root 'runner\planner_runner.py')
 $runnerRegistrySource = Read-Utf8Strict -Path (Join-Path $root 'common\runners.py')
-Assert-Condition ($plannerPrompt -match '交付给 Runner') 'Planner 提示词声明阶段性交付边界'
+Assert-Condition ($plannerPrompt -match '持久化预检队列') 'Planner 提示词声明持久排队边界'
 Assert-Condition ($plannerPrompt -match '不调用模型') 'Planner 提示词声明 AI 未启用'
 Assert-Condition ($plannerMainSource -match 'runtime\.write_heartbeat') 'Planner 主进程发布 heartbeat'
 Assert-Condition ($plannerMainSource -match 'load_draft_tasks') 'Planner 主进程只读发现 DRAFT 任务'
@@ -108,15 +107,13 @@ Assert-Condition ($plannerMainSource -match 'select_draft_tasks') 'Planner 主�
 Assert-Condition ($plannerMainSource -match 'interval_minutes') 'Planner 主进程从初始化配置读取发现周期'
 Assert-Condition ($plannerQuerySource -match 'list_tasks') 'Planner 查询复用公共状态过滤和完整任务投影'
 Assert-Condition ($plannerQuerySource -notmatch 'database\.execute') 'Planner 查询模块不直接执行 SQL'
-Assert-Condition ($plannerMainSource -match 'start_planner_runner') 'Planner 主进程包含阶段版 Runner 交付逻辑'
-Assert-Condition ($plannerMainSource -match 'planner_runner\.py') 'Planner 主进程引用阶段版 Runner'
-Assert-Condition ($plannerRunnerSource -match 'PLANNER_TASK_RECEIVED') '阶段版 Runner 输出可核对接收回执'
-Assert-Condition ($plannerRunnerSource -notmatch 'load_provider|call_provider') '阶段版 Runner 不加载或调用 Provider'
+Assert-Condition ($plannerMainSource -match 'schedule-preflight') 'Planner 主进程通过 loopctl 执行持久排队'
+Assert-Condition ($plannerMainSource -notmatch 'planner_runner\.py') 'Planner 主进程不直接引用 Runner'
 Assert-Condition ($runnerRegistrySource -notmatch 'planner_runner\.py') '阶段版 Planner Runner 不冒充 AI 动态 Runner'
 Assert-Condition ($operatorPrompt -match 'Planner 阶段状态') 'Operator 提示词声明 Planner 阶段状态'
 Assert-Condition (
     ($loopctlSource -match 'from planner\.control import') -and
-    ($plannerControlSource -match 'command_preflight_claim')
+    ($plannerControlSource -match 'command_schedule_preflight')
 ) 'Planner 预检命令绑定到受控状态机'
 Assert-Condition ($plannerControlSource -match 'preflight_executions') 'Planner 控制协议使用预检 execution fencing'
 Assert-Condition ($workerPrompt -match 'scope_lock_credential') 'Worker 编辑前核对锁凭证'
@@ -131,9 +128,9 @@ Assert-Condition ($config.self_hosted_agent.provider_factories.deepseek -eq 'loo
     checks = $script:Checks.Count
     runtime_environment = 'self_hosted_agent'
     operator_actions = @(
-        '复核 Planner 任务选择、Runner 交付、周期和 heartbeat 边界。',
+        '复核 Planner 任务选择、持久排队、周期和 heartbeat 边界。',
         '逐条复核内部运行环境 L1-L5 的模型、reasoning 和 attempt 参数。',
         '确认 Planner 预检控制协议仍通过 loopctl.py 受控。',
-        '确认阶段版 Planner Runner 只读接收任务且未启用 Provider。'
+        '确认 Planner 主进程不启动 Runner 或调用 Provider。'
     )
 } | ConvertTo-Json -Depth 5

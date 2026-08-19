@@ -1,5 +1,5 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 30700;
+PRAGMA user_version = 30800;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     'automatic', 'manual'
   )),
   preflight_status TEXT NOT NULL DEFAULT 'UNINSPECTED' CHECK (preflight_status IN (
-    'UNINSPECTED', 'INSPECTING', 'READY', 'FAILED'
+    'UNINSPECTED', 'QUEUED', 'INSPECTING', 'READY', 'FAILED'
   )),
   preflight_execution_id TEXT,
   preflight_started_at TEXT,
@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS preflight_executions (
   execution_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   execution_kind TEXT NOT NULL DEFAULT 'PLANNER' CHECK (execution_kind = 'PLANNER'),
-  status TEXT NOT NULL CHECK (status IN ('INSPECTING', 'FINISHED', 'FAILED', 'TIMED_OUT')),
+  status TEXT NOT NULL CHECK (status IN ('QUEUED', 'INSPECTING', 'FINISHED', 'FAILED', 'TIMED_OUT')),
   started_at TEXT NOT NULL,
   heartbeat_at TEXT NOT NULL,
   lease_expires_at TEXT NOT NULL,
@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS preflight_executions (
 CREATE INDEX IF NOT EXISTS idx_preflight_executions_active
   ON preflight_executions(status, lease_expires_at, attempt_deadline_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_preflight_one_active_task
-  ON preflight_executions(task_id) WHERE status='INSPECTING';
+  ON preflight_executions(task_id) WHERE status IN ('QUEUED', 'INSPECTING');
 
 CREATE TABLE IF NOT EXISTS scope_locks (
   scope_key TEXT PRIMARY KEY,

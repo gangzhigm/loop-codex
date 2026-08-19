@@ -313,9 +313,10 @@ def insert_task(
         raise LoopError(f"preflight_status 无效: {preflight_status}")
     if status == "DRAFT" and preflight_status not in {
         "UNINSPECTED",
+        "QUEUED",
         "INSPECTING",
     }:
-        raise LoopError("DRAFT 只能处于 UNINSPECTED 或 INSPECTING")
+        raise LoopError("DRAFT 只能处于 UNINSPECTED、QUEUED 或 INSPECTING")
     if status == "NEEDS_REVIEW" and preflight_status != "FAILED":
         raise LoopError("NEEDS_REVIEW 必须处于 FAILED preflight")
     if status not in {"DRAFT", "NEEDS_REVIEW"} and preflight_status != "READY":

@@ -26,7 +26,7 @@ def select_draft_tasks(
     """根据当前预检占用和公共优先级顺序生成一轮只读选择计划。"""
     drafts = load_draft_tasks(database_path)
     processing_count = sum(
-        task["preflight_status"] == "INSPECTING" for task in drafts
+        task["preflight_status"] in {"QUEUED", "INSPECTING"} for task in drafts
     )
     available_slots = max(0, max_active_executions - processing_count)
     priority_rank = {

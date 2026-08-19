@@ -31,7 +31,7 @@ CREATE TABLE tasks_new (
     'automatic', 'manual'
   )),
   preflight_status TEXT NOT NULL DEFAULT 'UNINSPECTED' CHECK (preflight_status IN (
-    'UNINSPECTED', 'INSPECTING', 'READY', 'FAILED'
+    'UNINSPECTED', 'QUEUED', 'INSPECTING', 'READY', 'FAILED'
   )),
   preflight_execution_id TEXT,
   preflight_started_at TEXT,
@@ -127,7 +127,7 @@ CREATE TABLE preflight_executions (
   execution_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   execution_kind TEXT NOT NULL DEFAULT 'PLANNER' CHECK (execution_kind = 'PLANNER'),
-  status TEXT NOT NULL CHECK (status IN ('INSPECTING', 'FINISHED', 'FAILED', 'TIMED_OUT')),
+  status TEXT NOT NULL CHECK (status IN ('QUEUED', 'INSPECTING', 'FINISHED', 'FAILED', 'TIMED_OUT')),
   started_at TEXT NOT NULL,
   heartbeat_at TEXT NOT NULL,
   lease_expires_at TEXT NOT NULL,
@@ -140,5 +140,4 @@ CREATE TABLE preflight_executions (
   recovery_action TEXT CHECK (recovery_action IS NULL OR recovery_action = 'requeue')
 )
 """
-
 

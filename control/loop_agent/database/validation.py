@@ -92,7 +92,7 @@ def validate_database(
         if invalid_diagnostics:
             errors.append("任务结果诊断无效: " + ",".join(invalid_diagnostics))
     if uses_preflight_schema(database) and not uses_hybrid_scope_schema(database):
-        errors.append("当前 Schema 3.7.0 尚未迁移到混合 scope 锁结构")
+        errors.append("当前 Schema 3.8.0 尚未迁移到混合 scope 锁结构")
     invalid_confirmed = database.execute(
         """SELECT t.id FROM tasks t WHERE t.status='CONFIRMED' AND NOT EXISTS (
           SELECT 1 FROM task_history h WHERE h.task_id=t.id AND h.to_status='CONFIRMED' AND h.from_status='SUCCEEDED'
@@ -171,7 +171,7 @@ def validate_database(
                 )
             invalid_preflight_states = database.execute(
                 """SELECT id FROM tasks WHERE
-                  (status='DRAFT' AND preflight_status NOT IN ('UNINSPECTED','INSPECTING')) OR
+                  (status='DRAFT' AND preflight_status NOT IN ('UNINSPECTED','QUEUED','INSPECTING')) OR
                   (status='NEEDS_REVIEW' AND preflight_status<>'FAILED') OR
                   (status IN ('PENDING','RUNNING','WAITING_CONFLICT','WAITING_HUMAN') AND preflight_status<>'READY') OR
                   (preflight_status='READY' AND (capability_level IS NULL OR lock_mode IS NULL OR
@@ -179,10 +179,10 @@ def validate_database(
                     NOT EXISTS (SELECT 1 FROM task_technical_acceptance a WHERE a.task_id=tasks.id) OR
                     NOT EXISTS (SELECT 1 FROM task_preflight_evidence e WHERE e.task_id=tasks.id))) OR
                   (status IN ('DRAFT','NEEDS_REVIEW') AND (capability_level IS NOT NULL OR lock_mode IS NOT NULL)) OR
-                  (preflight_status='INSPECTING' AND (preflight_execution_id IS NULL OR NOT EXISTS (
+                  (preflight_status IN ('QUEUED','INSPECTING') AND (preflight_execution_id IS NULL OR NOT EXISTS (
                     SELECT 1 FROM preflight_executions p WHERE p.execution_id=tasks.preflight_execution_id
-                    AND p.task_id=tasks.id AND p.status='INSPECTING'))) OR
-                  (preflight_status<>'INSPECTING' AND preflight_execution_id IS NOT NULL)"""
+                    AND p.task_id=tasks.id AND p.status=tasks.preflight_status))) OR
+                  (preflight_status NOT IN ('QUEUED','INSPECTING') AND preflight_execution_id IS NOT NULL)"""
             ).fetchall()
             if invalid_preflight_states:
                 errors.append(
@@ -192,9 +192,9 @@ def validate_database(
             invalid_planners = database.execute(
                 """SELECT p.execution_id FROM preflight_executions p LEFT JOIN tasks t ON t.id=p.task_id
                 WHERE p.execution_kind<>'PLANNER' OR
-                  (p.status='INSPECTING' AND (t.id IS NULL OR t.status<>'DRAFT' OR
-                    t.preflight_status<>'INSPECTING' OR t.preflight_execution_id<>p.execution_id)) OR
-                  (p.status<>'INSPECTING' AND p.finished_at IS NULL)"""
+                  (p.status IN ('QUEUED','INSPECTING') AND (t.id IS NULL OR t.status<>'DRAFT' OR
+                    t.preflight_status<>p.status OR t.preflight_execution_id<>p.execution_id)) OR
+                  (p.status NOT IN ('QUEUED','INSPECTING') AND p.finished_at IS NULL)"""
             ).fetchall()
             if invalid_planners:
                 errors.append(

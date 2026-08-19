@@ -103,7 +103,7 @@
 - `CONFIRMED`：人工复核通过；它不是归档状态，除非用户明确要求，不重新打开。
 - `FAILED`：可按人工决定修改后重新排队。
 - `CANCELLED`：已取消并保留历史。
-- `preflight_status` 独立于主状态，至少包括 `UNINSPECTED`、`INSPECTING`、`READY`、`FAILED`。DRAFT 与 NEEDS_REVIEW 不能伪装为 RUNNING；`WAITING_HUMAN` 仍只表示 Worker 执行中的人工阻塞。
+- `preflight_status` 独立于主状态，至少包括 `UNINSPECTED`、`QUEUED`、`INSPECTING`、`READY`、`FAILED`。DRAFT 与 NEEDS_REVIEW 不能伪装为 RUNNING；`WAITING_HUMAN` 仍只表示 Worker 执行中的人工阻塞。
 
 ## Planner 阶段状态
 

@@ -1,7 +1,7 @@
-"""Planner 的单实例任务选择、Runner 交付与 heartbeat 入口。
+"""Planner 的单实例预检排队与 heartbeat 入口。
 
-本进程按初始化配置发现并选择 DRAFT 任务，再把每个明确 task-id 交给独立 Planner
-Runner。当前 Runner 只确认收到交付，不领取任务、不调用模型，也不修改任务数据库。
+本进程按初始化配置周期调用受控 loopctl 命令，将 DRAFT/UNINSPECTED 原子转换为
+DRAFT/QUEUED 并创建 PLANNER/QUEUED execution；不启动 Runner，也不调用模型。
 """
 
 from __future__ import annotations
@@ -10,10 +10,10 @@ import argparse
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
-import uuid
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -26,13 +26,12 @@ if str(CONTROL_ROOT) not in sys.path:
     sys.path.insert(0, str(CONTROL_ROOT))
 
 from loopdb import CONFIG_PATH, DEFAULT_DB, load_initialization_config, now_shanghai
-from common.processes import launch_detached_process
 from common.service_runtime import ServiceRuntimeFiles, install_shutdown_signals
 from planner.task_query import load_draft_tasks, select_draft_tasks
 
 
 def parser() -> argparse.ArgumentParser:
-    """创建 Planner 只读任务发现服务的常驻命令行。"""
+    """创建 Planner 预检排队服务的常驻命令行。"""
     value = argparse.ArgumentParser(description="Local Agent Loop Planner Scheduler")
     commands = value.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve", help="常驻运行 Planner Scheduler")
@@ -117,89 +116,48 @@ def select_and_report_drafts(
     return selected
 
 
-def start_planner_runner(
-    task_id: str,
-    execution_id: str,
+def schedule_preflights(
     database_path: Path,
     config_path: Path,
-    log_path: Path,
     *,
-    launcher: Callable[..., int] = launch_detached_process,
-) -> int:
-    """把一个明确 task-id 交给阶段版 Planner Runner，并返回子进程 PID。"""
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    return launcher(
-        [
-            sys.executable,
-            "-B",
-            str(REPOSITORY_ROOT / "runner" / "planner_runner.py"),
-            "--execution-id",
-            execution_id,
-            "--task-id",
-            task_id,
-            "--db",
-            str(database_path),
-            "--config",
-            str(config_path),
-            "--log",
-            str(log_path),
-        ],
-        REPOSITORY_ROOT,
-    )
-
-
-def handoff_selected_drafts(
-    database_path: Path,
-    config_path: Path,
-    config: dict[str, Any],
-    *,
-    start_action: Callable[[str, str, Path, Path, Path], int] | None = None,
-) -> list[dict[str, object]]:
-    """选择当前可用槽位的草稿，并逐个交付给不启用 AI 的 Planner Runner。"""
-    selected = select_and_report_drafts(database_path, config)
-    runner_log_path = (
-        REPOSITORY_ROOT
-        / str(config["planner"]["scheduler"]["runner_log_path"])
-    ).resolve()
-    if not runner_log_path.is_relative_to(REPOSITORY_ROOT):
-        raise ValueError("Planner Runner 日志路径必须位于仓库内")
-    starter = start_action or (
-        lambda task_id, execution_id, db, cfg, log: start_planner_runner(
-            task_id, execution_id, db, cfg, log
+    command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, object]:
+    """通过 loopctl 执行一轮原子排队，并记录可核对的结构化结果。"""
+    try:
+        completed = command_runner(
+            [
+                sys.executable,
+                "-B",
+                str(REPOSITORY_ROOT / "control" / "loopctl.py"),
+                "--db",
+                str(database_path),
+                "schedule-preflight",
+                "--config",
+                str(config_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
-    )
-    results: list[dict[str, object]] = []
-    for task in selected:
-        task_id = str(task["id"])
-        execution_id = f"planner-{uuid.uuid4()}"
-        try:
-            runner_pid = starter(
-                task_id,
-                execution_id,
-                database_path,
-                config_path,
-                runner_log_path,
-            )
-            result: dict[str, object] = {
-                "at": now_shanghai(),
-                "event": "planner.runner_handoff.started",
-                "task_id": task_id,
-                "execution_id": execution_id,
-                "runner_pid": runner_pid,
-                "ai_preflight_enabled": False,
-            }
-        except OSError as error:
-            result = {
-                "at": now_shanghai(),
-                "event": "planner.runner_handoff.failed",
-                "task_id": task_id,
-                "execution_id": execution_id,
-                "error_type": type(error).__name__,
-                "message": str(error),
-            }
-        print(json.dumps(result, ensure_ascii=False), flush=True)
-        results.append(result)
-    return results
+        payload = json.loads(completed.stdout)
+        if completed.returncode != 0:
+            raise RuntimeError(str(payload.get("message") or completed.stderr.strip()))
+        result = {
+            "at": now_shanghai(),
+            "event": "planner.preflight_schedule.completed",
+            **payload,
+        }
+    except (OSError, RuntimeError, json.JSONDecodeError) as error:
+        result = {
+            "at": now_shanghai(),
+            "event": "planner.preflight_schedule.failed",
+            "error_type": type(error).__name__,
+            "message": str(error),
+        }
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    return result
 
 
 def run_planner_schedule(
@@ -212,7 +170,7 @@ def run_planner_schedule(
     query_action: Callable[[], object],
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
-    """立即发现一次任务，并让查询周期与 heartbeat 周期独立推进。"""
+    """立即排队一次任务，并让调度周期与 heartbeat 周期独立推进。"""
     next_heartbeat = monotonic()
     next_query = monotonic()
     while not shutdown_event.is_set():
@@ -234,7 +192,7 @@ def run_planner_schedule(
 
 
 def serve_planner(args: argparse.Namespace) -> None:
-    """保持单实例 Planner 存活，并周期选择草稿交付给阶段版 Runner。"""
+    """保持单实例 Planner 存活，并周期调用受控预检排队命令。"""
     config_path = Path(args.config).resolve()
     database_path = Path(args.db).resolve()
     config = load_initialization_config(config_path)
@@ -259,9 +217,7 @@ def serve_planner(args: argparse.Namespace) -> None:
             shutdown_event,
             heartbeat_interval_seconds=heartbeat_interval,
             query_interval_seconds=query_interval,
-            query_action=lambda: handoff_selected_drafts(
-                database_path, config_path, config
-            ),
+            query_action=lambda: schedule_preflights(database_path, config_path),
         )
     finally:
         shutdown_event.set()
