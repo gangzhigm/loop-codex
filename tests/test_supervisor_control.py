@@ -19,7 +19,7 @@ from supervisor import main as control
 
 
 class SupervisorControlTests(unittest.TestCase):
-    """验证 Supervisor 只解析 serve 并管理三个独立服务进程。"""
+    """验证 Supervisor 只解析 serve 并管理两个独立服务进程。"""
 
     def test_serve_arguments_only_control_supervisor(self) -> None:
         args = control.parser().parse_args(
@@ -44,23 +44,24 @@ class SupervisorControlTests(unittest.TestCase):
         self.assertEqual(serve.call_args.args[0].monitor_interval_seconds, 5)
 
     def test_component_specs_read_service_switches(self) -> None:
-        dashboard, planner, dispatcher = component_specs(load_initialization_config())
+        dashboard, planner = component_specs(load_initialization_config())
         self.assertTrue(dashboard.enabled)
         self.assertTrue(planner.enabled)
-        self.assertTrue(dispatcher.enabled)
         self.assertEqual(dashboard.entry, REPOSITORY_ROOT / "client" / "dashboard_server.py")
         self.assertEqual(dashboard.arguments, ())
         self.assertEqual(planner.entry, REPOSITORY_ROOT / "planner" / "main.py")
         self.assertEqual(planner.arguments, ("serve",))
-        self.assertEqual(dispatcher.entry, REPOSITORY_ROOT / "dispatcher" / "main.py")
 
-    def test_planner_switch_does_not_change_dispatcher(self) -> None:
+    def test_planner_runs_when_either_scheduler_is_enabled(self) -> None:
         config = copy.deepcopy(load_initialization_config())
         config["planner"]["scheduler"]["scheduled"] = False
-        dashboard, planner, dispatcher = component_specs(config)
+        dashboard, planner = component_specs(config)
         self.assertTrue(dashboard.enabled)
+        self.assertTrue(planner.enabled)
+
+        config["planner"]["execution_scheduler"]["scheduled"] = False
+        _dashboard, planner = component_specs(config)
         self.assertFalse(planner.enabled)
-        self.assertTrue(dispatcher.enabled)
 
     def test_service_runtime_owns_pid_heartbeat_stop_and_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

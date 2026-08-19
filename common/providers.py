@@ -19,7 +19,7 @@ from loop_agent.secrets.store import SecretStore, create_secret_store
 
 
 def provider_factory(config: dict[str, Any], provider_id: str) -> str:
-    """读取 Provider 工厂映射，拒绝 Dispatcher 或 Planner 自行拼接模块路径。"""
+    """读取 Provider 工厂映射，拒绝 Planner 自行拼接模块路径。"""
     factories = (config.get("self_hosted_agent") or {}).get("provider_factories") or {}
     specification = factories.get(provider_id)
     if not isinstance(specification, str) or not specification.strip():

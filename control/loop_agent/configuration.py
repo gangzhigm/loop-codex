@@ -91,7 +91,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     priority_policy = config.get("priority_policy") or {}
     dashboard = config.get("dashboard") or {}
     planner_scheduler = planner.get("scheduler") or {}
-    dispatcher = config.get("dispatcher") or {}
+    planner_execution_scheduler = planner.get("execution_scheduler") or {}
     health = config.get("health") or {}
     supervisor = config.get("supervisor") or {}
     supervisor_components = supervisor.get("components") or {}
@@ -112,13 +112,6 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
             "heartbeat_path": "data/runtime/planner-heartbeat.json",
             "stop_path": "data/runtime/planner-stop-request.json",
             "log_path": "data/runtime/planner-scheduler.log",
-        },
-        "dispatcher": {
-            "entry": "dispatcher/main.py",
-            "pid_path": "data/runtime/dispatcher.pid",
-            "heartbeat_path": "data/runtime/dispatcher-heartbeat.json",
-            "stop_path": "data/runtime/dispatcher-stop-request.json",
-            "log_path": "data/runtime/dispatcher-scheduler.log",
         },
     }
     valid_supervisor_components = (
@@ -181,7 +174,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
     )
     valid = (
-        config.get("config_version") == "5.1.0"
+        config.get("config_version") == "5.2.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -235,6 +228,22 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner_scheduler["heartbeat_interval_seconds"] >= 1
         and planner_scheduler.get("runner_log_path") == "data/runtime/planner-runner.log"
         and (BASE_DIR / planner_scheduler["runner_log_path"]).resolve().is_relative_to(BASE_DIR)
+        and isinstance(planner_execution_scheduler.get("scheduled"), bool)
+        and isinstance(planner_execution_scheduler.get("interval_minutes"), int)
+        and planner_execution_scheduler["interval_minutes"] >= 1
+        and planner_execution_scheduler.get("working_directory") == str(BASE_DIR)
+        and planner_execution_scheduler.get("log_path")
+        == "data/runtime/planner-execution-dispatch.log"
+        and (BASE_DIR / planner_execution_scheduler["log_path"])
+        .resolve()
+        .is_relative_to(BASE_DIR)
+        and planner_execution_scheduler.get("runtime_environment") == "self_hosted_agent"
+        and planner_execution_scheduler.get("provider_id") in providers
+        and isinstance(
+            planner_execution_scheduler.get("supported_capability_levels"), list
+        )
+        and set(planner_execution_scheduler["supported_capability_levels"])
+        == set(CAPABILITY_LEVELS)
         and planner_boundary.get("sandbox") == "read-only"
         and planner_boundary.get("approval_policy") == "never"
         and planner_boundary.get("network_access") is False
@@ -285,18 +294,6 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and dashboard["poll_interval_ms"] >= 500
         and isinstance(dashboard.get("heartbeat_interval_seconds"), int)
         and dashboard["heartbeat_interval_seconds"] >= 1
-        and isinstance(dispatcher.get("scheduled"), bool)
-        and isinstance(dispatcher.get("interval_minutes"), int)
-        and dispatcher["interval_minutes"] >= 1
-        and isinstance(dispatcher.get("heartbeat_interval_seconds"), int)
-        and dispatcher["heartbeat_interval_seconds"] >= 1
-        and dispatcher.get("working_directory") == str(BASE_DIR)
-        and dispatcher.get("log_path") == "data/runtime/agent-dispatcher.log"
-        and (BASE_DIR / dispatcher["log_path"]).resolve().is_relative_to(BASE_DIR)
-        and dispatcher.get("runtime_environment") == "self_hosted_agent"
-        and dispatcher.get("provider_id") in providers
-        and isinstance(dispatcher.get("supported_capability_levels"), list)
-        and set(dispatcher["supported_capability_levels"]) == set(CAPABILITY_LEVELS)
         and valid_runtime_environment_config
         and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
         and self_hosted_profiles_valid
@@ -324,8 +321,6 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         >= dashboard["heartbeat_interval_seconds"]
         and supervisor_components["planner"]["heartbeat_timeout_seconds"]
         >= planner_scheduler["heartbeat_interval_seconds"]
-        and supervisor_components["dispatcher"]["heartbeat_timeout_seconds"]
-        >= dispatcher["heartbeat_interval_seconds"]
     )
     if not valid:
         raise LoopError(f"初始化配置字段或取值无效: {config_path}")

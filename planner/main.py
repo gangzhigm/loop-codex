@@ -1,7 +1,7 @@
-"""Planner 的单实例预检排队与 heartbeat 入口。
+"""Planner 的单实例双调度链与 heartbeat 入口。
 
-本进程按初始化配置周期调用受控 loopctl 命令，将 DRAFT/UNINSPECTED 原子转换为
-DRAFT/QUEUED 并创建 PLANNER/QUEUED execution；不启动 Runner，也不调用模型。
+预检链通过受控 loopctl 将 DRAFT/UNINSPECTED 原子排入 DRAFT/QUEUED；执行链从
+PENDING/READY 中选择自动任务并启动独立 Runner。Planner 本身不领取任务、不调用模型。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -27,6 +28,11 @@ if str(CONTROL_ROOT) not in sys.path:
 
 from loopdb import CONFIG_PATH, DEFAULT_DB, load_initialization_config, now_shanghai
 from common.service_runtime import ServiceRuntimeFiles, install_shutdown_signals
+from planner.execution_dispatch import (
+    ExecutionDispatchError,
+    ExecutionDispatcher,
+    ExecutionDispatchSettings,
+)
 from planner.task_query import load_draft_tasks, select_draft_tasks
 
 
@@ -160,6 +166,29 @@ def schedule_preflights(
     return result
 
 
+def dispatch_ready_tasks(
+    settings: ExecutionDispatchSettings,
+    config: dict[str, Any],
+) -> dict[str, object]:
+    """执行一轮正式任务分发，并把结果写入 Planner Scheduler 日志。"""
+    try:
+        payload = ExecutionDispatcher(settings, config).run()
+        result: dict[str, object] = {
+            "at": now_shanghai(),
+            "event": "planner.execution_dispatch.completed",
+            **payload,
+        }
+    except (ExecutionDispatchError, OSError, sqlite3.Error, ValueError) as error:
+        result = {
+            "at": now_shanghai(),
+            "event": "planner.execution_dispatch.failed",
+            "error_type": type(error).__name__,
+            "message": str(error),
+        }
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    return result
+
+
 def run_planner_schedule(
     runtime: ServiceRuntimeFiles,
     pid: int,
@@ -167,12 +196,21 @@ def run_planner_schedule(
     *,
     heartbeat_interval_seconds: float,
     query_interval_seconds: float,
-    query_action: Callable[[], object],
+    query_action: Callable[[], object] | None,
+    execution_interval_seconds: float | None = None,
+    execution_action: Callable[[], object] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
-    """立即排队一次任务，并让调度周期与 heartbeat 周期独立推进。"""
+    """立即运行启用的两条调度链，并让三个周期彼此独立推进。"""
+    if execution_action is not None and (
+        execution_interval_seconds is None or execution_interval_seconds <= 0
+    ):
+        raise ValueError("正式执行分发周期必须大于 0")
     next_heartbeat = monotonic()
-    next_query = monotonic()
+    next_query = monotonic() if query_action is not None else float("inf")
+    next_execution = (
+        monotonic() if execution_action is not None else float("inf")
+    )
     while not shutdown_event.is_set():
         if runtime.stop_requested(pid):
             break
@@ -180,13 +218,17 @@ def run_planner_schedule(
         if current >= next_heartbeat:
             runtime.write_heartbeat(pid)
             next_heartbeat = current + heartbeat_interval_seconds
-        if current >= next_query:
+        if query_action is not None and current >= next_query:
             query_action()
             next_query = monotonic() + query_interval_seconds
+        if execution_action is not None and current >= next_execution:
+            execution_action()
+            next_execution = monotonic() + float(execution_interval_seconds)
         current = monotonic()
         wait_seconds = min(
             max(0.0, next_heartbeat - current),
             max(0.0, next_query - current),
+            max(0.0, next_execution - current),
         )
         runtime.wait(shutdown_event, pid, wait_seconds)
 
@@ -197,11 +239,21 @@ def serve_planner(args: argparse.Namespace) -> None:
     database_path = Path(args.db).resolve()
     config = load_initialization_config(config_path)
     scheduler_config = config["planner"]["scheduler"]
-    if scheduler_config["scheduled"] is not True:
-        raise SystemExit("Planner Scheduler 已关闭")
+    execution_settings = ExecutionDispatchSettings.from_config(
+        config, config_path=config_path
+    )
+    if database_path != execution_settings.database_path:
+        execution_settings = replace(
+            execution_settings, database_path=database_path
+        )
+    preflight_scheduled = scheduler_config["scheduled"] is True
+    execution_scheduled = execution_settings.scheduled is True
+    if not preflight_scheduled and not execution_scheduled:
+        raise SystemExit("Planner 所有调度链均已关闭")
 
     heartbeat_interval = float(scheduler_config["heartbeat_interval_seconds"])
     query_interval = float(scheduler_config["interval_minutes"]) * 60
+    execution_interval = float(execution_settings.interval_minutes) * 60
     runtime = ServiceRuntimeFiles.from_component_config(config, "planner")
     runtime.prepare()
     pid = os.getpid()
@@ -217,7 +269,13 @@ def serve_planner(args: argparse.Namespace) -> None:
             shutdown_event,
             heartbeat_interval_seconds=heartbeat_interval,
             query_interval_seconds=query_interval,
-            query_action=lambda: schedule_preflights(database_path, config_path),
+            query_action=(lambda: schedule_preflights(database_path, config_path))
+            if preflight_scheduled
+            else None,
+            execution_interval_seconds=execution_interval,
+            execution_action=(lambda: dispatch_ready_tasks(execution_settings, config))
+            if execution_scheduled
+            else None,
         )
     finally:
         shutdown_event.set()

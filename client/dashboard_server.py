@@ -424,7 +424,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作字段无效")
         service = payload.get("service")
         action = payload.get("action")
-        if service not in {"supervisor", "planner", "dispatcher"} or action not in {"start", "stop"}:
+        if service not in {"supervisor", "planner"} or action not in {"start", "stop"}:
             raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作无效")
         if payload.get("confirmation") != action.upper():
             raise OperationsApiError(HTTPStatus.FORBIDDEN, "服务操作未获得明确确认")
@@ -469,9 +469,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 if enabled:
                     configured = (
-                        config["planner"]["scheduler"]["scheduled"]
-                        if service == "planner"
-                        else config["dispatcher"]["scheduled"]
+                        config["planner"]["scheduler"]["scheduled"] is True
+                        or config["planner"]["execution_scheduler"]["scheduled"] is True
                     )
                     if configured is not True:
                         set_service_enabled(service, False)

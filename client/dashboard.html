@@ -1859,7 +1859,7 @@
       <button id="dismissNotice" type="button" aria-label="关闭提示" title="关闭">×</button>
     </div>
 
-    <!-- 运行链路展示健康快照；三个常驻控制按钮通过受保护 API 写入持久化期望状态。 -->
+    <!-- 运行链路展示健康快照；两个常驻控制按钮通过受保护 API 写入持久化期望状态。 -->
     <section class="runtime-section" aria-labelledby="runtimeHeading">
       <div class="runtime-heading-row">
         <h2 id="runtimeHeading">运行链路</h2>
@@ -1874,7 +1874,6 @@
         </div>
         <div class="runtime-connector" aria-hidden="true"></div>
         <div class="runtime-stage">
-          <div id="runtimeDispatcher"></div>
           <div id="runtimeWorkerRunners" class="runtime-runner-list"></div>
         </div>
       </div>
@@ -2048,7 +2047,6 @@
       processSnapshot: document.querySelector("#processSnapshot"),
       runtimeSupervisor: document.querySelector("#runtimeSupervisor"),
       runtimePlanner: document.querySelector("#runtimePlanner"),
-      runtimeDispatcher: document.querySelector("#runtimeDispatcher"),
       runtimeWorkerRunners: document.querySelector("#runtimeWorkerRunners"),
       profileList: document.querySelector("#profileList"),
       profileCount: document.querySelector("#profileCount"),
@@ -2181,8 +2179,7 @@
     function renderProcessSnapshot(services, byComponent) {
       const entries = [
         ["Supervisor", byComponent.get("supervisor") ?? null],
-        ["Planner Heartbeat", byComponent.get("planner") ?? null],
-        ["Dispatcher Scheduler", byComponent.get("dispatcher") ?? null]
+        ["Planner Scheduler", byComponent.get("planner") ?? null]
       ];
       services
         .filter((item) => String(item?.component ?? "").startsWith("runner:"))
@@ -2237,13 +2234,11 @@
         .map((item) => [item.component, item]));
       const supervisor = byComponent.get("supervisor") ?? null;
       const planner = byComponent.get("planner") ?? null;
-      const dispatcher = byComponent.get("dispatcher") ?? null;
       renderProcessSnapshot(values, byComponent);
       elements.runtimeSupervisor.innerHTML = runtimeNodeMarkup("Supervisor", supervisor, "supervisor");
-      elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Heartbeat", planner, "planner");
-      elements.runtimeDispatcher.innerHTML = runtimeNodeMarkup("Dispatcher Scheduler", dispatcher, "dispatcher");
+      elements.runtimePlanner.innerHTML = runtimeNodeMarkup("Planner Scheduler", planner, "planner");
       const workerRunners = renderRunnerList(elements.runtimeWorkerRunners, values, "worker", "Worker Runner");
-      const timestamps = [supervisor, planner, dispatcher, ...workerRunners]
+      const timestamps = [supervisor, planner, ...workerRunners]
         .map((item) => item?.heartbeat?.checked_at ?? item?.checked_at)
         .map((value) => new Date(value ?? "").getTime())
         .filter(Number.isFinite);
@@ -2870,7 +2865,7 @@
       if (!Array.isArray(candidate?.agents)) errors.push("agents 必须是数组");
       if (!Array.isArray(candidate?.recoveries)) errors.push("recoveries 必须是数组");
       if (!Array.isArray(candidate?.services)) errors.push("services 必须是数组");
-      if (!candidate?.service_control || ["supervisor", "planner", "dispatcher"].some((service) => typeof candidate.service_control[service] !== "boolean")) {
+      if (!candidate?.service_control || ["supervisor", "planner"].some((service) => typeof candidate.service_control[service] !== "boolean")) {
         errors.push("service_control 无效");
       }
       const environmentConfig = candidate?.runtime_config?.runtime_environments;

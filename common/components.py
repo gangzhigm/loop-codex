@@ -1,4 +1,4 @@
-"""Supervisor 对 Planner、Dispatcher 和 Dashboard 的组件管理方法。"""
+"""Supervisor 对 Planner 和 Dashboard 的组件管理方法。"""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def component_specs(
     config: dict[str, Any],
     desired_states: dict[str, bool] | None = None,
 ) -> tuple[ComponentSpec, ...]:
-    """从已校验配置构造 Dashboard 与两个 Scheduler 的稳定运行契约。"""
+    """从已校验配置构造 Dashboard 与 Planner 的稳定运行契约。"""
     components = config["supervisor"]["components"]
     desired = desired_states or {}
 
@@ -116,19 +116,15 @@ def component_specs(
     dashboard = build("dashboard", "Dashboard", True, ())
     planner = build(
         "planner",
-        "Planner Heartbeat",
-        config["planner"]["scheduler"]["scheduled"] is True
+        "Planner Scheduler",
+        (
+            config["planner"]["scheduler"]["scheduled"] is True
+            or config["planner"]["execution_scheduler"]["scheduled"] is True
+        )
         and desired.get("planner", True),
         ("serve",),
     )
-    dispatcher = build(
-        "dispatcher",
-        "Dispatcher Scheduler",
-        config["dispatcher"]["scheduled"] is True
-        and desired.get("dispatcher", True),
-        ("serve",),
-    )
-    return dashboard, planner, dispatcher
+    return dashboard, planner
 
 
 def is_component_process(pid: int, spec: ComponentSpec) -> bool:
@@ -400,7 +396,7 @@ def component_snapshot(
     stop_timeout_seconds: float,
     runner_heartbeat_timeout_seconds: float = 120,
 ) -> dict[str, dict[str, Any]]:
-    """管理三个独立常驻组件，并只读汇总动态 Runner 状态。"""
+    """管理两个独立常驻组件，并只读汇总动态 Runner 状态。"""
 
     def inspect(spec: ComponentSpec) -> dict[str, Any]:
         """把单个组件的意外监控异常限制在本轮状态中。"""

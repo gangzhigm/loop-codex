@@ -342,7 +342,6 @@ def operations_config_payload(
     task_execution = config.get("task_execution")
     planner = config.get("planner")
     dashboard = config.get("dashboard")
-    dispatcher = config.get("dispatcher")
     self_hosted_agent = config.get("self_hosted_agent")
     health = config.get("health")
     priority_policy = config.get("priority_policy")
@@ -367,6 +366,9 @@ def operations_config_payload(
         if key in {"max_steps", "max_final_repairs", "model_timeout_seconds", "tool_timeout_seconds"}
     ]
     planner_scheduler = planner.get("scheduler") if isinstance(planner, Mapping) else {}
+    planner_execution_scheduler = (
+        planner.get("execution_scheduler") if isinstance(planner, Mapping) else {}
+    )
     return {
         "ok": True,
         "generated_at": now_shanghai(),
@@ -403,26 +405,20 @@ def operations_config_payload(
                 "id": "planner",
                 "title": "Planner 管理",
                 "items": [
-                    item("planner-prompt", "Planner 占位说明", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "Planner 业务重建期间的禁用状态说明。", "读取时生效", "文件存在性检查"),
-                    item("planner-runtime", "保留运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "为历史任务和后续开发保留，当前 heartbeat 服务不使用。", "保留", "配置加载时校验"),
-                    item("planner-cadence", "Heartbeat 周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'heartbeat_interval_seconds')} 秒", "config/initialization.json", "Planner 占位服务发布进程 heartbeat 的周期。", "需重启 Planner", "heartbeat 文件"),
-                    item("planner-boundary", "保留安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "为重新开发保留，当前没有 AI 预检入口。", "保留", "配置加载时校验"),
+                    item("planner-prompt", "Planner 协议", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "Planner 的预检排队与正式执行分发边界。", "读取时生效", "文件存在性检查"),
+                    item("planner-runtime", "执行运行环境", _config_value(planner_execution_scheduler if isinstance(planner_execution_scheduler, Mapping) else {}, "runtime_environment"), "config/initialization.json", "Planner 只选择匹配运行环境与 Provider 的 READY 自动任务。", "需重启 Planner", "配置加载时校验"),
+                    item("planner-preflight-cadence", "预检排队周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "选择 DRAFT/UNINSPECTED 任务并通过 loopctl 原子排入预检队列。", "需重启 Planner", "Planner 日志"),
+                    item("planner-execution-cadence", "执行分发周期", f"每 {_config_value(planner_execution_scheduler if isinstance(planner_execution_scheduler, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "选择 PENDING/READY 自动任务，每轮最多启动一个 Runner，不等待执行结束。", "需重启 Planner", "Planner 执行分发日志"),
+                    item("planner-heartbeat", "Heartbeat 周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'heartbeat_interval_seconds')} 秒", "config/initialization.json", "两条调度链共享一个 Planner 进程 heartbeat。", "需重启 Planner", "heartbeat 文件"),
+                    item("planner-boundary", "预检安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "预检 Runner 只读检查，并通过受控 loopctl 写回。", "需重启 Planner", "配置加载时校验"),
                 ],
             },
             {
                 "id": "supervisor",
                 "title": "Supervisor 管理",
                 "items": [
-                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "周期检查并恢复独立 Dashboard、Planner 与内部 Agent Dispatcher 的可核实状态。", "当前生效", "data/runtime/health-state.json", "active"),
+                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "周期检查并恢复独立 Dashboard 与 Planner 的可核实状态。", "当前生效", "data/runtime/health-state.json", "active"),
                     item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "健康任务只探测并恢复 Supervisor 主进程，不领取或执行任务。", "当前生效", "健康任务运行结果"),
-                ],
-            },
-            {
-                "id": "dispatcher",
-                "title": "Dispatcher 管理",
-                "items": [
-                    item("dispatcher-service", "常驻 Dispatcher", "main.py serve", "dispatcher/main.py", "由 Supervisor 管理单实例、PID 与 heartbeat，并按配置周期检查是否需要分发 Runner。", "当前生效", "data/runtime/health-state.json", "active"),
-                    item("agent-dispatcher", "Runner 分发周期", f"每 {_config_value(dispatcher if isinstance(dispatcher, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "每轮最多创建一个内部 Agent Runner；创建成功后立即返回，不等待 Runner 执行结束。", "需重启 Dispatcher", "配置加载时校验"),
                 ],
             },
             {

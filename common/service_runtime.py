@@ -1,4 +1,4 @@
-"""四个常驻服务共用的 PID、heartbeat 与停止请求生命周期。"""
+"""三个常驻服务共用的 PID、heartbeat 与停止请求生命周期。"""
 
 from __future__ import annotations
 

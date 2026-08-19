@@ -40,7 +40,7 @@ $root = Split-Path -Parent (Split-Path -Parent $resolvedConfig)
 $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
-Assert-Condition ($config.config_version -eq '5.1.0') 'config_version 为 5.1.0'
+Assert-Condition ($config.config_version -eq '5.2.0') 'config_version 为 5.2.0'
 Assert-Condition ($config.database.schema_version -eq '3.8.0') 'Schema 契约为 3.8.0'
 Assert-Condition ($config.prompts.planner -eq 'planner/planner.md') 'Planner 提示词路径唯一且已登记'
 
@@ -88,8 +88,11 @@ $runtimeNames = @($config.runtime_environments.PSObject.Properties.Name | Sort-O
 Assert-Condition (($runtimeNames -join '|') -eq 'self_hosted_agent') '只登记内部 Agent 运行环境'
 $profileNames = @($config.execution_profiles.PSObject.Properties.Name | Sort-Object)
 Assert-Condition (($profileNames -join '|') -eq 'self_hosted_agent') '只登记内部 Agent execution profile'
-Assert-Condition ($config.dispatcher.runtime_environment -eq 'self_hosted_agent') 'Dispatcher 只分发内部 Agent 任务'
-Assert-Condition ($config.dispatcher.provider_id -eq 'deepseek') 'Dispatcher 显式登记内部 Provider'
+$executionScheduler = $config.planner.execution_scheduler
+Assert-Condition ($executionScheduler.scheduled -is [bool]) 'Planner 执行分发开关为布尔值'
+Assert-Condition ($executionScheduler.interval_minutes -ge 1) 'Planner 执行分发周期有效'
+Assert-Condition ($executionScheduler.runtime_environment -eq 'self_hosted_agent') 'Planner 只分发内部 Agent 任务'
+Assert-Condition ($executionScheduler.provider_id -eq 'deepseek') 'Planner 执行分发显式登记内部 Provider'
 
 $operatorPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.operator)
 $plannerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.planner)
@@ -99,8 +102,8 @@ $plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'planner\control.
 $plannerMainSource = Read-Utf8Strict -Path (Join-Path $root 'planner\main.py')
 $plannerQuerySource = Read-Utf8Strict -Path (Join-Path $root 'planner\task_query.py')
 $runnerRegistrySource = Read-Utf8Strict -Path (Join-Path $root 'common\runners.py')
-Assert-Condition ($plannerPrompt -match '持久化预检队列') 'Planner 提示词声明持久排队边界'
-Assert-Condition ($plannerPrompt -match '不调用模型') 'Planner 提示词声明 AI 未启用'
+Assert-Condition ($plannerPrompt -match 'DRAFT/QUEUED') 'Planner 提示词声明持久排队边界'
+Assert-Condition ($plannerPrompt -match '不直接调用模型') 'Planner 提示词声明调度与 AI 执行边界'
 Assert-Condition ($plannerMainSource -match 'runtime\.write_heartbeat') 'Planner 主进程发布 heartbeat'
 Assert-Condition ($plannerMainSource -match 'load_draft_tasks') 'Planner 主进程只读发现 DRAFT 任务'
 Assert-Condition ($plannerMainSource -match 'select_draft_tasks') 'Planner 主进程按空闲并发槽选择 DRAFT 任务'
@@ -108,7 +111,8 @@ Assert-Condition ($plannerMainSource -match 'interval_minutes') 'Planner 主进�
 Assert-Condition ($plannerQuerySource -match 'list_tasks') 'Planner 查询复用公共状态过滤和完整任务投影'
 Assert-Condition ($plannerQuerySource -notmatch 'database\.execute') 'Planner 查询模块不直接执行 SQL'
 Assert-Condition ($plannerMainSource -match 'schedule-preflight') 'Planner 主进程通过 loopctl 执行持久排队'
-Assert-Condition ($plannerMainSource -notmatch 'planner_runner\.py') 'Planner 主进程不直接引用 Runner'
+Assert-Condition ($plannerMainSource -match 'ExecutionDispatcher') 'Planner 主进程包含正式执行分发链'
+Assert-Condition ($plannerMainSource -notmatch 'planner_runner\.py') 'Planner 主进程不直接引用预检 Runner'
 Assert-Condition ($runnerRegistrySource -notmatch 'planner_runner\.py') '阶段版 Planner Runner 不冒充 AI 动态 Runner'
 Assert-Condition ($operatorPrompt -match 'Planner 阶段状态') 'Operator 提示词声明 Planner 阶段状态'
 Assert-Condition (
@@ -131,6 +135,6 @@ Assert-Condition ($config.self_hosted_agent.provider_factories.deepseek -eq 'loo
         '复核 Planner 任务选择、持久排队、周期和 heartbeat 边界。',
         '逐条复核内部运行环境 L1-L5 的模型、reasoning 和 attempt 参数。',
         '确认 Planner 预检控制协议仍通过 loopctl.py 受控。',
-        '确认 Planner 主进程不启动 Runner 或调用 Provider。'
+        '确认 Planner 只分发 Runner，不领取任务或调用 Provider。'
     )
 } | ConvertTo-Json -Depth 5

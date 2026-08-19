@@ -12,7 +12,7 @@
 - 使用 `archive/unarchive` 按独立 `archived_at` 属性归档或取消归档终态任务。
 - 保存用户提供的任务附件，计算 SHA-256，并绑定到任务。
 - 读取 Dashboard API，复核任务管理操作结果。
-- 从 Supervisor 健康快照核对 Planner 只读任务发现服务和 Dispatcher Scheduler 的公开运行状态；Operator 不直接启动、停止或修复这些进程。
+- 从 Supervisor 健康快照核对 Planner 双调度服务的公开运行状态；Operator 不直接启动、停止或修复这些进程。
 - 人工执行策略只允许 L5；用户明确批准后，由匹配内部运行环境的单次 Runner 执行，不得创建第六个能力等级或绕过 Runner 直接写任务状态。
 
 ## 禁止范围
@@ -37,7 +37,7 @@
    - 历史任务与新需求相似但已被排除在候选集外时，视为可能的修正、改进、返工、回归或新一轮需求，不因历史相似性阻止创建，也不主动搜索这些历史任务。
    - 部分重叠但项目、scope 或验收目标不同：允许新建，并记录关系和差异。
    - 任务 ID 不做全量预查；`loopctl.py` 和 SQLite 唯一约束负责保证唯一性。只有 enqueue 返回 ID 已存在时，才读取对应任务并决定更新、重新排队或改用新的唯一 ID。
-3. 完成查重后把用户明确提供的拆分偏好写入原始描述或验收；Planner 重建期间不会生成新的静态技术拆分建议。处理历史建议时：
+3. 完成查重后把用户明确提供的拆分偏好写入原始描述或验收；Planner Scheduler 本身不会生成静态技术拆分建议，只有后续预检 Runner 才能提交技术结论。处理已有建议时：
    - 同时涉及多个独立项目、端、模块或可分别交付的目标时，建议拆分。
    - scope 很大、验收链路很长、某部分可独立完成，或原任务曾因真实实现失败反复受阻时，可在原始描述中标注用户偏好，等待 Planner 新版本重新提供技术证据。
    - 多部分必须原子完成、共享同一接口契约且无法独立验收，或拆分后会重复修改同一批文件时，不建议拆分。
@@ -45,9 +45,9 @@
    - 用户确认前不得创建子任务、取消原任务或用建议覆盖原始任务事实。用户已明确批准具体拆分方案时，才按下一步执行。
 4. 拆分已有任务时，先创建全部替代任务；确认全部创建成功后，再取消原任务并在原因中记录替代任务 ID。不得物理删除原任务或丢失历史；`RUNNING` 任务不得拆分，必须等待执行结束或用户先处理其状态。
 5. 新任务无论信息是否完整都以 `DRAFT/UNINSPECTED` 创建。保存用户原始业务描述、业务验收、priority、runtime_environment、依赖、附件、`scope_hint` 和 `estimated_capability_level`；最终 capability 与精确 scope 保持未定。未指定环境时使用初始化配置中的默认环境，用户指定时保持不变。
-6. Planner 当前只把选中的任务交付给阶段版 Runner，不会提交 READY、NEEDS_REVIEW 或 FAILED。新任务保持 `DRAFT/UNINSPECTED`，必须明确告知用户当前不会自动进入 `PENDING/READY`；不得绕过 Planner 直接进入 PENDING。
+6. Planner 把选中的任务原子排入 `DRAFT/QUEUED` 并创建预检 execution，但当前不自动启动预检 Runner。因此新任务可能停在队列中，不会仅靠 Scheduler 自动进入 `PENDING/READY`；不得绕过预检队列直接进入 PENDING。
 7. 用户提供文件或图片时，保存到 `data/assets/<task-id>/`，保留原始文件，计算 SHA-256，并写入 `task_attachments`。
-8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后只核对 Planner 只读发现服务，不得把任务发现或 heartbeat 解释为预检能力；数据库中已有的 `PENDING/READY` 任务仍按原规则检查 Dispatcher 和 Runner。
+8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后核对 Planner 的预检排队状态；数据库中已有的 `PENDING/READY` 自动任务由 Planner 的执行分发链选择，并由 Runner 原子领取。
 9. 从 `/api/state` 复核任务 ID、主状态、preflight_status、Operator 原始定义、Planner 补充、priority、runtime_environment、预估/最终等级、scope hint、精确 scope、lock_mode、拆分建议、附件和 archived_at。不要借复核读取或判断源码或业务实现。
 10. 最终只汇报任务管理结果；明确说明未检查或执行项目代码。
 
@@ -63,15 +63,15 @@
 
 ## 能力等级与执行策略规则
 
-- 能力等级对应的模型、推理参数、attempt timeout 和重试配置只从 `config/initialization.json` 的匹配运行环境 execution profile 读取，不在本提示词维护副本。Operator 只能填写 `estimated_capability_level`；Planner 当前阶段不会提交新的最终 `capability_level`。两者与 priority、运行平台、Provider 和执行策略独立；高优先级不自动提高能力等级。
+- 能力等级对应的模型、推理参数、attempt timeout 和重试配置只从 `config/initialization.json` 的匹配运行环境 execution profile 读取，不在本提示词维护副本。Operator 只能填写 `estimated_capability_level`；最终 `capability_level` 由预检结果提交。两者与 priority、运行平台、Provider 和执行策略独立；高优先级不自动提高能力等级。
 - `L1`：需求明确、低风险、单端的小范围样式或文案修改。
 - `L2`：默认等级；常规单项目功能、接口接入和缺陷修复。证据不足时不得擅自升级。
 - `L3`：单项目多文件、接口联动或较复杂业务逻辑。
 - `L4`：边界明确的复杂排障、状态逻辑，或一次真实实现失败后的升级。
 - `L5`：跨项目、数据库迁移、并发锁、权限、支付、架构或高风险任务；也可配合 `execution_policy=manual` 用于人工批准的一次性执行。
 - 心跳停滞、租约回收、执行中断、工具故障和缺少人工信息不属于实现失败，不得据此升级。首次真实实现失败可提高一个等级；连续两次真实实现失败必须先评估拆分。
-- `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED；Planner 当前阶段不会自动重新写入最终等级。
-- Worker 的模型、推理参数和执行限制只从初始化配置读取。Planner 当前没有模型入口，只维护常驻 heartbeat，按公共并发和优先级配置周期选择 DRAFT 任务，并交付给只读阶段版 Runner；进程状态由 Supervisor 和初始化配置管理。
+- `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED，必须重新经过 Planner 排队和预检。
+- Worker 的模型、推理参数和执行限制只从初始化配置读取。Planner 本身没有模型入口；它维护 heartbeat，并独立调度预检排队与 READY 自动任务的 Runner 分发。进程状态由 Supervisor 和初始化配置管理。
 
 ## 运行环境规则
 
@@ -79,7 +79,7 @@
 - `codex_automation` 和 `codex_cli` 只可能出现在已有 SQLite 历史记录中，不是当前可选运行环境；新建、更新或重新执行任务时必须选择当前配置登记的内部环境。
 - 用户没有明确指定运行环境时，使用 `planner.default_runtime_environment`；用户明确指定已登记环境时以用户选择为准，不得让其他入口兜底领取。
 - 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。用户未指定时允许 `enqueue` 使用 `planner.default_runtime_environment`；Operator 必须在结果中说明采用了该默认值。Planner 不得改变已保存的环境。
-- 环境已登记不等于对应 Runner 已可用。创建任务时只保存路由事实；Planner 重建期间新任务停在 DRAFT。数据库中已有任务进入 `PENDING/READY` 后，仍需依据可核对的配置或运行状态判断 Worker 入口是否可用。
+- 环境已登记不等于对应 Runner 已可用。创建任务时只保存路由事实；Planner 可将新任务排入预检队列，但预检 Runner 不可用时任务会停在 `DRAFT/QUEUED`。任务进入 `PENDING/READY` 后，仍需依据可核对的配置或运行状态判断 Worker 入口是否可用。
 - 运行环境与优先级、能力等级、Provider、执行策略、依赖和 scope 锁独立；全局与各平台活动 execution 上限从初始化配置读取并跨运行环境共同计算，scope 冲突也不因运行环境不同而放行。
 - `RUNNING` 任务不得修改运行环境。修改或重新排队后，必须由匹配环境的入口领取并从 API 复核。
 
@@ -93,7 +93,7 @@
 
 ## 状态规则
 
-- `DRAFT`：Operator 已创建任务但尚未形成执行契约；Planner 重建期间新任务会持续停在此状态。
+- `DRAFT`：Operator 已创建任务但尚未形成执行契约；可依次处于 `UNINSPECTED`、`QUEUED` 或 `INSPECTING`。
 - `NEEDS_REVIEW`：Planner 发现信息不足、静态检查失败或需要人工确认拆分；Operator 取得决定后送回 DRAFT/UNINSPECTED。
 - `PENDING`：`preflight_status=READY`，最终等级、精确 scope、锁模式、技术验收和证据完整，等待 Worker 领取。
 - `RUNNING`：Worker 正在执行，Operator 不修改任务定义。
@@ -107,12 +107,13 @@
 
 ## Planner 阶段状态
 
-- Planner 当前运行 PID、heartbeat、停止请求和信号处理；启动后立即只读查询并选择 DRAFT 任务，之后按 `planner.scheduler.interval_minutes` 周期重复。
-- 每轮以 `planner.max_active_executions` 减去 `DRAFT/INSPECTING` 数量计算空闲槽位，按公共优先级、创建时间和任务 ID 选择 `DRAFT/UNINSPECTED`。
-- Planner 为选中任务启动阶段版 Runner 并传入明确 task-id；Runner 只读确认交付，不调用模型，也不修改任务状态或写 SQLite。交付结果不得解释为预检已执行。
-- `preflight-claim|preflight-heartbeat|preflight-ready|preflight-needs-review|preflight-fail` 已具备后续阶段的受控状态机，但当前 Scheduler 和 Runner 不调用；Operator 也不调用这些命令。
-- 数据库中的 Planner 字段、旧 execution、READY 任务和历史证据继续作为历史事实展示；不得清理、伪造或解释成当前 Planner 仍具有预检能力。
-- Supervisor 只管理 Planner 只读任务发现服务、Dispatcher Scheduler 和 Dashboard 的进程存活，不参与任务选择、领取或状态迁移。
+- Planner 统一维护 PID、heartbeat、停止请求和信号处理；启动后立即运行所有已启用调度链，之后按各自配置周期重复。
+- 预检排队链以 `planner.max_active_executions` 减去 `DRAFT/QUEUED` 与 `DRAFT/INSPECTING` 数量计算空闲槽位，按公共优先级、创建时间和任务 ID 选择 `DRAFT/UNINSPECTED`。
+- Planner 通过 `loopctl.py schedule-preflight` 把选中任务原子改为 `DRAFT/QUEUED` 并创建 `PLANNER/QUEUED` execution；它不直接启动预检 Runner。
+- 执行分发链选择依赖完成且路由匹配的 `PENDING/READY` 自动任务，在全局与平台容量允许时最多启动一个 `runner/agent_runtime.py`；Runner 自行原子 claim。
+- `preflight-claim|preflight-heartbeat|preflight-ready|preflight-needs-review|preflight-fail` 是预检 Runner 的受控状态机；Operator 不调用这些命令。
+- 数据库中的 Planner 字段、execution、READY 任务和历史证据都是事实记录；不得清理或伪造。
+- Supervisor 只管理 Planner 和 Dashboard 的进程存活，不参与任务选择、领取或状态迁移。
 
 ## 停滞恢复规则
 

@@ -1,6 +1,6 @@
-"""Self-hosted Agent 的单轮调度入口。
+"""Planner 内部的 Self-hosted Agent 单轮执行分发能力。
 
-Dispatcher 只读任务与活动 execution 快照，判断是否需要启动一个 Runner。Runner 启动后
+本模块只读任务与活动 execution 快照，判断是否需要启动一个 Runner。Runner 启动后
 自行通过 loopctl 原子领取任务、维护 heartbeat、执行内部 Agent 并写回结果。
 """
 
@@ -41,13 +41,13 @@ from loopdb import (
 RUNTIME_ENVIRONMENT = "self_hosted_agent"
 
 
-class DispatcherError(RuntimeError):
+class ExecutionDispatchError(RuntimeError):
     """配置、路径或调度前置条件不满足内部 Agent 契约。"""
 
 
 @dataclass(frozen=True)
-class DispatcherSettings:
-    """冻结 Dispatcher 的内部 Agent 路由、路径和并发限制。"""
+class ExecutionDispatchSettings:
+    """冻结 Planner 正式执行分发的路由、路径和并发限制。"""
 
     config_path: Path
     database_path: Path
@@ -55,7 +55,6 @@ class DispatcherSettings:
     working_directory: Path
     scheduled: bool
     interval_minutes: int
-    heartbeat_interval_seconds: int
     log_path: Path
     provider_id: str
     provider_specification: str
@@ -70,39 +69,37 @@ class DispatcherSettings:
         *,
         base_dir: Path = BASE_DIR,
         config_path: Path = CONFIG_PATH,
-    ) -> "DispatcherSettings":
+    ) -> "ExecutionDispatchSettings":
         """校验内部 Agent 路由和项目内路径后生成设置。"""
-        raw = config.get("dispatcher")
+        planner = config.get("planner")
+        raw = planner.get("execution_scheduler") if isinstance(planner, dict) else None
         execution = config.get("task_execution")
         database = config.get("database")
         if not all(isinstance(value, dict) for value in (raw, execution, database)):
-            raise DispatcherError("dispatcher configuration is incomplete")
+            raise ExecutionDispatchError("planner execution scheduler configuration is incomplete")
         scheduled = raw.get("scheduled")
         interval = raw.get("interval_minutes")
-        heartbeat_interval = raw.get("heartbeat_interval_seconds")
         working_value = raw.get("working_directory")
         log_value = raw.get("log_path")
         runtime_environment = raw.get("runtime_environment")
         provider_id = raw.get("provider_id")
         supported = raw.get("supported_capability_levels")
         if not isinstance(scheduled, bool):
-            raise DispatcherError("dispatcher scheduled is invalid")
+            raise ExecutionDispatchError("planner execution scheduler scheduled is invalid")
         if not isinstance(interval, int) or interval < 1:
-            raise DispatcherError("dispatcher interval_minutes is invalid")
-        if not isinstance(heartbeat_interval, int) or heartbeat_interval < 1:
-            raise DispatcherError("dispatcher heartbeat interval is invalid")
+            raise ExecutionDispatchError("planner execution scheduler interval_minutes is invalid")
         if runtime_environment != RUNTIME_ENVIRONMENT:
-            raise DispatcherError("dispatcher runtime environment must be self_hosted_agent")
+            raise ExecutionDispatchError("planner execution runtime must be self_hosted_agent")
         if not isinstance(provider_id, str) or not provider_id.strip():
-            raise DispatcherError("dispatcher provider_id is invalid")
+            raise ExecutionDispatchError("planner execution provider_id is invalid")
         if not isinstance(working_value, str) or not working_value.strip():
-            raise DispatcherError("dispatcher working_directory is invalid")
+            raise ExecutionDispatchError("planner execution working_directory is invalid")
         if not isinstance(log_value, str) or not log_value.strip():
-            raise DispatcherError("dispatcher log_path is invalid")
+            raise ExecutionDispatchError("planner execution log_path is invalid")
         if not isinstance(supported, list) or not supported or len(supported) != len(set(supported)):
-            raise DispatcherError("dispatcher supported_capability_levels is invalid")
+            raise ExecutionDispatchError("planner execution capability levels are invalid")
         if any(level not in CAPABILITY_LEVELS for level in supported):
-            raise DispatcherError("dispatcher contains an unsupported capability level")
+            raise ExecutionDispatchError("planner execution scheduler has an unsupported capability level")
         profiles = (
             ((config.get("execution_profiles") or {}).get(RUNTIME_ENVIRONMENT) or {})
             .get("providers", {})
@@ -110,31 +107,31 @@ class DispatcherSettings:
             .get("capabilities")
         )
         if not isinstance(profiles, dict) or not set(supported).issubset(profiles):
-            raise DispatcherError("dispatcher capability levels lack provider profiles")
+            raise ExecutionDispatchError("planner execution capability levels lack provider profiles")
         root = base_dir.resolve()
         working_directory = Path(working_value).resolve()
         database_path = (root / str(database.get("path") or "")).resolve()
         log_path = (root / log_value).resolve()
         runner_path = (root / "runner" / "agent_runtime.py").resolve()
         if working_directory != root:
-            raise DispatcherError("dispatcher working_directory must be the project root")
+            raise ExecutionDispatchError("planner execution working_directory must be the project root")
         if (
             not database_path.is_relative_to(root)
             or not log_path.is_relative_to(root)
             or not runner_path.is_file()
         ):
-            raise DispatcherError("dispatcher paths are unsafe or unavailable")
+            raise ExecutionDispatchError("planner execution paths are unsafe or unavailable")
         maximum = execution.get("global_max_active_executions")
         limits = execution.get("platform_max_active_executions")
         if not isinstance(maximum, int) or maximum < 1 or not isinstance(limits, dict):
-            raise DispatcherError("dispatcher execution limits are invalid")
+            raise ExecutionDispatchError("planner execution limits are invalid")
         platform_maximum = limits.get(RUNTIME_ENVIRONMENT)
         if not isinstance(platform_maximum, int) or platform_maximum < 1:
-            raise DispatcherError("dispatcher platform limit is invalid")
+            raise ExecutionDispatchError("planner execution platform limit is invalid")
         if maximum != global_parallel_limit(config) or platform_maximum != platform_parallel_limit(
             RUNTIME_ENVIRONMENT, config
         ):
-            raise DispatcherError("dispatcher execution limits are inconsistent")
+            raise ExecutionDispatchError("planner execution limits are inconsistent")
         return cls(
             config_path=config_path.resolve(),
             database_path=database_path,
@@ -142,7 +139,6 @@ class DispatcherSettings:
             working_directory=root,
             scheduled=scheduled,
             interval_minutes=interval,
-            heartbeat_interval_seconds=heartbeat_interval,
             log_path=log_path,
             provider_id=provider_id,
             provider_specification=provider_factory(config, provider_id),
@@ -186,6 +182,7 @@ def select_candidate(
     for task in tasks:
         if (
             task.get("status") == "PENDING"
+            and task.get("preflight_status") == "READY"
             and task.get("runtime_environment") == RUNTIME_ENVIRONMENT
             and task.get("provider_id") == provider_id
             and task.get("capability_level") in supported_capability_levels
@@ -197,7 +194,7 @@ def select_candidate(
 
 
 def default_snapshot(
-    settings: DispatcherSettings, config: dict[str, Any]
+    settings: ExecutionDispatchSettings, config: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """在一个短数据库连接内读取任务和活动 execution 投影。"""
     database = connect(settings.database_path)
@@ -208,20 +205,20 @@ def default_snapshot(
 
 
 def default_launcher(command: list[str], cwd: Path) -> int:
-    """启动独立 Runner，Dispatcher 取得 PID 后立即放手。"""
+    """启动独立 Runner，Planner 取得 PID 后立即放手。"""
     return launch_detached_process(command, cwd)
 
 
-class AgentDispatcher:
+class ExecutionDispatcher:
     """完成一次候选选择、容量判断和内部 Agent Runner 启动。"""
 
     def __init__(
         self,
-        settings: DispatcherSettings,
+        settings: ExecutionDispatchSettings,
         config: dict[str, Any],
         *,
         snapshot_reader: Callable[
-            [DispatcherSettings, dict[str, Any]],
+            [ExecutionDispatchSettings, dict[str, Any]],
             tuple[list[dict[str, Any]], list[dict[str, Any]]],
         ] = default_snapshot,
         launcher: Callable[[list[str], Path], int] = default_launcher,
@@ -325,7 +322,7 @@ class AgentDispatcher:
 
 def parser() -> argparse.ArgumentParser:
     """创建单轮内部 Agent 调度命令行。"""
-    root = argparse.ArgumentParser(description="Single-dispatch internal Agent Runner launcher")
+    root = argparse.ArgumentParser(description="Planner single execution Runner dispatcher")
     root.add_argument("--config", default=str(CONFIG_PATH))
     root.add_argument("--db")
     root.add_argument("--dry-run", action="store_true")
@@ -336,25 +333,25 @@ def main() -> None:
     args = parser().parse_args()
     config_path = Path(args.config).resolve()
     config = load_initialization_config(config_path)
-    settings = DispatcherSettings.from_config(config, config_path=config_path)
+    settings = ExecutionDispatchSettings.from_config(config, config_path=config_path)
     if args.db:
         database_path = Path(args.db).resolve()
         if not database_path.is_relative_to(BASE_DIR):
-            raise DispatcherError("dispatcher database path must remain in the project root")
-        settings = DispatcherSettings(**{**settings.__dict__, "database_path": database_path})
+            raise ExecutionDispatchError("planner execution database path must remain in the project root")
+        settings = ExecutionDispatchSettings(**{**settings.__dict__, "database_path": database_path})
     if args.dry_run:
         print(json.dumps({"outcome": "DRY_RUN", "provider_id": settings.provider_id}, ensure_ascii=False))
         return
-    print(json.dumps(AgentDispatcher(settings, config).run(), ensure_ascii=False))
+    print(json.dumps(ExecutionDispatcher(settings, config).run(), ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
-    except DispatcherError as error:
+    except ExecutionDispatchError as error:
         print(
             json.dumps(
-                {"outcome": "DISPATCHER_ERROR", "error": type(error).__name__},
+                {"outcome": "EXECUTION_DISPATCH_ERROR", "error": type(error).__name__},
                 ensure_ascii=False,
             )
         )

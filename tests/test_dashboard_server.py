@@ -506,7 +506,7 @@ class SecretApiTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(
             [section["id"] for section in payload["sections"]],
-            ["system", "ai-configuration", "operator", "planner", "supervisor", "dispatcher", "worker", "runner"],
+            ["system", "ai-configuration", "operator", "planner", "supervisor", "worker", "runner"],
         )
         serialized = json.dumps(payload, ensure_ascii=False).casefold()
         for sensitive_name in ["secret_ref", "deepseek_api_key", "authorization", "hidden_reasoning", "request_body", "response_body"]:

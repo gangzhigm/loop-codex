@@ -9,7 +9,7 @@ from _loop_support import *  # noqa: F403
 class LoopConfigurationTests(LoopTestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "5.1.0")
+        self.assertEqual(config["config_version"], "5.2.0")
         self.assertEqual(config["prompts"]["operator"], "operator/operator.md")
         self.assertEqual(config["prompts"]["planner"], "planner/planner.md")
         self.assertEqual(config["prompts"]["worker"], "worker/worker.md")
@@ -64,6 +64,19 @@ class LoopConfigurationTests(LoopTestCase):
                 "runner_log_path": "data/runtime/planner-runner.log",
             },
         )
+        self.assertEqual(
+            config["planner"]["execution_scheduler"],
+            {
+                "scheduled": True,
+                "interval_minutes": 15,
+                "working_directory": str(BASE_DIR),
+                "log_path": "data/runtime/planner-execution-dispatch.log",
+                "runtime_environment": "self_hosted_agent",
+                "provider_id": "deepseek",
+                "supported_capability_levels": list(CAPABILITY_LEVELS),
+            },
+        )
+        self.assertNotIn("dispatcher", config)
         self.assertEqual(set(config["execution_profiles"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
         self.assertEqual(
             set(config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]),

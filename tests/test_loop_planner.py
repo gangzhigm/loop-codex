@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,12 @@ from planner.main import (
     REPOSITORY_ROOT,
     run_planner_schedule,
     schedule_preflights,
+)
+from planner.execution_dispatch import (
+    EventLogger,
+    ExecutionDispatcher,
+    ExecutionDispatchSettings,
+    select_candidate,
 )
 from planner.task_query import load_draft_tasks, select_draft_tasks
 from runner.planner_runner import receive_planner_task
@@ -169,6 +176,90 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
         self.assertEqual(query_times, [0.0, 300.0])
         self.assertEqual(runtime.heartbeats[0], 0.0)
         self.assertEqual(runtime.heartbeats[-1], 300.0)
+
+    def test_preflight_and_execution_schedules_use_independent_clocks(self) -> None:
+        clock = _Clock()
+        runtime = _Runtime(clock)
+        shutdown_event = threading.Event()
+        preflight_times: list[float] = []
+        execution_times: list[float] = []
+
+        def preflight() -> None:
+            preflight_times.append(clock.current)
+
+        def execute() -> None:
+            execution_times.append(clock.current)
+            if len(execution_times) == 2:
+                shutdown_event.set()
+
+        run_planner_schedule(
+            runtime,
+            12345,
+            shutdown_event,
+            heartbeat_interval_seconds=15,
+            query_interval_seconds=300,
+            query_action=preflight,
+            execution_interval_seconds=900,
+            execution_action=execute,
+            monotonic=clock.monotonic,
+        )
+
+        self.assertEqual(preflight_times, [0.0, 300.0, 600.0, 900.0])
+        self.assertEqual(execution_times, [0.0, 900.0])
+
+    def test_execution_candidate_requires_pending_ready(self) -> None:
+        base = {
+            "runtime_environment": "self_hosted_agent",
+            "provider_id": "deepseek",
+            "capability_level": "L3",
+            "execution_policy": "automatic",
+            "depends_on": [],
+        }
+        tasks = [
+            {**base, "id": "NOT-READY", "status": "PENDING", "preflight_status": "FAILED"},
+            {**base, "id": "READY", "status": "PENDING", "preflight_status": "READY"},
+        ]
+
+        selected = select_candidate(tasks, "deepseek", ("L3",))
+
+        self.assertEqual(selected["id"], "READY")
+
+    def test_execution_dispatch_starts_agent_runner_without_claiming(self) -> None:
+        config = load_initialization_config()
+        settings = replace(
+            ExecutionDispatchSettings.from_config(config),
+            database_path=self.db_path,
+        )
+        task = {
+            "id": "EXECUTION-READY",
+            "status": "PENDING",
+            "preflight_status": "READY",
+            "runtime_environment": "self_hosted_agent",
+            "provider_id": "deepseek",
+            "capability_level": "L3",
+            "execution_policy": "automatic",
+            "depends_on": [],
+        }
+        launched: dict[str, object] = {}
+
+        def launch(command: list[str], cwd: Path) -> int:
+            launched.update(command=command, cwd=cwd)
+            return 24680
+
+        result = ExecutionDispatcher(
+            settings,
+            config,
+            snapshot_reader=lambda _settings, _config: ([task], []),
+            launcher=launch,
+            logger=EventLogger(None),
+        ).run()
+
+        command = launched["command"]
+        self.assertEqual(result["outcome"], "RUNNER_STARTED")
+        self.assertEqual(result["candidate_task_id"], "EXECUTION-READY")
+        self.assertEqual(result["runner_pid"], 24680)
+        self.assertIn(str(REPOSITORY_ROOT / "runner" / "agent_runtime.py"), command)
+        self.assertNotIn("claim", command)
 
     def test_schedule_atomically_queues_only_configured_capacity(self) -> None:
         for task_id in ("QUEUE-A", "QUEUE-B", "QUEUE-C"):

@@ -1,5 +1,5 @@
 {
-  "config_version": "5.1.0",
+  "config_version": "5.2.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -74,6 +74,21 @@
       "heartbeat_interval_seconds": 15,
       "runner_log_path": "data/runtime/planner-runner.log"
     },
+    "execution_scheduler": {
+      "scheduled": true,
+      "interval_minutes": 15,
+      "working_directory": "E:\\code\\local-agent-loop",
+      "log_path": "data/runtime/planner-execution-dispatch.log",
+      "runtime_environment": "self_hosted_agent",
+      "provider_id": "deepseek",
+      "supported_capability_levels": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5"
+      ]
+    },
     "client_boundary": {
       "sandbox": "read-only",
       "approval_policy": "never",
@@ -108,22 +123,6 @@
     "provider_termination_grace_seconds": 5,
     "max_file_bytes": 524288,
     "max_tool_output_chars": 50000
-  },
-  "dispatcher": {
-    "scheduled": true,
-    "interval_minutes": 15,
-    "heartbeat_interval_seconds": 15,
-    "working_directory": "E:\\code\\local-agent-loop",
-    "log_path": "data/runtime/agent-dispatcher.log",
-    "runtime_environment": "self_hosted_agent",
-    "provider_id": "deepseek",
-    "supported_capability_levels": [
-      "L1",
-      "L2",
-      "L3",
-      "L4",
-      "L5"
-    ]
   },
   "secret_management": {
     "backend": "os_keyring",
@@ -190,14 +189,6 @@
         "heartbeat_path": "data/runtime/planner-heartbeat.json",
         "stop_path": "data/runtime/planner-stop-request.json",
         "log_path": "data/runtime/planner-scheduler.log",
-        "heartbeat_timeout_seconds": 60
-      },
-      "dispatcher": {
-        "entry": "dispatcher/main.py",
-        "pid_path": "data/runtime/dispatcher.pid",
-        "heartbeat_path": "data/runtime/dispatcher-heartbeat.json",
-        "stop_path": "data/runtime/dispatcher-stop-request.json",
-        "log_path": "data/runtime/dispatcher-scheduler.log",
         "heartbeat_timeout_seconds": 60
       }
     }

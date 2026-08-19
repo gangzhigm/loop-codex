@@ -1,7 +1,7 @@
 # Control 代码导航
 
 `control/` 根目录只保留跨角色共享的 `loopctl.py`、`loopdb.py` 和本导航。
-Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库根目录对应角色目录；
+Supervisor、Operator、Planner、Worker、Runner 都位于仓库根目录对应角色目录；
 可复用基础模块位于 `control/loop_agent/`。
 
 所有文本输入输出使用 UTF-8。SQLite 写入必须经过 `loopctl.py` 暴露的控制面，
@@ -15,16 +15,15 @@ Supervisor、Operator、Planner、Worker、Dispatcher、Runner 都位于仓库�
 | `loopdb.py` | 导出当前数据库公共 API | SQL 业务实现 |
 | `../operator/secretctl.py` | 系统密钥库的人工管理入口 | 任务数据库 |
 | `../planner/control.py` | Planner 预检领取、heartbeat 和结果发布协议 | Scheduler 周期与 AI 调用 |
-| `../planner/main.py` | Planner 单实例、任务选择和 Runner 交付 | AI 预检与结果写回 |
+| `../planner/main.py` | Planner 单实例、预检排队与执行分发周期 | 任务领取与 AI 执行 |
+| `../planner/execution_dispatch.py` | 只读选择一个 READY 自动任务并启动一次 Runner | 原子 claim 与业务实现 |
 | `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
-| `../dispatcher/agent_dispatcher.py` | 只读选择一个内部 Provider 任务并启动一次 Runner | 原子 claim 与业务实现 |
-| `../dispatcher/main.py` | Dispatcher Scheduler 单实例、heartbeat 与周期调度 | Supervisor 探活 |
 | `../runner/agent_runtime.py` | 内部 Agent 的 claim、heartbeat、Provider 工具循环和 finish | 周期调度 |
 | `../runner/planner_runner.py` | 只读确认 Planner 交付的 task-id | Provider、AI 预检和任务写回 |
-| `../supervisor/main.py` | 按 PID 与 heartbeat 监控并恢复独立 Dashboard 与两个 Scheduler | 任务查询、领取与任务表写入 |
+| `../supervisor/main.py` | 按 PID 与 heartbeat 监控并恢复独立 Dashboard 与 Planner | 任务查询、领取与任务表写入 |
 | `../client/dashboard_server.py` | 独立本机 HTTP 进程、Secret API、静态资源服务、PID 与 heartbeat | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
-| `../common/service_runtime.py` | 四个常驻服务共用的 PID、heartbeat、停止请求和清理契约 | 业务调度与任务状态 |
+| `../common/service_runtime.py` | 三个常驻服务共用的 PID、heartbeat、停止请求和清理契约 | 业务调度与任务状态 |
 
 ## 目录分区
 
@@ -88,7 +87,7 @@ configuration / tasks.normalization / tasks.scopes
                  ↓
 database.schema / database.task_store / database.state / database.validation
                  ↓
-operator / planner / worker / supervisor / dispatcher / runner
+operator / planner / worker / supervisor / runner
                  ↓
 根目录共享入口
 ```
@@ -108,10 +107,10 @@ operator / planner / worker / supervisor / dispatcher / runner
 
 Planner 状态说明：
 
-1. Planner 按配置选择 `DRAFT/UNINSPECTED`，并把每个明确 task-id 交给独立 Runner。
-2. `../runner/planner_runner.py` 只读确认接收并输出回执，不加载 Provider 或调用模型。
-3. 当前交付不领取任务、不写数据库，因此同一草稿可能在后续周期再次交付。
-4. `../planner/control.py` 已实现后续阶段使用的 preflight 状态机，但 Scheduler 和阶段版 Runner 尚未调用。
+1. Planner 预检链按配置选择 `DRAFT/UNINSPECTED`，通过 loopctl 原子转换为 `DRAFT/QUEUED`。
+2. 预检 Runner 只能领取 Planner 已创建的 execution，并把任务推进为 `INSPECTING` 后再发布结果。
+3. Planner 执行链独立选择 `PENDING/READY` 自动任务，每轮最多启动一个内部 Agent Runner。
+4. 内部 Agent Runner 通过 loopctl 原子 claim；Planner 不领取任务，也不直接调用模型。
 
 Worker 无法领取任务：
 
@@ -142,7 +141,7 @@ Supervisor 异常：
 1. `data/runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
 2. `data/runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
 3. `health_run.py` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
-4. Supervisor、Dashboard、Planner 与 Dispatcher 都通过 `common/service_runtime.py` 维护各自的 PID、heartbeat 和停止请求；Supervisor 不读取任务数量，也不拥有其他进程的生命周期。
+4. Supervisor、Dashboard 与 Planner 都通过 `common/service_runtime.py` 维护各自的 PID、heartbeat 和停止请求；Supervisor 不读取任务数量，也不拥有其他进程的生命周期。
 5. 停止 Supervisor 不会停止 Dashboard；Dashboard 异常退出时，运行中的 Supervisor 会重新启动它。
 
 ## 回归测试

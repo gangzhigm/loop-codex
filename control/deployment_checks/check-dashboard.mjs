@@ -26,7 +26,7 @@ assert(!/<script[^>]+src=/i.test(html), "Dashboard 不能依赖外部脚本");
 assert(!/<link[^>]+(?:stylesheet|preload)/i.test(html), "Dashboard 不能依赖外部样式或预加载资源");
 assert(html.includes('const STATE_ENDPOINT = "/api/state"'), "缺少状态 API");
 assert(/fetch\(STATE_ENDPOINT/.test(html), "未从状态 API 读取数据");
-assert(html.includes('const TASK_SCHEMA_VERSION = "3.7.0"'), "Schema 契约不正确");
+assert(html.includes('const TASK_SCHEMA_VERSION = "3.8.0"'), "Schema 契约不正确");
 assert(html.includes("grid-template-columns: repeat(6, minmax(0, 1fr));"), "顶部统计区未按六项布局");
 assert(!html.includes("当前任务"), "顶部统计区仍显示当前任务指标");
 assert(!html.includes("metricTotal"), "已移除的当前任务总数仍被 DOM 或脚本引用");
@@ -39,7 +39,7 @@ assert(!html.includes("DB.V."), "顶部数据库版本文案仍存在");
 assert(html.includes("grid-template-columns: 36px minmax(0, 1fr) auto;"), "桌面头部品牌列未收紧为 LA 标记宽度");
 assert((html.match(/class="runtime-stage"/g) ?? []).length === 3, "运行链路未按三个角色拆成独立行");
 assert((html.match(/class="runtime-connector" aria-hidden="true"/g) ?? []).length === 2, "运行链路缺少角色间纵向连接");
-assert(!html.includes('class="runtime-targets"'), "运行链路仍保留 Planner 与 Dispatcher 双列分叉");
+assert(!html.includes('class="runtime-targets"'), "运行链路不应保留旧双列分叉");
 assert((html.match(/<button class="metric metric-filter"[^>]+data-filter="(?:draft|review|pending|active|closed|archived)"/g) ?? []).length === 6, "顶部统计入口数量不完整");
 assert((html.match(/class="metric-help"/g) ?? []).length === 6, "顶部统计项的状态说明图标数量不完整");
 assert((html.match(/class="metric-tooltip" role="tooltip"/g) ?? []).length === 6, "顶部统计项的状态说明浮层数量不完整");
@@ -73,7 +73,7 @@ for (const label of ["草稿", "需确认", "待执行", "执行中", "已结束
 }
 assert(html.includes('DRAFT: "草稿"'), "缺少 DRAFT 状态");
 assert(html.includes('NEEDS_REVIEW: "需确认"'), "缺少 NEEDS_REVIEW 状态");
-assert(html.includes('const PREFLIGHT_LABELS = { UNINSPECTED: "待静态检查", INSPECTING: "静态检查中"'), "缺少 Planner 预检阶段标签");
+assert(html.includes('const PREFLIGHT_LABELS = { UNINSPECTED: "待静态检查", QUEUED: "等待静态检查", INSPECTING: "静态检查中"'), "缺少 Planner 预检阶段标签");
 assert(html.includes('currentFilter === "draft" && task.status !== "DRAFT"'), "草稿筛选没有精确匹配 DRAFT");
 assert(html.includes('const REVIEW_STATUSES = new Set(["NEEDS_REVIEW", "WAITING_HUMAN", "STALLED"])'), "需确认状态集合不完整");
 assert(html.includes('const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"])'), "执行中状态集合不应包含等待人工或已卡顿任务");
