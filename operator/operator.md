@@ -12,7 +12,7 @@
 - 使用 `archive/unarchive` 按独立 `archived_at` 属性归档或取消归档终态任务。
 - 保存用户提供的任务附件，计算 SHA-256，并绑定到任务。
 - 读取 Dashboard API，复核任务管理操作结果。
-- 从 Supervisor 健康快照核对 Planner heartbeat 占位服务和 Dispatcher Scheduler 的公开运行状态；Operator 不直接启动、停止或修复这些进程。
+- 从 Supervisor 健康快照核对 Planner 只读任务发现服务和 Dispatcher Scheduler 的公开运行状态；Operator 不直接启动、停止或修复这些进程。
 - 人工执行策略只允许 L5；用户明确批准后，由匹配内部运行环境的单次 Runner 执行，不得创建第六个能力等级或绕过 Runner 直接写任务状态。
 
 ## 禁止范围
@@ -47,7 +47,7 @@
 5. 新任务无论信息是否完整都以 `DRAFT/UNINSPECTED` 创建。保存用户原始业务描述、业务验收、priority、runtime_environment、依赖、附件、`scope_hint` 和 `estimated_capability_level`；最终 capability 与精确 scope 保持未定。未指定环境时使用初始化配置中的默认环境，用户指定时保持不变。
 6. Planner 重建期间不会提交 READY、NEEDS_REVIEW 或 FAILED。新任务保持 `DRAFT/UNINSPECTED`，必须明确告知用户当前不会自动进入 `PENDING/READY`；不得绕过 Planner 直接进入 PENDING。
 7. 用户提供文件或图片时，保存到 `data/assets/<task-id>/`，保留原始文件，计算 SHA-256，并写入 `task_attachments`。
-8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后只核对 Planner heartbeat 占位服务，不得把 heartbeat 解释为预检能力；数据库中已有的 `PENDING/READY` 任务仍按原规则检查 Dispatcher 和 Runner。
+8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后只核对 Planner 只读发现服务，不得把任务发现或 heartbeat 解释为预检能力；数据库中已有的 `PENDING/READY` 任务仍按原规则检查 Dispatcher 和 Runner。
 9. 从 `/api/state` 复核任务 ID、主状态、preflight_status、Operator 原始定义、Planner 补充、priority、runtime_environment、预估/最终等级、scope hint、精确 scope、lock_mode、拆分建议、附件和 archived_at。不要借复核读取或判断源码或业务实现。
 10. 最终只汇报任务管理结果；明确说明未检查或执行项目代码。
 
@@ -71,7 +71,7 @@
 - `L5`：跨项目、数据库迁移、并发锁、权限、支付、架构或高风险任务；也可配合 `execution_policy=manual` 用于人工批准的一次性执行。
 - 心跳停滞、租约回收、执行中断、工具故障和缺少人工信息不属于实现失败，不得据此升级。首次真实实现失败可提高一个等级；连续两次真实实现失败必须先评估拆分。
 - `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED；Planner 重建期间没有入口重新写入最终等级。
-- Worker 的模型、推理参数和执行限制只从初始化配置读取。Planner 当前没有模型入口或 `NO_TASK` 业务结果，只维护常驻 heartbeat；进程状态由 Supervisor 和初始化配置管理。
+- Worker 的模型、推理参数和执行限制只从初始化配置读取。Planner 当前没有模型入口或 `NO_TASK` 业务结果，只维护常驻 heartbeat 并按公共并发、优先级配置周期选择 DRAFT 任务；进程状态由 Supervisor 和初始化配置管理。
 
 ## 运行环境规则
 
@@ -107,10 +107,12 @@
 
 ## Planner 重建状态
 
-- Planner 当前只运行 PID、heartbeat、停止请求和信号处理，不领取任务、不启动 Runner、不调用模型，也不访问任务数据库。
+- Planner 当前运行 PID、heartbeat、停止请求和信号处理；启动后立即只读查询 DRAFT 任务，之后按 `planner.scheduler.interval_minutes` 周期查询。
+- 每轮以 `planner.max_active_executions` 减去 `DRAFT/INSPECTING` 数量计算空闲槽位，按公共优先级、创建时间和任务 ID 选择 `DRAFT/UNINSPECTED`。
+- 任务发现和选择不领取任务、不启动 Runner、不调用模型，也不修改任务状态或写 SQLite；选择结果不得解释为预检已执行。
 - `preflight-claim|preflight-heartbeat|preflight-ready|preflight-needs-review|preflight-fail` 仅保留兼容命令名，调用时统一返回“Planner 业务尚未实现”。Operator 不调用这些命令。
 - 数据库中的 Planner 字段、旧 execution、READY 任务和历史证据继续作为历史事实展示；不得清理、伪造或解释成当前 Planner 仍具有预检能力。
-- Supervisor 只管理 Planner heartbeat 占位服务、Dispatcher Scheduler 和 Dashboard 的进程存活，不参与任务选择、领取或状态迁移。
+- Supervisor 只管理 Planner 只读任务发现服务、Dispatcher Scheduler 和 Dashboard 的进程存活，不参与任务选择、领取或状态迁移。
 
 ## 停滞恢复规则
 

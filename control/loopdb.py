@@ -108,11 +108,12 @@ from loop_agent.database.state import (
 
 # 八、任务存储与统一任务投影。
 # insert_task/set_task_dependencies/replace_ordered_text 由外层事务包围；
-# task_dict/all_tasks 负责把主表和子表拼成 Dashboard、Planner、Worker 共用结构。
+# task_dict/list_tasks/all_tasks 负责把主表和子表拼成跨角色共用结构。
 from loop_agent.database.task_store import (
     all_tasks,
     dependency_cycle_path,
     insert_task,
+    list_tasks,
     replace_ordered_text,
     scope_queue_position,
     set_task_dependencies,

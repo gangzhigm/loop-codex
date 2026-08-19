@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Collection
 from typing import Any, Iterable
 
 from loop_agent.configuration import (
@@ -698,10 +699,28 @@ def task_dict(
     }
 
 
-def all_tasks(database: sqlite3.Connection) -> list[dict[str, Any]]:
-    """按稳定的队列展示顺序返回全部任务。"""
-    rows = database.execute(
-        "SELECT * FROM tasks ORDER BY CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 "
+def list_tasks(
+    database: sqlite3.Connection,
+    *,
+    statuses: Collection[str] | None = None,
+) -> list[dict[str, Any]]:
+    """按可选主状态过滤，并以稳定的队列展示顺序返回完整任务投影。"""
+    query = "SELECT * FROM tasks"
+    parameters: tuple[str, ...] = ()
+    if statuses is not None:
+        parameters = tuple(sorted(set(statuses)))
+        if not parameters:
+            return []
+        placeholders = ",".join("?" for _ in parameters)
+        query += f" WHERE status IN ({placeholders})"
+    query += (
+        " ORDER BY CASE priority WHEN 'blocker' THEN 0 WHEN 'critical' THEN 1 "
         "WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at, id"
-    ).fetchall()
+    )
+    rows = database.execute(query, parameters).fetchall()
     return [task_dict(database, row) for row in rows]
+
+
+def all_tasks(database: sqlite3.Connection) -> list[dict[str, Any]]:
+    """兼容现有调用方，返回未按状态过滤的完整任务投影。"""
+    return list_tasks(database)

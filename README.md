@@ -2,7 +2,8 @@
 
 Local Agent Loop 是 `E:\code` 下的本地多项目任务控制中心。Operator 管理任务，
 Worker 在取得 scope 锁后执行，Dashboard 展示状态并提供受控操作。Planner 当前是等待
-重新实现的 heartbeat-only 占位服务，不处理任务。
+重新实现的只读任务发现服务：启动时立即读取 DRAFT 任务，此后按配置周期和公共并发、
+优先级限制进行选择，但尚不领取或预检任务。
 系统仅支持 Windows，进程管理、计划任务和系统密钥存储均直接使用 Windows 能力。
 
 > 本文只供人工快速了解和排障，不是 AI 角色的必读提示词，也不是第二份配置源。
@@ -26,7 +27,7 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 ## 工作流程
 
 1. Operator 通过 `loopctl.py` 创建或更新任务；新任务进入 `DRAFT/UNINSPECTED`。
-2. 新任务保持 `DRAFT/UNINSPECTED`；Planner 重新实现前不会自动形成执行契约。
+2. Planner 周期发现并只读选择 `DRAFT` 任务；预检协议重新实现前不会自动形成执行契约。
 3. 数据库中已有的 `PENDING/READY` 任务仍可由匹配运行环境和能力等级的 Worker 领取。
 4. Worker 持有有效 scope 锁后实现并验证，最终写回 `SUCCEEDED`、`FAILED` 或 `WAITING_HUMAN`。
 5. 人工复核成功任务后执行 `confirm`；终态任务可独立归档。
@@ -38,7 +39,7 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 | 信息 | 权威来源 |
 | --- | --- |
 | 跨角色安全边界和角色入口 | `AGENTS.md` |
-| Operator、Planner 占位说明、通用 Worker 协议 | `operator/operator.md`、`planner/planner.md`、`worker/worker.md` |
+| Operator、Planner 说明、通用 Worker 协议 | `operator/operator.md`、`planner/planner.md`、`worker/worker.md` |
 | 内部 Agent Worker 协议 | `worker/worker.md`、`runner/agent_runtime.py` |
 | 运行环境、模型、周期、并发和部署参数 | `config/initialization.json` |
 | 任务、预检、execution、依赖和 scope 锁事实 | `data/loop-agent.sqlite3` |
@@ -58,7 +59,7 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | 任务管理和状态迁移 | `control/loopctl.py` |
 | 数据库公共 API | `control/loopdb.py` |
 | 通用 Worker 角色协议 | `worker/worker.md` |
-| Planner heartbeat 占位服务 | `planner/main.py serve` |
+| Planner 只读任务发现服务 | `planner/main.py serve` |
 | 内部 Agent 常驻调度 | `dispatcher/main.py serve` |
 | 内部 Agent 单轮调度 | `dispatcher/agent_dispatcher.py` |
 | 内部 Agent 单任务运行 | `runner/agent_runtime.py` |
@@ -103,7 +104,7 @@ py -3 .\control\loopctl.py validate
 | --- | --- |
 | `AGENTS.md` | 跨角色稳定边界 |
 | `operator/` | Operator 提示词、任务控制状态机和密钥管理入口 |
-| `planner/` | Planner heartbeat 占位服务和兼容控制入口 |
+| `planner/` | Planner 只读任务发现服务和兼容控制入口 |
 | `worker/` | Worker 提示词与任务执行状态机 |
 | `dispatcher/` | 内部 Agent 常驻调度与单轮调度实现 |
 | `runner/` | Worker 的一次性内部 Agent Runner 入口 |

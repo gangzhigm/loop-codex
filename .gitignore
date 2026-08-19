@@ -8,3 +8,7 @@ data/assets/*
 data/backups/*
 !data/backups/README.md
 data/runtime/
+
+# SQLite WAL 模式的可重建运行文件；权威任务事实仍是主 sqlite3 文件。
+data/*.sqlite3-wal
+data/*.sqlite3-shm

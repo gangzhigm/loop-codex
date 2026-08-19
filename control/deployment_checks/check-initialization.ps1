@@ -4,7 +4,7 @@ param(
 )
 
 <#
-部署校验：只读核对当前真实初始化配置、Planner heartbeat 空壳和内部执行环境。
+部署校验：只读核对当前真实初始化配置、Planner 只读任务发现服务和内部执行环境。
 失败时从输出的第一条“初始化检查失败”开始处理，后续错误可能只是同一路径或配置根因。
 本脚本不创建数据库、不注册计划任务，也不启动 Scheduler 或 Runner。
 #>
@@ -78,8 +78,8 @@ Assert-Condition (
 ) 'Planner 写回命令为精确允许列表'
 
 $plannerScheduler = $config.planner.scheduler
-Assert-Condition ($plannerScheduler.scheduled -is [bool]) 'Planner heartbeat 服务开关为布尔值'
-Assert-Condition ($plannerScheduler.interval_minutes -ge 1) 'Planner 旧调度周期配置为后续开发保留'
+Assert-Condition ($plannerScheduler.scheduled -is [bool]) 'Planner Scheduler 开关为布尔值'
+Assert-Condition ($plannerScheduler.interval_minutes -ge 1) 'Planner 任务发现周期有效'
 Assert-Condition ($plannerScheduler.heartbeat_interval_seconds -ge 1) 'Planner heartbeat 周期有效'
 Assert-Condition ($config.planner.default_runtime_environment -eq 'self_hosted_agent') 'Planner 默认目标为内部 Agent 环境'
 Assert-Condition ($config.planner.provider_id -eq 'deepseek') 'Planner 显式登记内部 Provider'
@@ -97,10 +97,16 @@ $workerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.worker)
 $loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'control\loopctl.py')
 $plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'planner\control.py')
 $plannerMainSource = Read-Utf8Strict -Path (Join-Path $root 'planner\main.py')
+$plannerQuerySource = Read-Utf8Strict -Path (Join-Path $root 'planner\task_query.py')
 $runnerRegistrySource = Read-Utf8Strict -Path (Join-Path $root 'common\runners.py')
 Assert-Condition ($plannerPrompt -match '业务正在重新设计') 'Planner 提示词声明业务正在重新设计'
 Assert-Condition ($plannerPrompt -match '不领取') 'Planner 提示词声明不领取任务'
 Assert-Condition ($plannerMainSource -match 'runtime\.write_heartbeat') 'Planner 主进程发布 heartbeat'
+Assert-Condition ($plannerMainSource -match 'load_draft_tasks') 'Planner 主进程只读发现 DRAFT 任务'
+Assert-Condition ($plannerMainSource -match 'select_draft_tasks') 'Planner 主进程按空闲并发槽选择 DRAFT 任务'
+Assert-Condition ($plannerMainSource -match 'interval_minutes') 'Planner 主进程从初始化配置读取发现周期'
+Assert-Condition ($plannerQuerySource -match 'list_tasks') 'Planner 查询复用公共状态过滤和完整任务投影'
+Assert-Condition ($plannerQuerySource -notmatch 'database\.execute') 'Planner 查询模块不直接执行 SQL'
 Assert-Condition ($plannerMainSource -notmatch 'start_planner_runner') 'Planner 主进程不包含 Runner 启动逻辑'
 Assert-Condition ($plannerMainSource -notmatch 'planner_runner\.py') 'Planner 主进程不引用旧 Runner'
 Assert-Condition (-not (Test-Path -LiteralPath (Join-Path $root 'runner\planner_runner.py'))) '旧 Planner Runner 已删除'
@@ -123,7 +129,7 @@ Assert-Condition ($config.self_hosted_agent.provider_factories.deepseek -eq 'loo
     checks = $script:Checks.Count
     runtime_environment = 'self_hosted_agent'
     operator_actions = @(
-        '复核 Planner heartbeat 占位服务的启停和 heartbeat 边界。',
+        '复核 Planner 只读任务发现服务的启停、周期和 heartbeat 边界。',
         '逐条复核内部运行环境 L1-L5 的模型、reasoning 和 attempt 参数。',
         '确认旧 Planner 命令只返回统一禁用错误且不访问 SQLite。',
         '确认旧 Planner Runner 文件和动态 Runner 登记均已移除。'

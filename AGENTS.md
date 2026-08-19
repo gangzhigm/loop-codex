@@ -28,7 +28,7 @@
 先确认当前入口赋予的角色，再完整遵循对应权威提示词；不得把一个角色的权限扩展到另一个角色。
 
 - 人工任务管理 Operator：`operator/operator.md`。只管理任务，不实现任务业务内容或管理外部客户端自动化。
-- Planner 占位服务：`planner/planner.md`。当前只维护 PID、heartbeat 和正常停止，不执行预检业务。
+- Planner 只读任务发现服务：`planner/planner.md`。当前维护 PID、heartbeat 和正常停止，按公共并发及优先级配置周期读取并选择 DRAFT 任务，但不执行预检或状态变更。
 - 通用单任务 Worker 协议：`worker/worker.md`。每次只领取并处理一个与入口身份匹配的 READY 任务。
 - Self-hosted Agent Worker：宿主循环、队列领取、heartbeat、工具边界和 finish 由 `runner/agent_runtime.py` 负责，Provider 只实现中立模型协议适配。
 - 健康检查：Windows 任务计划程序运行 `supervisor/run.ps1`，检查并在必要时恢复 `supervisor/main.py serve`；不领取任务。
