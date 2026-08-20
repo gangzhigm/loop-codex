@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from _bootstrap import REPOSITORY_ROOT
 
-from runner import agent_runtime
+from worker import agent_runtime
 from loop_agent.runtime import sandbox as runtime_sandbox
 from loop_agent.runtime.agent import SingleTaskAgent
 from loop_agent.runtime.controller import SubprocessLoopController

@@ -187,7 +187,7 @@ class LoopLifecycleTests(LoopTestCase):
 
     def test_archive_rejects_nonterminal_statuses(self) -> None:
         statuses = [
-            "DRAFT", "NEEDS_REVIEW", "PENDING", "RUNNING", "WAITING_CONFLICT",
+            "DRAFT", "NEEDS_REVIEW", "PENDING", "QUEUED", "RUNNING", "WAITING_CONFLICT",
             "WAITING_HUMAN", "SUCCEEDED",
         ]
         for index, status in enumerate(statuses):

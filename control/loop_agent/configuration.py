@@ -90,8 +90,10 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     deepseek = config.get("deepseek") or {}
     priority_policy = config.get("priority_policy") or {}
     dashboard = config.get("dashboard") or {}
-    planner_scheduler = planner.get("scheduler") or {}
-    planner_execution_scheduler = planner.get("execution_scheduler") or {}
+    scheduler = config.get("scheduler") or {}
+    scheduler_preflight = scheduler.get("preflight") or {}
+    scheduler_execution = scheduler.get("execution") or {}
+    runner = config.get("runner") or {}
     health = config.get("health") or {}
     supervisor = config.get("supervisor") or {}
     supervisor_components = supervisor.get("components") or {}
@@ -106,12 +108,19 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
             "stop_path": "data/runtime/dashboard-server-stop-request.json",
             "log_path": "data/runtime/dashboard-server.log",
         },
-        "planner": {
-            "entry": "planner/main.py",
-            "pid_path": "data/runtime/planner.pid",
-            "heartbeat_path": "data/runtime/planner-heartbeat.json",
-            "stop_path": "data/runtime/planner-stop-request.json",
-            "log_path": "data/runtime/planner-scheduler.log",
+        "scheduler": {
+            "entry": "scheduler/main.py",
+            "pid_path": "data/runtime/scheduler.pid",
+            "heartbeat_path": "data/runtime/scheduler-heartbeat.json",
+            "stop_path": "data/runtime/scheduler-stop-request.json",
+            "log_path": "data/runtime/scheduler.log",
+        },
+        "runner": {
+            "entry": "runner/agent_runtime.py",
+            "pid_path": "data/runtime/runner.pid",
+            "heartbeat_path": "data/runtime/runner-heartbeat.json",
+            "stop_path": "data/runtime/runner-stop-request.json",
+            "log_path": "data/runtime/runner.log",
         },
     }
     valid_supervisor_components = (
@@ -174,7 +183,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
     )
     valid = (
-        config.get("config_version") == "5.2.0"
+        config.get("config_version") == "5.4.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -182,7 +191,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and database.get("path") == "data/loop-agent.sqlite3"
         and database.get("schema_version") == SCHEMA_VERSION
         and prompts.get("operator") == "operator/operator.md"
-        and prompts.get("planner") == "planner/planner.md"
+        and prompts.get("planner") == "scheduler/planner.md"
         and prompts.get("worker") == "worker/worker.md"
         and (BASE_DIR / prompts["operator"]).is_file()
         and (BASE_DIR / prompts["planner"]).is_file()
@@ -221,29 +230,30 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner["lease_seconds"] >= 60
         and isinstance(planner.get("attempt_timeout_seconds"), int)
         and planner["attempt_timeout_seconds"] >= planner["lease_seconds"]
-        and isinstance(planner_scheduler.get("scheduled"), bool)
-        and isinstance(planner_scheduler.get("interval_minutes"), int)
-        and planner_scheduler["interval_minutes"] >= 1
-        and isinstance(planner_scheduler.get("heartbeat_interval_seconds"), int)
-        and planner_scheduler["heartbeat_interval_seconds"] >= 1
-        and planner_scheduler.get("runner_log_path") == "data/runtime/planner-runner.log"
-        and (BASE_DIR / planner_scheduler["runner_log_path"]).resolve().is_relative_to(BASE_DIR)
-        and isinstance(planner_execution_scheduler.get("scheduled"), bool)
-        and isinstance(planner_execution_scheduler.get("interval_minutes"), int)
-        and planner_execution_scheduler["interval_minutes"] >= 1
-        and planner_execution_scheduler.get("working_directory") == str(BASE_DIR)
-        and planner_execution_scheduler.get("log_path")
-        == "data/runtime/planner-execution-dispatch.log"
-        and (BASE_DIR / planner_execution_scheduler["log_path"])
+        and isinstance(scheduler.get("heartbeat_interval_seconds"), int)
+        and scheduler["heartbeat_interval_seconds"] >= 1
+        and isinstance(scheduler_preflight.get("scheduled"), bool)
+        and isinstance(scheduler_preflight.get("interval_minutes"), int)
+        and scheduler_preflight["interval_minutes"] >= 1
+        and isinstance(scheduler_execution.get("scheduled"), bool)
+        and isinstance(scheduler_execution.get("interval_minutes"), int)
+        and scheduler_execution["interval_minutes"] >= 1
+        and scheduler_execution.get("log_path")
+        == "data/runtime/scheduler-execution-dispatch.log"
+        and (BASE_DIR / scheduler_execution["log_path"])
         .resolve()
         .is_relative_to(BASE_DIR)
-        and planner_execution_scheduler.get("runtime_environment") == "self_hosted_agent"
-        and planner_execution_scheduler.get("provider_id") in providers
+        and scheduler_execution.get("runtime_environment") == "self_hosted_agent"
+        and scheduler_execution.get("provider_id") in providers
         and isinstance(
-            planner_execution_scheduler.get("supported_capability_levels"), list
+            scheduler_execution.get("supported_capability_levels"), list
         )
-        and set(planner_execution_scheduler["supported_capability_levels"])
+        and set(scheduler_execution["supported_capability_levels"])
         == set(CAPABILITY_LEVELS)
+        and isinstance(runner.get("heartbeat_interval_seconds"), int)
+        and runner["heartbeat_interval_seconds"] >= 1
+        and isinstance(runner.get("queue_poll_interval_seconds"), int)
+        and runner["queue_poll_interval_seconds"] >= 1
         and planner_boundary.get("sandbox") == "read-only"
         and planner_boundary.get("approval_policy") == "never"
         and planner_boundary.get("network_access") is False
@@ -312,15 +322,13 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and supervisor["component_start_timeout_seconds"] >= 1
         and isinstance(supervisor.get("component_stop_timeout_seconds"), (int, float))
         and supervisor["component_stop_timeout_seconds"] >= 1
-        and isinstance(supervisor.get("runner_heartbeat_timeout_seconds"), (int, float))
-        and supervisor["runner_heartbeat_timeout_seconds"] >= max(
-            execution["heartbeat_interval_seconds"], planner["heartbeat_interval_seconds"]
-        )
         and valid_supervisor_components
         and supervisor_components["dashboard"]["heartbeat_timeout_seconds"]
         >= dashboard["heartbeat_interval_seconds"]
-        and supervisor_components["planner"]["heartbeat_timeout_seconds"]
-        >= planner_scheduler["heartbeat_interval_seconds"]
+        and supervisor_components["scheduler"]["heartbeat_timeout_seconds"]
+        >= scheduler["heartbeat_interval_seconds"]
+        and supervisor_components["runner"]["heartbeat_timeout_seconds"]
+        >= runner["heartbeat_interval_seconds"]
     )
     if not valid:
         raise LoopError(f"初始化配置字段或取值无效: {config_path}")

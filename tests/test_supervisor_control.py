@@ -44,24 +44,29 @@ class SupervisorControlTests(unittest.TestCase):
         self.assertEqual(serve.call_args.args[0].monitor_interval_seconds, 5)
 
     def test_component_specs_read_service_switches(self) -> None:
-        dashboard, planner = component_specs(load_initialization_config())
+        dashboard, scheduler, runner = component_specs(load_initialization_config())
         self.assertTrue(dashboard.enabled)
-        self.assertTrue(planner.enabled)
+        self.assertTrue(scheduler.enabled)
         self.assertEqual(dashboard.entry, REPOSITORY_ROOT / "client" / "dashboard_server.py")
         self.assertEqual(dashboard.arguments, ())
-        self.assertEqual(planner.entry, REPOSITORY_ROOT / "planner" / "main.py")
-        self.assertEqual(planner.arguments, ("serve",))
+        self.assertEqual(scheduler.entry, REPOSITORY_ROOT / "scheduler" / "main.py")
+        self.assertEqual(scheduler.arguments, ("serve",))
+        self.assertTrue(runner.enabled)
+        self.assertEqual(runner.entry, REPOSITORY_ROOT / "runner" / "agent_runtime.py")
+        self.assertEqual(runner.arguments, ("serve",))
 
-    def test_planner_runs_when_either_scheduler_is_enabled(self) -> None:
+    def test_scheduler_runs_when_either_lane_is_enabled(self) -> None:
         config = copy.deepcopy(load_initialization_config())
-        config["planner"]["scheduler"]["scheduled"] = False
-        dashboard, planner = component_specs(config)
+        config["scheduler"]["preflight"]["scheduled"] = False
+        dashboard, scheduler, runner = component_specs(config)
         self.assertTrue(dashboard.enabled)
-        self.assertTrue(planner.enabled)
+        self.assertTrue(scheduler.enabled)
+        self.assertTrue(runner.enabled)
 
-        config["planner"]["execution_scheduler"]["scheduled"] = False
-        _dashboard, planner = component_specs(config)
-        self.assertFalse(planner.enabled)
+        config["scheduler"]["execution"]["scheduled"] = False
+        _dashboard, scheduler, runner = component_specs(config)
+        self.assertFalse(scheduler.enabled)
+        self.assertTrue(runner.enabled)
 
     def test_service_runtime_owns_pid_heartbeat_stop_and_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -125,6 +130,15 @@ class SupervisorControlTests(unittest.TestCase):
                 duplicate.claim(54321, "duplicate")
 
             self.assertTrue(runtime.stop_requested(12345))
+
+    def test_runner_observes_queues_without_starting_worker_business(self) -> None:
+        runner = (REPOSITORY_ROOT / "runner" / "agent_runtime.py").read_text(encoding="utf-8")
+        worker = (REPOSITORY_ROOT / "worker" / "agent_runtime.py").read_text(encoding="utf-8")
+        for business_symbol in ("SingleTaskAgent", "SubprocessLoopController", "load_provider"):
+            self.assertNotIn(business_symbol, runner)
+            self.assertIn(business_symbol, worker)
+        self.assertNotIn("subprocess.Popen", runner)
+        self.assertIn('"launch_enabled": False', runner)
 
 
 if __name__ == "__main__":

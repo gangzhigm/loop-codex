@@ -9,6 +9,7 @@ import copy
 import http.client
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -24,6 +25,7 @@ from _bootstrap import REPOSITORY_ROOT
 
 from client.dashboard_server import (
     DashboardActionError,
+    DashboardHandler,
     DashboardServer,
     archive_dashboard_task,
     operations_config_payload,
@@ -146,7 +148,7 @@ class AttachmentImageTests(unittest.TestCase):
             for task in payload["tasks"]
         }
 
-        self.assertEqual(payload["schema_version"], "3.8.0")
+        self.assertEqual(payload["schema_version"], "3.9.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
             {"self_hosted_agent": 8},
@@ -213,13 +215,13 @@ class AttachmentImageTests(unittest.TestCase):
             tasks["PENDING-HIGH"]["blocking_scopes"][0]["blocker_lock_status"], "ACTIVE"
         )
 
-    def test_served_dashboard_accepts_schema_3_8(self) -> None:
-        html = (REPOSITORY_ROOT / "client" / "dashboard.html").read_text(
+    def test_frontend_contract_accepts_schema_3_8(self) -> None:
+        source = (REPOSITORY_ROOT / "client" / "frontend" / "src" / "types.ts").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn('const TASK_SCHEMA_VERSION = "3.8.0";', html)
-        self.assertNotIn('const TASK_SCHEMA_VERSION = "3.7.0";', html)
+        self.assertIn('export const TASK_SCHEMA_VERSION = "3.9.0";', source)
+        self.assertNotIn('TASK_SCHEMA_VERSION = "3.7.0";', source)
 
     def test_unregistered_path_is_rejected(self) -> None:
         self.add_task("IMAGE-TASK", "data/assets/IMAGE-TASK/reference.png")
@@ -417,7 +419,7 @@ class SecretApiTests(unittest.TestCase):
         self.server = DashboardServer(
             ("127.0.0.1", 0),
             self.db_path,
-            REPOSITORY_ROOT / "client" / "dashboard.html",
+            REPOSITORY_ROOT / "client" / "dist" / "index.html",
             self.config,
             runtime_config_path=self.config_path,
             secret_store=self.store,
@@ -476,6 +478,15 @@ class SecretApiTests(unittest.TestCase):
         payload.update(values)
         return payload
 
+    @staticmethod
+    def service_mutation(service: str, action: str, confirmation: str) -> dict[str, object]:
+        return {
+            "service": service,
+            "action": action,
+            "request_id": str(uuid4()),
+            "confirmation": confirmation,
+        }
+
     def csrf_token(self) -> str:
         status, headers, _payload = self.request("GET")
         self.assertEqual(status, 200)
@@ -506,7 +517,7 @@ class SecretApiTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(
             [section["id"] for section in payload["sections"]],
-            ["system", "ai-configuration", "operator", "planner", "supervisor", "worker", "runner"],
+            ["system", "ai-configuration", "operator", "planner", "scheduler", "supervisor", "worker", "runner"],
         )
         serialized = json.dumps(payload, ensure_ascii=False).casefold()
         for sensitive_name in ["secret_ref", "deepseek_api_key", "authorization", "hidden_reasoning", "request_body", "response_body"]:
@@ -514,6 +525,123 @@ class SecretApiTests(unittest.TestCase):
         secret_item = next(item for section in payload["sections"] if section["id"] == "ai-configuration" for item in section["items"] if item["key"] == "provider-status")
         provider = secret_item["value"][0]
         self.assertEqual(set(provider), {"provider_id", "configured", "backend", "status", "last_validated_at", "validation_scope", "persistent", "mutable", "repair"})
+
+    def test_react_dashboard_and_local_build_assets_are_available(self) -> None:
+        status, headers, body = self.raw_request("/")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers["Content-Type"])
+        html = body.decode("utf-8")
+        self.assertIn('<div id="root"></div>', html)
+        asset_paths = [
+            match.group(1)
+            for match in re.finditer(r'["\'](/assets/[^"\']+)["\']', html)
+        ]
+        self.assertGreaterEqual(len(asset_paths), 2)
+        for asset_path in asset_paths:
+            asset_status, asset_headers, asset_body = self.raw_request(asset_path)
+            self.assertEqual(asset_status, 200)
+            self.assertIn(
+                asset_headers["Content-Type"],
+                {"application/javascript", "text/javascript", "text/css"},
+            )
+            self.assertTrue(asset_body)
+
+        legacy_status, _legacy_headers, legacy_body = self.raw_request("/dashboard.html")
+        self.assertEqual(legacy_status, 404)
+        self.assertEqual(json.loads(legacy_body)["error"], "not found")
+
+    def test_frontend_asset_route_rejects_unsafe_or_unknown_paths(self) -> None:
+        for path in ("/assets/../index.html", "/assets/missing.js", "/assets/index.exe"):
+            status, _headers, body = self.raw_request(path)
+            self.assertEqual(status, 404)
+            self.assertEqual(json.loads(body)["error"], "not found")
+
+    def test_state_exposes_separate_scheduler_chain_automation_flags(self) -> None:
+        status, _headers, payload = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            payload["scheduler_control"],
+            {
+                "planner_automation": self.config["scheduler"]["preflight"]["scheduled"],
+                "dispatcher_automation": self.config["scheduler"]["execution"]["scheduled"],
+            },
+        )
+
+    def test_service_actions_support_restart_and_reject_incorrect_confirmation(self) -> None:
+        state = {"supervisor": True, "scheduler": True}
+        with (
+            patch("client.dashboard_server.service_control_state", return_value=state),
+            patch("client.dashboard_server.set_service_enabled", return_value=state) as set_enabled,
+            patch.object(DashboardHandler, "_start_supervisor", return_value={"component": "supervisor", "status": "RESTARTED"}) as start_supervisor,
+            patch.object(DashboardHandler, "_ensure_scheduler", return_value={"component": "scheduler", "status": "RESTARTED"}) as ensure_scheduler,
+        ):
+            status, _headers, payload = self.request(
+                "POST",
+                "/api/service-action",
+                payload=self.service_mutation("supervisor", "restart", "RESTART"),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["service"]["status"], "RESTARTED")
+            start_supervisor.assert_called_once_with(self.config, restart=True)
+
+            status, _headers, payload = self.request(
+                "POST",
+                "/api/service-action",
+                payload=self.service_mutation("scheduler", "restart", "RESTART"),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["service"]["status"], "RESTARTED")
+            ensure_scheduler.assert_called_once_with(self.config, restart=True)
+            self.assertEqual(set_enabled.call_count, 2)
+
+        status, _headers, payload = self.request(
+            "POST",
+            "/api/service-action",
+            payload=self.service_mutation("planner", "trigger", "TRIGGER"),
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("明确确认", payload["error"])
+
+    def test_scheduler_chain_actions_persist_automation_and_run_once(self) -> None:
+        state = {"supervisor": True, "scheduler": True}
+        with (
+            patch("client.dashboard_server.service_control_state", return_value=state),
+            patch.object(DashboardHandler, "_ensure_scheduler", return_value={"component": "scheduler", "status": "RESTARTED"}) as ensure_scheduler,
+        ):
+            status, _headers, payload = self.request(
+                "POST",
+                "/api/service-action",
+                payload=self.service_mutation("planner", "disable", "DISABLE_AUTOMATION"),
+            )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["scheduler_control"]["planner_automation"])
+        self.assertTrue(payload["scheduler_control"]["dispatcher_automation"])
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertFalse(saved["scheduler"]["preflight"]["scheduled"])
+        ensure_scheduler.assert_called_once()
+
+        with (
+            patch("client.dashboard_server.service_control_state", return_value=state),
+            patch("client.dashboard_server.schedule_preflights", return_value={"event": "planner.once", "queued": 2}) as preflight,
+            patch("client.dashboard_server.dispatch_ready_tasks", return_value={"event": "dispatcher.once", "started": 1}) as dispatch,
+        ):
+            status, _headers, payload = self.request(
+                "POST",
+                "/api/service-action",
+                payload=self.service_mutation("planner", "trigger", "TRIGGER_ONCE"),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["service"]["event"], "planner.once")
+            preflight.assert_called_once_with(self.db_path, self.config_path)
+
+            status, _headers, payload = self.request(
+                "POST",
+                "/api/service-action",
+                payload=self.service_mutation("dispatcher", "trigger", "TRIGGER_ONCE"),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["service"]["event"], "dispatcher.once")
+            dispatch.assert_called_once()
 
     def test_operations_projection_never_forwards_runtime_configuration(self) -> None:
         payload = operations_config_payload(
@@ -780,7 +908,7 @@ class SecretApiTests(unittest.TestCase):
             DashboardServer(
                 ("0.0.0.0", 0),
                 self.base_dir / "unused.sqlite3",
-                REPOSITORY_ROOT / "client" / "dashboard.html",
+                REPOSITORY_ROOT / "client" / "dist" / "index.html",
                 self.config,
                 secret_store=self.store,
                 health_state_path=self.health_state,
@@ -795,7 +923,7 @@ def run_visual_server(port: int) -> None:
     server = DashboardServer(
         ("127.0.0.1", port),
         DEFAULT_DB,
-        REPOSITORY_ROOT / "client" / "dashboard.html",
+        REPOSITORY_ROOT / "client" / "dist" / "index.html",
         config,
         secret_store=store,
         health_state_path=Path(temporary.name) / "health-state.json",

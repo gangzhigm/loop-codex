@@ -1,5 +1,5 @@
 {
-  "config_version": "5.2.0",
+  "config_version": "5.4.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -8,11 +8,11 @@
   },
   "database": {
     "path": "data/loop-agent.sqlite3",
-    "schema_version": "3.8.0"
+    "schema_version": "3.9.0"
   },
   "prompts": {
     "operator": "operator/operator.md",
-    "planner": "planner/planner.md",
+    "planner": "scheduler/planner.md",
     "worker": "worker/worker.md"
   },
   "runtime_environments": {
@@ -29,11 +29,36 @@
       "providers": {
         "deepseek": {
           "capabilities": {
-            "L1": { "model": "deepseek-v4-flash", "reasoning": "low", "attempt_timeout_seconds": 600, "max_retries": 2 },
-            "L2": { "model": "deepseek-v4-flash", "reasoning": "high", "attempt_timeout_seconds": 600, "max_retries": 2 },
-            "L3": { "model": "deepseek-v4-pro", "reasoning": "low", "attempt_timeout_seconds": 600, "max_retries": 2 },
-            "L4": { "model": "deepseek-v4-pro", "reasoning": "high", "attempt_timeout_seconds": 600, "max_retries": 2 },
-            "L5": { "model": "deepseek-v4-pro", "reasoning": "xhigh", "attempt_timeout_seconds": 600, "max_retries": 2 }
+            "L1": {
+              "model": "deepseek-v4-flash",
+              "reasoning": "low",
+              "attempt_timeout_seconds": 600,
+              "max_retries": 2
+            },
+            "L2": {
+              "model": "deepseek-v4-flash",
+              "reasoning": "high",
+              "attempt_timeout_seconds": 600,
+              "max_retries": 2
+            },
+            "L3": {
+              "model": "deepseek-v4-pro",
+              "reasoning": "low",
+              "attempt_timeout_seconds": 600,
+              "max_retries": 2
+            },
+            "L4": {
+              "model": "deepseek-v4-pro",
+              "reasoning": "high",
+              "attempt_timeout_seconds": 600,
+              "max_retries": 2
+            },
+            "L5": {
+              "model": "deepseek-v4-pro",
+              "reasoning": "xhigh",
+              "attempt_timeout_seconds": 600,
+              "max_retries": 2
+            }
           }
         }
       }
@@ -68,27 +93,6 @@
     "stalled_after_seconds": 300,
     "lease_seconds": 600,
     "attempt_timeout_seconds": 1800,
-    "scheduler": {
-      "scheduled": true,
-      "interval_minutes": 5,
-      "heartbeat_interval_seconds": 15,
-      "runner_log_path": "data/runtime/planner-runner.log"
-    },
-    "execution_scheduler": {
-      "scheduled": true,
-      "interval_minutes": 15,
-      "working_directory": "E:\\code\\local-agent-loop",
-      "log_path": "data/runtime/planner-execution-dispatch.log",
-      "runtime_environment": "self_hosted_agent",
-      "provider_id": "deepseek",
-      "supported_capability_levels": [
-        "L1",
-        "L2",
-        "L3",
-        "L4",
-        "L5"
-      ]
-    },
     "client_boundary": {
       "sandbox": "read-only",
       "approval_policy": "never",
@@ -111,6 +115,31 @@
         "report_files": false
       }
     }
+  },
+  "scheduler": {
+    "heartbeat_interval_seconds": 15,
+    "preflight": {
+      "scheduled": false,
+      "interval_minutes": 5
+    },
+    "execution": {
+      "scheduled": false,
+      "interval_minutes": 15,
+      "log_path": "data/runtime/scheduler-execution-dispatch.log",
+      "runtime_environment": "self_hosted_agent",
+      "provider_id": "deepseek",
+      "supported_capability_levels": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5"
+      ]
+    }
+  },
+  "runner": {
+    "heartbeat_interval_seconds": 15,
+    "queue_poll_interval_seconds": 5
   },
   "self_hosted_agent": {
     "provider_factories": {
@@ -173,7 +202,6 @@
     "monitor_interval_seconds": 30,
     "component_start_timeout_seconds": 10,
     "component_stop_timeout_seconds": 5,
-    "runner_heartbeat_timeout_seconds": 120,
     "components": {
       "dashboard": {
         "entry": "client/dashboard_server.py",
@@ -183,12 +211,20 @@
         "log_path": "data/runtime/dashboard-server.log",
         "heartbeat_timeout_seconds": 60
       },
-      "planner": {
-        "entry": "planner/main.py",
-        "pid_path": "data/runtime/planner.pid",
-        "heartbeat_path": "data/runtime/planner-heartbeat.json",
-        "stop_path": "data/runtime/planner-stop-request.json",
-        "log_path": "data/runtime/planner-scheduler.log",
+      "scheduler": {
+        "entry": "scheduler/main.py",
+        "pid_path": "data/runtime/scheduler.pid",
+        "heartbeat_path": "data/runtime/scheduler-heartbeat.json",
+        "stop_path": "data/runtime/scheduler-stop-request.json",
+        "log_path": "data/runtime/scheduler.log",
+        "heartbeat_timeout_seconds": 60
+      },
+      "runner": {
+        "entry": "runner/agent_runtime.py",
+        "pid_path": "data/runtime/runner.pid",
+        "heartbeat_path": "data/runtime/runner-heartbeat.json",
+        "stop_path": "data/runtime/runner-stop-request.json",
+        "log_path": "data/runtime/runner.log",
         "heartbeat_timeout_seconds": 60
       }
     }

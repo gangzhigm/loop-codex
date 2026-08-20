@@ -1,173 +1,118 @@
 /**
- * 部署校验：对当前真实 Dashboard 与运维页面做静态契约检查，不启动浏览器也不写运行数据。
- * 断言失败时先根据中文消息搜索对应 DOM、常量或事件绑定，再判断是页面遗漏还是检查已过期。
- * 本脚本只读取 UTF-8 文件；新增页面能力时应同时增加正向存在性和旧实现移除检查。
+ * Dashboard 部署校验：核对 React/TypeScript 源码、Vite 构建产物和独立运维页面。
+ * 本检查只读取 UTF-8 文本，不启动服务、不访问网络，也不读取任何敏感配置。
  */
 
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { access, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { resolve } from "node:path";
 
-const targetPath = resolve(process.argv[2] ?? "client/dashboard.html");
-const html = await readFile(targetPath, "utf8");
-const operationsDirectory = dirname(targetPath);
-const [operationsHtml, operationsJavaScript, operationsCss] = await Promise.all([
-  readFile(resolve(operationsDirectory, "operations.html"), "utf8"),
-  readFile(resolve(operationsDirectory, "operations.js"), "utf8"),
-  readFile(resolve(operationsDirectory, "operations.css"), "utf8"),
-]);
+const repositoryRoot = resolve(process.argv[2] ?? ".");
+const frontendRoot = resolve(repositoryRoot, "client/frontend");
+const distRoot = resolve(repositoryRoot, "client/dist");
+const clientRoot = resolve(repositoryRoot, "client");
+
+const paths = {
+  package: resolve(frontendRoot, "package.json"),
+  app: resolve(frontendRoot, "src/App.tsx"),
+  api: resolve(frontendRoot, "src/api.ts"),
+  types: resolve(frontendRoot, "src/types.ts"),
+  utilities: resolve(frontendRoot, "src/utils.ts"),
+  styles: resolve(frontendRoot, "src/styles.css"),
+  capacity: resolve(frontendRoot, "src/components/CapacityPanel.tsx"),
+  tasks: resolve(frontendRoot, "src/components/TaskTable.tsx"),
+  detail: resolve(frontendRoot, "src/components/TaskDetailDialog.tsx"),
+  secrets: resolve(frontendRoot, "src/components/SecretDrawer.tsx"),
+  server: resolve(clientRoot, "dashboard_server.py"),
+  dist: resolve(distRoot, "index.html"),
+  operationsHtml: resolve(clientRoot, "operations.html"),
+  operationsJavaScript: resolve(clientRoot, "operations.js"),
+  operationsCss: resolve(clientRoot, "operations.css"),
+};
+
+const entries = await Promise.all(Object.entries(paths).map(async ([key, path]) => [key, await readFile(path, "utf8")]));
+const source = Object.fromEntries(entries);
 const errors = [];
+const assert = (condition, message) => { if (!condition) errors.push(message); };
 
-function assert(condition, message) {
-  if (!condition) errors.push(message);
+const manifest = JSON.parse(source.package);
+assert(manifest.dependencies?.react, "前端未声明 React 依赖");
+assert(manifest.dependencies?.["lucide-react"], "前端未声明 lucide-react 图标依赖");
+assert(manifest.devDependencies?.typescript && manifest.devDependencies?.vite, "前端未声明 TypeScript/Vite 构建依赖");
+assert(manifest.scripts?.build === "tsc --noEmit && vite build", "前端构建命令未执行类型检查和 Vite 构建");
+
+assert(source.types.includes('export const TASK_SCHEMA_VERSION = "3.9.0"'), "Schema 契约不正确");
+assert(source.api.includes("validateDashboardState"), "缺少状态响应运行时校验");
+assert(source.api.includes('const STATE_ENDPOINT = "/api/state"'), "缺少状态 API");
+assert(source.api.includes('const SERVICE_ACTION_ENDPOINT = "/api/service-action"'), "缺少服务控制 API");
+assert(source.api.includes("SERVICE_CONFIRMATIONS") && source.api.includes("TRIGGER_ONCE"), "服务控制 API 缺少自动化或单次触发确认");
+assert(source.api.includes('const SECRET_API_ENDPOINT = "/api/secrets"'), "缺少 SecretStore API");
+assert(source.api.includes('credentials: "same-origin"'), "敏感接口请求未限定同源凭据");
+
+for (const component of ["SummaryHeader", "TaskTable", "CapacityPanel", "TaskDetailDialog", "SecretDrawer"]) {
+  assert(source.app.includes(`<${component}`), `主应用未挂载 ${component}`);
 }
+assert(!source.app.includes("RuntimeOverview") && !source.app.includes("运行链路"), "主应用仍挂载运行链路");
+assert(source.app.includes("window.setInterval"), "Dashboard 未保持自动轮询");
+assert(source.capacity.includes("服务监控") && source.capacity.includes("Supervisor") && source.capacity.includes("Scheduler") && source.capacity.includes("Planner") && source.capacity.includes("Dispatcher") && source.capacity.includes('name="Runner"'), "服务监控缺少 Supervisor、Scheduler、Planner、Dispatcher 或 Runner");
+assert(source.capacity.includes("数据库") && source.capacity.includes("state.database"), "服务监控缺少数据库状态");
+assert(source.server.includes('payload["database"]'), "状态 API 未提供数据库服务状态");
+assert(source.server.includes('payload["scheduler_control"]') && source.types.includes("scheduler_control"), "状态 API 未提供 Scheduler 链自动化状态");
+assert(source.capacity.includes("automation-switch") && source.capacity.includes("restart") && source.capacity.includes("trigger"), "服务监控缺少重启、自动化开关或单次触发控件");
+assert(source.tasks.includes("scopeBlockGroups") && source.utilities.includes("blocked_by_task_ids"), "任务表未展示范围锁等待");
+assert(source.tasks.includes("scope_queue_position"), "任务表未展示 scope 队列位置");
+assert(source.tasks.includes("dependencyIndicatorState"), "任务表缺少依赖状态灯");
+assert(source.tasks.includes("PREFLIGHT_LABELS"), "DRAFT 行缺少预检状态");
+assert(source.tasks.includes("心跳超时") && source.tasks.includes("formatDuration"), "任务表缺少 heartbeat 或耗时展示");
+assert(source.tasks.includes("copyFeedback") && source.tasks.includes("复制失败"), "复制任务 ID 缺少结果反馈");
+assert(source.utilities.includes("contextualFilterValues") && source.app.includes("resetInvalidFilters"), "任务筛选未实现联动候选项和失效值重置");
+assert(source.tasks.includes("executionConfigLabel"), "能力等级缺少执行配置说明");
+assert(source.detail.includes("Operator 原始定义"), "任务详情缺少 Operator 原始定义");
+assert(source.detail.includes("Planner 预检"), "任务详情缺少 Planner 预检");
+assert(source.detail.includes("技术验收补充"), "任务详情缺少技术验收补充");
+assert(source.detail.includes("预检证据"), "任务详情缺少预检证据");
+assert(source.detail.includes("PlannerSplitSuggestions"), "任务详情缺少结构化拆分建议");
+assert(source.detail.includes("可选方案"), "任务详情缺少人工介入选项");
+assert(source.detail.includes("PendingBlockers"), "任务详情缺少结构化阻塞信息");
+assert(source.detail.includes("ResultDiagnostic"), "任务详情缺少安全诊断字段投影");
+assert(source.detail.includes("item.to") && source.detail.includes("item.reason"), "任务详情未按 API 契约展示状态历史");
+assert(source.secrets.includes("SecretStore"), "缺少 Provider 密钥管理");
+assert(source.secrets.includes("连接验证"), "SecretStore 缺少连接验证动作");
+assert(source.secrets.includes("trapFocus") && source.secrets.includes("previousFocusRef"), "SecretStore 抽屉缺少焦点闭环");
+assert(source.secrets.includes('provider.status !== "storage_unavailable"'), "SecretStore 存储不可用时仍暴露操作");
+assert(source.secrets.includes('provider.validation_scope === "connection"'), "SecretStore 未显示验证范围");
+assert(source.server.includes('BASE_DIR / "client" / "dist" / "index.html"'), "Dashboard Server 未固定使用 React 构建入口");
+assert(!source.server.includes('BASE_DIR / "client" / "dashboard.html"'), "Dashboard Server 仍包含旧页面回退");
+assert(!source.server.includes('"/dashboard.html"'), "Dashboard Server 仍保留旧页面 URL");
 
-assert(/<meta\s+charset=["']utf-8["']/i.test(html.slice(0, 1024)), "缺少靠前的 UTF-8 声明");
-assert(!/<script[^>]+src=/i.test(html), "Dashboard 不能依赖外部脚本");
-assert(!/<link[^>]+(?:stylesheet|preload)/i.test(html), "Dashboard 不能依赖外部样式或预加载资源");
-assert(html.includes('const STATE_ENDPOINT = "/api/state"'), "缺少状态 API");
-assert(/fetch\(STATE_ENDPOINT/.test(html), "未从状态 API 读取数据");
-assert(html.includes('const TASK_SCHEMA_VERSION = "3.8.0"'), "Schema 契约不正确");
-assert(html.includes("grid-template-columns: repeat(6, minmax(0, 1fr));"), "顶部统计区未按六项布局");
-assert(!html.includes("当前任务"), "顶部统计区仍显示当前任务指标");
-assert(!html.includes("metricTotal"), "已移除的当前任务总数仍被 DOM 或脚本引用");
-assert(!html.includes("<h1>Local Agent Loop</h1>"), "品牌标题仍作为可见 DOM 内容保留");
-assert(!html.includes("<p>本地任务运行状态</p>"), "品牌副标题仍作为可见 DOM 内容保留");
-assert(!html.includes('class="connection-meta"'), "顶部仍显示数据库版本与更新时间区域");
-assert(!html.includes("workspaceUpdated"), "已移除的顶部更新时间仍被 DOM 或脚本引用");
-assert(!html.includes("connectionLabel"), "已移除的数据库状态标签仍被 DOM 或脚本引用");
-assert(!html.includes("DB.V."), "顶部数据库版本文案仍存在");
-assert(html.includes("grid-template-columns: 36px minmax(0, 1fr) auto;"), "桌面头部品牌列未收紧为 LA 标记宽度");
-assert((html.match(/class="runtime-stage"/g) ?? []).length === 3, "运行链路未按三个角色拆成独立行");
-assert((html.match(/class="runtime-connector" aria-hidden="true"/g) ?? []).length === 2, "运行链路缺少角色间纵向连接");
-assert(!html.includes('class="runtime-targets"'), "运行链路不应保留旧双列分叉");
-assert((html.match(/<button class="metric metric-filter"[^>]+data-filter="(?:draft|review|pending|active|closed|archived)"/g) ?? []).length === 6, "顶部统计入口数量不完整");
-assert((html.match(/class="metric-help"/g) ?? []).length === 6, "顶部统计项的状态说明图标数量不完整");
-assert((html.match(/class="metric-tooltip" role="tooltip"/g) ?? []).length === 6, "顶部统计项的状态说明浮层数量不完整");
-assert(html.includes("NEEDS_REVIEW（需确认）、WAITING_HUMAN（等待人工）、STALLED（已卡顿）"), "需确认浮层未准确说明包含状态");
-assert(html.includes("PENDING（待执行）、WAITING_CONFLICT（等待冲突）、BLOCKED（已阻塞）"), "待执行浮层未准确说明包含状态");
-assert(html.includes("SUCCEEDED（已完成）、CONFIRMED（已确认）、FAILED（失败）、CANCELLED（已取消）"), "已结束浮层未准确说明包含状态");
-assert(html.includes("archived_at 已设置的终态任务"), "已归档浮层未说明独立归档属性");
-assert(!/<div class="segments"[^>]*aria-label="任务筛选"/.test(html), "任务表头仍显示状态筛选按钮组");
-assert(html.includes('<input id="search" class="search-input"'), "任务表头搜索框缺失");
-assert(html.includes('document.querySelectorAll("[data-filter]")'), "顶部状态筛选联动事件缺失");
-assert(html.includes('<a class="operations-link" href="/operations.html">运维配置</a>'), "任务面板缺少运维配置入口");
-assert(operationsHtml.includes('href="/operations.css"'), "运维页面未加载专用样式");
-assert(operationsHtml.includes('src="/operations.js"'), "运维页面未加载专用脚本");
-assert(operationsHtml.includes('href="/" aria-label="返回任务面板"'), "运维页面缺少返回任务面板入口");
-assert(operationsJavaScript.includes('const OPERATIONS_ENDPOINT = "/api/operations-config"'), "运维页面未使用专用配置接口");
-assert(/fetch\(OPERATIONS_ENDPOINT/.test(operationsJavaScript), "运维页面未读取专用配置接口");
-assert(operationsHtml.includes('class="edit-button"'), "运维页面缺少配置编辑入口");
-assert(operationsHtml.includes('id="task-root-editor"'), "运维页面缺少全局任务工作区编辑窗口");
-assert(operationsJavaScript.includes('const OPERATIONS_ACTION_ENDPOINT = "/api/operations-config/action"'), "运维页面未使用受控配置修改接口");
-assert(operationsJavaScript.includes('action: "select_task_root"'), "运维页面未请求本机文件夹选择器");
-assert(operationsJavaScript.includes('confirmation: "SET_TASK_ROOT"'), "运维页面未确认全局任务工作区修改");
-assert(!/secret_ref|authorization|hidden_reasoning|response_body/i.test(operationsHtml + operationsJavaScript), "运维页面包含敏感字段名称");
-assert(operationsJavaScript.includes("textContent"), "运维页面未使用安全文本渲染");
-assert(operationsJavaScript.includes('"当前生效"'), "运维页面未分组展示当前生效配置");
-assert(operationsJavaScript.includes('"规划中"'), "运维页面未分组展示规划配置");
-assert(operationsCss.includes(".settings-group"), "运维页面缺少当前与规划配置的分区样式");
-assert(/@media \(max-width: 560px\)/.test(operationsCss), "运维页面缺少窄视图布局");
+assert(/@media \(max-width: 700px\)/.test(source.styles), "Dashboard 缺少移动端布局");
+assert(source.styles.includes("overflow-wrap: anywhere"), "长路径缺少安全换行");
+assert(source.styles.includes("grid-template-columns: repeat(6, minmax(76px, 1fr))"), "顶部生命周期统计未保持六列");
+assert(source.styles.includes("tbody tr { display: grid"), "窄视图任务表未转换为稳定卡片行");
 
-for (const label of ["草稿", "需确认", "待执行", "执行中", "已结束", "已归档"]) {
-  assert(html.includes(`<span class="metric-label">${label}`), `缺少 ${label} 生命周期入口`);
+assert(/<meta\s+charset=["']UTF-8["']/i.test(source.dist), "构建入口缺少 UTF-8 声明");
+assert(/<script[^>]+src=["']\/assets\/[^"']+\.js["']/.test(source.dist), "构建入口未引用本地 JavaScript 产物");
+assert(/<link[^>]+href=["']\/assets\/[^"']+\.css["']/.test(source.dist), "构建入口未引用本地 CSS 产物");
+assert(!/https?:\/\//i.test(source.dist), "构建入口不应依赖外部 CDN");
+for (const match of source.dist.matchAll(/["'](\/assets\/[^"']+)["']/g)) {
+  await access(resolve(distRoot, match[1].slice(1)), constants.R_OK).catch(() => errors.push(`构建资源不存在：${match[1]}`));
 }
-assert(html.includes('DRAFT: "草稿"'), "缺少 DRAFT 状态");
-assert(html.includes('NEEDS_REVIEW: "需确认"'), "缺少 NEEDS_REVIEW 状态");
-assert(html.includes('const PREFLIGHT_LABELS = { UNINSPECTED: "待静态检查", QUEUED: "等待静态检查", INSPECTING: "静态检查中"'), "缺少 Planner 预检阶段标签");
-assert(html.includes('currentFilter === "draft" && task.status !== "DRAFT"'), "草稿筛选没有精确匹配 DRAFT");
-assert(html.includes('const REVIEW_STATUSES = new Set(["NEEDS_REVIEW", "WAITING_HUMAN", "STALLED"])'), "需确认状态集合不完整");
-assert(html.includes('const ACTIVE_STATUSES = new Set(["CLAIMED", "RUNNING"])'), "执行中状态集合不应包含等待人工或已卡顿任务");
-assert(html.includes('const confirmation = [...CLOSED_STATUSES].reduce'), "已结束顶部指标未使用统一终态集合");
-assert(html.includes('currentFilter === "review" && !REVIEW_STATUSES.has(task.status)'), "需确认筛选未使用统一状态集合");
-assert(html.includes('const review = [...REVIEW_STATUSES].reduce'), "需确认顶部指标未统计等待人工状态");
-assert(html.includes('const queued = drafts + pending;'), "状态分布将需确认重复计入待处理");
-assert(html.includes('task.status === "DRAFT" ? `${STATUS_LABELS[task.status]} · ${PREFLIGHT_LABELS[task.preflight_status]}`'), "草稿未展示静态检查阶段");
-assert(!html.includes('currentFilter === "attention"'), "旧的需关注筛选仍在使用");
-assert(!html.includes('const ATTENTION_STATUSES'), "旧的需关注状态集合仍在使用");
-assert(html.includes('const LEGACY_QUEUE_STATUSES = new Set(["WAITING_CONFLICT", "BLOCKED"])'), "旧冲突数据没有兼容展示");
-assert(!html.includes('task?.status !== "WAITING_CONFLICT"'), "旧 WAITING_CONFLICT 仍是主要冲突渲染路径");
+let legacyDashboardExists = true;
+await access(resolve(clientRoot, "dashboard.html"), constants.F_OK).catch(() => { legacyDashboardExists = false; });
+assert(!legacyDashboardExists, "旧 client/dashboard.html 不应继续存在");
 
-assert(html.includes('task?.operator_definition'), "Dashboard 未验证 Operator 原始定义");
-assert(html.includes('task?.planner_supplement'), "Dashboard 未验证 Planner 补充");
-assert(html.includes('if (!task?.provider_id || !providerConfig)'), "Dashboard 未独立校验 self-hosted Provider");
-assert(html.includes('task.capability_level !== null && !executionConfig('), "Dashboard 会把未完成预检的空能力等级误判为 Provider 无效");
-assert(html.includes('function formatTaskDate(value)'), "任务时间列缺少日期格式化函数");
-assert(html.includes('<span class="task-time-label">日期</span>${taskDateValue(task.started_at)}'), "任务时间列未显示执行开始日期");
-assert(html.includes('id="timeSort"'), "时间列表缺少日期排序按钮");
-assert(html.includes('let timeSortDirection = "desc"'), "时间列表默认排序方向不正确");
-assert(html.includes('timeSortDirection === "asc" ? leftTime - rightTime : rightTime - leftTime'), "时间列表缺少正倒日期排序逻辑");
-assert(html.includes('function renderPlannerSupplement(task)'), "缺少 Planner 预检详情渲染");
-assert(html.includes('Operator 原始定义'), "详情没有区分 Operator 原始定义");
-assert(html.includes('Operator 业务验收'), "详情没有展示 Operator 业务验收");
-assert(html.includes('Planner 预检'), "详情没有展示 Planner 预检");
-assert(html.includes('预估能力等级'), "详情没有展示预估能力等级");
-assert(html.includes('最终能力等级'), "详情没有展示最终能力等级");
-assert(html.includes('精确 scope'), "详情没有展示精确 scope");
-assert(html.includes('锁模式'), "详情没有展示锁模式");
-assert(html.includes('技术验收补充'), "详情没有展示技术验收补充");
-assert(html.includes('预检证据'), "详情没有展示预检证据");
-assert(html.includes('function renderSplitSuggestions(suggestions)'), "缺少拆分建议展示");
-assert(html.includes('等待 Operator 或用户决定；此处不会自动创建子任务。'), "拆分建议没有明确等待人工决定");
-
-assert(html.includes('function scopeBlockGroups(task, tasks)'), "缺少 PENDING 范围锁队列归类");
-assert(html.includes('task?.status !== "PENDING"'), "范围锁展示未限定 PENDING");
-assert(html.includes('task.blocked_by_task_ids'), "未使用 API 的 blocked_by_task_ids");
-assert(html.includes('task.blocked_scopes'), "未使用 API 的 blocked_scopes");
-assert(html.includes('task.scope_queue_position'), "未使用 API 的 scope_queue_position");
-assert(html.includes('task.blocked_by_task_ids ??= []'), "缺少旧 API 阻塞任务字段兼容");
-assert(html.includes('task.blocked_scopes ??= []'), "缺少旧 API 阻塞范围字段兼容");
-assert(html.includes('task.blocked_scope_keys ??= []'), "缺少旧 API scope key 字段兼容");
-assert(html.includes('task.blocking_scopes ??= []'), "缺少旧 API 阻塞详情字段兼容");
-assert(html.includes('task.scope_queue_position ??= null'), "缺少旧 API 队列位置字段兼容");
-assert(html.includes('function renderPendingBlockers(task, tasks)'), "缺少依赖和范围锁分离的详情展示");
-assert(html.includes('<h4>依赖等待</h4>'), "详情未单独展示依赖等待");
-assert(html.includes('<h4>范围锁等待</h4>'), "详情未单独展示范围锁等待");
-assert(html.includes('${renderPendingBlockers(task, state.tasks)}'), "详情未挂载待执行阻塞信息");
-
-assert(html.includes("function scopeKeyProject(key)"), "缺少 scope key 项目解析函数");
-assert(html.includes('key.startsWith("project:")'), "项目解析未覆盖 project scope key");
-assert(html.includes('/^(?:file|module):([^:]+)::(.+)$/'), "项目解析未覆盖 file/module scope key 或非法 key 边界");
-assert(html.includes('const project = scopeKeyProject(key);'), "任务项目展示未使用统一 scope key 解析");
-assert(!html.includes('!key.startsWith("project:")'), "任务项目展示仍排除 file/module scope key");
-assert(html.includes("function hintedScopeProject(scope)"), "缺少预检前 scope hint 项目回退解析");
-assert(html.includes("if (!projectScopes.size)"), "最终 scope 缺失时未回退到 scope hint");
-assert(html.includes("right.length - left.length"), "scope hint 项目匹配未优先使用最长登记路径");
-assert(html.includes('scope.startsWith("local-agent-loop/data/assets/")'), "项目展示丢失纯附件项目排除规则");
-
-assert(html.includes('function resetHeaderFilters()'), "缺少状态切换时的筛选重置");
-assert(html.includes('const nextFilter = ["draft", "review", "pending", "active", "closed", "archived"]'), "分类切换没有覆盖当前生命周期");
-assert(html.includes('function resetInvalidHeaderFilters(tasks)'), "缺少自动轮询后的失效筛选重置");
-assert(html.includes('if (activeHeaderFilter) renderHeaderFilterMenu();'), "自动刷新会破坏打开的表头筛选状态");
-assert(/\.planner-meta\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/.test(html), "Planner 详情缺少稳定网格布局");
-assert(/@media \(max-width: 760px\)[\s\S]*?\.planner-meta\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\)/.test(html), "窄视图 Planner 信息未折叠为单列");
-assert(html.includes('overflow-wrap: anywhere'), "长路径缺少可换行展示");
-assert(html.includes('data-capability-level="${escapeHtml(level)}"'), "任务档位卡未声明可点击等级参数");
-assert(html.includes('function handleCapabilityAction(capabilityLevel)'), "任务档位卡未绑定空点击处理函数");
-assert(html.includes('handleCapabilityAction(button.dataset.capabilityLevel)'), "任务档位卡点击未调用等级处理函数");
-assert(html.includes('.profile-row:hover {'), "任务档位卡缺少悬浮效果");
-assert(html.includes('.profile-row:active {'), "任务档位卡缺少按下效果");
-
-const allIds = [...html.matchAll(/\sid=["']([^"']+)["']/g)].map((match) => match[1]);
-const ids = new Set(allIds);
-assert(ids.size === allIds.length, "HTML 中存在重复 id");
-for (const match of html.matchAll(/querySelector\(["']#([^"']+)["']\)/g)) {
-  assert(ids.has(match[1]), `脚本引用了不存在的 #${match[1]}`);
-}
-
-const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
-assert(scripts.length === 1, `预期 1 个内联脚本，实际 ${scripts.length} 个`);
-if (scripts.length === 1) {
-  try {
-    new Function(scripts[0][1]);
-  } catch (error) {
-    errors.push(`内联 JavaScript 语法错误：${error instanceof Error ? error.message : String(error)}`);
-  }
-}
+assert(source.operationsHtml.includes('href="/operations.css"'), "运维页面未加载专用样式");
+assert(source.operationsHtml.includes('src="/operations.js"'), "运维页面未加载专用脚本");
+assert(source.operationsHtml.includes('href="/" aria-label="返回任务面板"'), "运维页面缺少返回任务面板入口");
+assert(source.operationsJavaScript.includes('const OPERATIONS_ENDPOINT = "/api/operations-config"'), "运维页面未使用专用配置接口");
+assert(source.operationsJavaScript.includes("textContent"), "运维页面未使用安全文本渲染");
+assert(!/secret_ref|authorization|hidden_reasoning|response_body/i.test(source.operationsHtml + source.operationsJavaScript), "运维页面包含敏感字段名称");
+assert(/@media \(max-width: 560px\)/.test(source.operationsCss), "运维页面缺少窄视图布局");
 
 if (errors.length) {
-  console.error(`监控页检查失败，共 ${errors.length} 项：`);
+  console.error(`Dashboard 检查失败，共 ${errors.length} 项：`);
   errors.forEach((error, index) => console.error(`${index + 1}. ${error}`));
   process.exitCode = 1;
 } else {
-  console.log(`监控页检查通过：${ids.size} 个唯一 DOM id，Planner heartbeat 与队列阻塞展示有效`);
+  console.log("Dashboard 检查通过：React/TypeScript 源码、Vite 本地构建和运维页面契约有效");
 }

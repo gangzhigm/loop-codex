@@ -20,6 +20,7 @@ import argparse
 import copy
 import hmac
 import json
+import mimetypes
 import os
 import secrets
 import sys
@@ -65,7 +66,7 @@ from loop_agent.secrets.store import (
     create_secret_store,
 )
 from common.service_runtime import ServiceRuntimeFiles, install_shutdown_signals
-from common.components import component_specs, ensure_component
+from common.components import component_specs, ensure_component, request_component_stop
 from common.health import (
     record as record_supervisor_health,
     start_server as start_supervisor,
@@ -85,6 +86,8 @@ OPERATIONS_ASSETS = {
     "/operations.js": ("operations.js", "application/javascript; charset=utf-8"),
     "/operations.css": ("operations.css", "text/css; charset=utf-8"),
 }
+FRONTEND_ASSET_SUFFIXES = {".css", ".ico", ".jpeg", ".jpg", ".js", ".png", ".svg", ".webp", ".woff2"}
+CLIENT_ROOT = Path(__file__).resolve().parent
 MAX_ACTION_BODY_BYTES = 4096
 
 
@@ -106,8 +109,10 @@ from client.service.operations import (
     provider_secret_status,
     record_provider_secret_event,
     validate_task_root,
+    write_scheduler_automation_config,
     write_task_root_config,
 )
+from scheduler.main import dispatch_ready_tasks, schedule_preflights
 from client.service.tasks import (
     HEALTH_STATE,
     DashboardActionError,
@@ -155,10 +160,11 @@ class DashboardServer(ThreadingHTTPServer):
             raise ValueError("dashboard.secret_api.replay_cache_size is invalid")
         super().__init__(address, DashboardHandler)
         self.database_path = database_path
-        self.dashboard_path = dashboard_path
+        self.dashboard_path = dashboard_path.resolve()
+        self.frontend_root = self.dashboard_path.parent
         self.runtime_config_path = runtime_config_path.resolve()
         self.operations_paths = {
-            route: dashboard_path.with_name(filename)
+            route: CLIENT_ROOT / filename
             for route, (filename, _content_type) in OPERATIONS_ASSETS.items()
         }
         self.runtime_config = runtime_config
@@ -412,8 +418,133 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.server.runtime_config = updated
         self.send_json(HTTPStatus.OK, {"ok": True, "outcome": "UPDATED", "task_root": str(root)})
 
+    def _scheduler_control_payload(self, config: Mapping[str, object]) -> dict[str, bool]:
+        """投影两条 Scheduler 链的独立自动化意图。"""
+        scheduler = config.get("scheduler")
+        if not isinstance(scheduler, Mapping):
+            raise ValueError("scheduler 配置无效")
+        preflight = scheduler.get("preflight")
+        execution = scheduler.get("execution")
+        if not isinstance(preflight, Mapping) or not isinstance(execution, Mapping):
+            raise ValueError("scheduler 调度链配置无效")
+        return {
+            "planner_automation": preflight.get("scheduled") is True,
+            "dispatcher_automation": execution.get("scheduled") is True,
+        }
+
+    def _ensure_scheduler(
+        self,
+        config: dict[str, object],
+        *,
+        restart: bool = False,
+    ) -> dict[str, object]:
+        """在不绕过组件身份校验的前提下确保 Scheduler 状态。"""
+        desired = service_control_state()
+        specs = {spec.key: spec for spec in component_specs(config, desired)}
+        spec = specs["scheduler"]
+        start_timeout = float(config["supervisor"]["component_start_timeout_seconds"])
+        stop_timeout = float(config["supervisor"]["component_stop_timeout_seconds"])
+        if restart and spec.enabled:
+            recorded = spec.runtime.recorded_pid()
+            if recorded is not None:
+                try:
+                    stopped = request_component_stop(
+                        spec,
+                        recorded,
+                        stop_timeout,
+                        force_after_timeout=True,
+                    )
+                except (OSError, RuntimeError) as error:
+                    raise OperationsApiError(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        f"Scheduler 无法安全重启：{error}",
+                    ) from error
+                if not stopped:
+                    raise OperationsApiError(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "Scheduler 未在停止期限内退出，无法重启",
+                    )
+        return ensure_component(
+            spec,
+            self.server.database_path,
+            self.server.runtime_config_path,
+            start_timeout,
+            stop_timeout,
+        )
+
+    def _ensure_runner(
+        self,
+        config: dict[str, object],
+        *,
+        restart: bool = False,
+    ) -> dict[str, object]:
+        """在组件身份校验下确保常驻 Runner 状态。"""
+        desired = service_control_state()
+        specs = {spec.key: spec for spec in component_specs(config, desired)}
+        spec = specs["runner"]
+        start_timeout = float(config["supervisor"]["component_start_timeout_seconds"])
+        stop_timeout = float(config["supervisor"]["component_stop_timeout_seconds"])
+        if restart and spec.enabled:
+            recorded = spec.runtime.recorded_pid()
+            if recorded is not None:
+                try:
+                    stopped = request_component_stop(
+                        spec, recorded, stop_timeout, force_after_timeout=True
+                    )
+                except (OSError, RuntimeError) as error:
+                    raise OperationsApiError(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        f"Runner 无法安全重启：{error}",
+                    ) from error
+                if not stopped:
+                    raise OperationsApiError(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "Runner 未在停止期限内退出，无法重启",
+                    )
+        return ensure_component(
+            spec,
+            self.server.database_path,
+            self.server.runtime_config_path,
+            start_timeout,
+            stop_timeout,
+        )
+
+    def _start_supervisor(
+        self,
+        config: dict[str, object],
+        *,
+        restart: bool = False,
+    ) -> dict[str, object]:
+        """启动或重启 Supervisor，并等待新实例通过 PID 与 heartbeat 校验。"""
+        timeout = int(config["health"]["heartbeat_timeout_seconds"])
+        pid, heartbeat = supervisor_health(timeout)
+        if pid is None or restart:
+            launched_pid = start_supervisor(
+                self.server.database_path,
+                self.server.runtime_config_path,
+            )
+            deadline = time.monotonic() + float(
+                config["supervisor"]["component_start_timeout_seconds"]
+            ) + 10
+            while time.monotonic() < deadline:
+                pid, heartbeat = supervisor_health(timeout, expected_pid=launched_pid)
+                if pid is not None:
+                    break
+                time.sleep(0.2)
+            if pid is None:
+                raise OperationsApiError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "Supervisor 启动后未通过探活",
+                )
+        return {
+            "component": "supervisor",
+            "status": "RESTARTED" if restart else "HEALTHY",
+            "pid": pid,
+            "heartbeat": heartbeat,
+        }
+
     def _handle_service_action(self, request: object) -> None:
-        """持久化人工启停意图，并立即执行对应服务动作。"""
+        """执行明确确认过的服务、自动化开关或单次调度动作。"""
         if getattr(request, "query", ""):
             raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作接口不接受查询参数")
         self._require_secret_host()
@@ -424,71 +555,89 @@ class DashboardHandler(BaseHTTPRequestHandler):
             raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作字段无效")
         service = payload.get("service")
         action = payload.get("action")
-        if service not in {"supervisor", "planner"} or action not in {"start", "stop"}:
+        confirmations = {
+            ("supervisor", "start"): "START",
+            ("supervisor", "stop"): "STOP",
+            ("supervisor", "restart"): "RESTART",
+            ("scheduler", "start"): "START",
+            ("scheduler", "stop"): "STOP",
+            ("scheduler", "restart"): "RESTART",
+            ("runner", "start"): "START",
+            ("runner", "stop"): "STOP",
+            ("runner", "restart"): "RESTART",
+            ("planner", "enable"): "ENABLE_AUTOMATION",
+            ("planner", "disable"): "DISABLE_AUTOMATION",
+            ("planner", "trigger"): "TRIGGER_ONCE",
+            ("dispatcher", "enable"): "ENABLE_AUTOMATION",
+            ("dispatcher", "disable"): "DISABLE_AUTOMATION",
+            ("dispatcher", "trigger"): "TRIGGER_ONCE",
+        }
+        expected_confirmation = confirmations.get((service, action))
+        if expected_confirmation is None:
             raise OperationsApiError(HTTPStatus.BAD_REQUEST, "服务操作无效")
-        if payload.get("confirmation") != action.upper():
+        if payload.get("confirmation") != expected_confirmation:
             raise OperationsApiError(HTTPStatus.FORBIDDEN, "服务操作未获得明确确认")
         self.server.reserve_request_id(payload["request_id"])
-        enabled = action == "start"
 
         with self.server._operations_config_lock:
-            desired = set_service_enabled(service, enabled)
             config = load_initialization_config(self.server.runtime_config_path)
-            if service == "supervisor":
-                if enabled:
-                    timeout = int(config["health"]["heartbeat_timeout_seconds"])
-                    pid, heartbeat = supervisor_health(timeout)
-                    if pid is None:
-                        launched_pid = start_supervisor(
-                            self.server.database_path,
-                            self.server.runtime_config_path,
-                        )
-                        deadline = time.monotonic() + float(
-                            config["supervisor"]["component_start_timeout_seconds"]
-                        ) + 10
-                        while time.monotonic() < deadline:
-                            pid, heartbeat = supervisor_health(timeout, expected_pid=launched_pid)
-                            if pid is not None:
-                                break
-                            time.sleep(0.2)
-                        if pid is None:
-                            raise OperationsApiError(
-                                HTTPStatus.SERVICE_UNAVAILABLE,
-                                "Supervisor 启动后未通过探活",
-                            )
-                    result = {
-                        "component": "supervisor",
-                        "status": "HEALTHY",
-                        "pid": pid,
-                        "heartbeat": heartbeat,
-                    }
-                else:
-                    stop_supervisor()
-                    record_supervisor_health("DISABLED", "Supervisor 已由人工停止。", 0)
-                    result = {"component": "supervisor", "status": "DISABLED", "pid": None}
-            else:
-                if enabled:
-                    configured = (
-                        config["planner"]["scheduler"]["scheduled"] is True
-                        or config["planner"]["execution_scheduler"]["scheduled"] is True
-                    )
-                    if configured is not True:
+            if service in {"supervisor", "scheduler", "runner"}:
+                enabled = action != "stop"
+                set_service_enabled(service, enabled)
+                if service == "supervisor":
+                    if enabled:
+                        result = self._start_supervisor(config, restart=action == "restart")
+                    else:
+                        stop_supervisor()
+                        record_supervisor_health("DISABLED", "Supervisor 已由人工停止。", 0)
+                        result = {"component": "supervisor", "status": "DISABLED", "pid": None}
+                elif service == "scheduler":
+                    configured = any(self._scheduler_control_payload(config).values())
+                    if enabled and not configured:
                         set_service_enabled(service, False)
                         raise OperationsApiError(
                             HTTPStatus.CONFLICT,
-                            f"{service} 的配置调度开关已关闭",
+                            "Scheduler 的 Planner 和 Dispatcher 自动化均已关闭",
                         )
-                specs = {spec.key: spec for spec in component_specs(config, desired)}
-                result = ensure_component(
-                    specs[service],
+                    result = self._ensure_scheduler(config, restart=action == "restart")
+                else:
+                    result = self._ensure_runner(config, restart=action == "restart")
+            elif action in {"enable", "disable"}:
+                config = write_scheduler_automation_config(
+                    self.server.runtime_config_path,
+                    config,
+                    service,
+                    action == "enable",
+                )
+                self.server.runtime_config = config
+                result = self._ensure_scheduler(
+                    config,
+                    restart=any(self._scheduler_control_payload(config).values()),
+                )
+            elif service == "planner":
+                result = schedule_preflights(
                     self.server.database_path,
                     self.server.runtime_config_path,
-                    float(config["supervisor"]["component_start_timeout_seconds"]),
-                    float(config["supervisor"]["component_stop_timeout_seconds"]),
+                )
+            else:
+                result = dispatch_ready_tasks(
+                    self.server.database_path,
+                    self.server.runtime_config_path,
+                )
+            if isinstance(result, Mapping) and str(result.get("event", "")).endswith(".failed"):
+                message = result.get("message")
+                raise OperationsApiError(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    str(message) if isinstance(message, str) and message else "单次调度触发失败",
                 )
         self.send_json(
             HTTPStatus.OK,
-            {"ok": True, "service_control": service_control_state(), "service": result},
+            {
+                "ok": True,
+                "service_control": service_control_state(),
+                "scheduler_control": self._scheduler_control_payload(self.server.runtime_config),
+                "service": result,
+            },
         )
 
     def _handle_secret_get(self, request: object) -> None:
@@ -621,6 +770,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """
         request = urlparse(self.path)
         path = request.path
+        if path.startswith("/assets/"):
+            relative = path.removeprefix("/")
+            parts = relative.split("/")
+            if (
+                not relative
+                or "\\" in relative
+                or any(part in {"", ".", ".."} for part in parts)
+            ):
+                self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
+                return
+            asset_path = (self.server.frontend_root / Path(*parts)).resolve()
+            if (
+                not asset_path.is_relative_to(self.server.frontend_root)
+                or asset_path.suffix.lower() not in FRONTEND_ASSET_SUFFIXES
+                or not asset_path.is_file()
+            ):
+                self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
+                return
+            content_type = mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream"
+            try:
+                self.send_bytes(HTTPStatus.OK, content_type, asset_path.read_bytes())
+            except OSError as error:
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(error)})
+            return
         if path == SECRET_API_PATH:
             try:
                 self._handle_secret_get(request)
@@ -656,7 +829,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except OSError as error:
                 self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(error)})
             return
-        if path in {"/", "/dashboard.html"}:
+        if path == "/":
             try:
                 self.send_bytes(HTTPStatus.OK, "text/html; charset=utf-8", self.server.dashboard_path.read_bytes())
             except OSError as error:
@@ -668,7 +841,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 try:
                     payload = state_payload(database, self.server.runtime_config)
                     payload["services"], payload["health_events"] = runtime_health()
+                    payload["database"] = {
+                        "status": "HEALTHY",
+                        "schema_version": payload["schema_version"],
+                        "checked_at": now_shanghai(),
+                        "message": "SQLite 数据库正常。",
+                    }
                     payload["service_control"] = service_control_state()
+                    payload["scheduler_control"] = self._scheduler_control_payload(
+                        self.server.runtime_config
+                    )
                     payload["runtime_config"] = self.server.runtime_config
                     self.send_json(
                         HTTPStatus.OK,
@@ -863,8 +1045,13 @@ def main(
     server: DashboardServer | None = None
     monitor: threading.Thread | None = None
     try:
+        dashboard_path = BASE_DIR / "client" / "dist" / "index.html"
+        if not dashboard_path.is_file():
+            raise FileNotFoundError(
+                "Dashboard 构建产物不存在：请先在 client/frontend 运行 npm run build"
+            )
         server = DashboardServer(
-            (host, port), database_path, BASE_DIR / "client" / "dashboard.html", config,
+            (host, port), database_path, dashboard_path, config,
             runtime_config_path=config_path,
         )
         if install_signal_handlers:

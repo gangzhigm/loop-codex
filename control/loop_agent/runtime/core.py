@@ -7,12 +7,11 @@ from __future__ import annotations
 # 子进程环境必须移除敏感变量；调试时不得通过继承完整父进程环境来绕过问题。
 
 import json
-import os
 import sys
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from loop_agent.runtime.contracts import SENSITIVE_ENVIRONMENT_NAME
+from common.processes import safe_process_environment
 from loop_agent.runtime.diagnostics import AgentRuntimeError
 from loopdb import resolve_execution_profile
 
@@ -23,11 +22,7 @@ def safe_subprocess_environment() -> dict[str, str]:
     Provider 通过 ``SecretStore`` 获取凭据。即使父 Agent 进程调用 Provider 时需要某个凭据，
     子工具也不会继承名称表明其包含密钥的环境变量。
     """
-    return {
-        name: value
-        for name, value in os.environ.items()
-        if not SENSITIVE_ENVIRONMENT_NAME.search(name)
-    }
+    return safe_process_environment()
 
 
 class ToolRejected(AgentRuntimeError):

@@ -33,6 +33,7 @@ from loop_agent.constants import (
     SCHEDULING_SCHEMA_USER_VERSION,
     SCHEMA_USER_VERSION,
     SCHEMA_VERSION,
+    WORKER_QUEUE_SCHEMA_USER_VERSION,
 )
 from loop_agent.database.compatibility import LEGACY_PROFILE_TO_CAPABILITY
 from loop_agent.database.sql import (
@@ -71,7 +72,7 @@ def _create_current_execution_indexes(database: sqlite3.Connection) -> None:
     database.execute("CREATE INDEX idx_executions_active ON executions(status, lease_expires_at)")
     database.execute(
         "CREATE UNIQUE INDEX idx_executions_one_active_task "
-        "ON executions(task_id) WHERE status='RUNNING'"
+        "ON executions(task_id) WHERE status IN ('QUEUED', 'RUNNING')"
     )
 
 
@@ -160,6 +161,66 @@ def _migrate_scheduling_schema(database: sqlite3.Connection) -> dict[str, Any]:
         "migrated": True,
         "tasks_preserved": task_count,
         "preflight_executions_preserved": preflight_count,
+    }
+
+
+def _migrate_worker_queue_schema(database: sqlite3.Connection) -> dict[str, Any]:
+    """增加正式 Worker 的持久 QUEUED 交付状态并保留现有数据。"""
+    task_count = int(database.execute("SELECT count(*) FROM tasks").fetchone()[0])
+    execution_count = int(
+        database.execute("SELECT count(*) FROM executions").fetchone()[0]
+    )
+    database.execute("PRAGMA foreign_keys = OFF")
+    try:
+        transaction(database)
+        database.execute(TASKS_TABLE_SQL)
+        database.execute("INSERT INTO tasks_new SELECT * FROM tasks")
+        database.execute(EXECUTIONS_TABLE_SQL)
+        execution_columns = (
+            "execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, "
+            "finished_at, outcome, execution_kind, runtime_environment, provider_id, "
+            "capability_level, execution_policy, model, reasoning, attempt_timeout_seconds, "
+            "max_retries, termination_reason, recovery_required, recovered_at, recovery_action"
+        )
+        database.execute(
+            f"INSERT INTO executions_new({execution_columns}) "
+            f"SELECT {execution_columns} FROM executions"
+        )
+        database.execute("DROP TABLE executions")
+        database.execute("DROP TABLE tasks")
+        database.execute("ALTER TABLE tasks_new RENAME TO tasks")
+        database.execute("ALTER TABLE executions_new RENAME TO executions")
+        database.execute(
+            "CREATE INDEX idx_tasks_queue ON tasks(status, preflight_status, runtime_environment, provider_id, "
+            "capability_level, execution_policy, priority, created_at, id)"
+        )
+        database.execute(
+            "CREATE INDEX idx_tasks_preflight ON tasks(status, preflight_status, priority, created_at, id)"
+        )
+        database.execute(
+            "CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)"
+        )
+        _create_current_execution_indexes(database)
+        database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
+        foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise LoopError(
+                f"Worker QUEUED Schema 迁移产生外键错误: {len(foreign_key_errors)}"
+            )
+        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise LoopError("Worker QUEUED Schema 迁移后 quick_check 失败")
+        commit(database)
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+    return {
+        "from": "3.8.0",
+        "to": SCHEMA_VERSION,
+        "migrated": True,
+        "tasks_preserved": task_count,
+        "executions_preserved": execution_count,
     }
 
 
@@ -460,6 +521,8 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
             "archived": 0, "tasks_mapped": 0, "executions_snapshotted": 0,
         }
+    if current == WORKER_QUEUE_SCHEMA_USER_VERSION:
+        return _migrate_worker_queue_schema(database)
     if current == SCHEDULING_SCHEMA_USER_VERSION:
         hybrid_result: dict[str, Any] = {}
         if not uses_hybrid_scope_schema(database):
@@ -540,6 +603,8 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
             legacy_environment = row.get("runtime_environment", "codex_automation")
             if legacy_environment == "deepseek":
                 runtime_environment, provider_id = "self_hosted_agent", "deepseek"
+            elif legacy_environment in {"codex_cli", "codex_automation"}:
+                runtime_environment, provider_id = legacy_environment, None
             else:
                 runtime_environment, provider_id = normalize_execution_target(legacy_environment)
             normalized_tasks[row["id"]] = {
@@ -609,9 +674,20 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
         database.execute(EXECUTIONS_TABLE_SQL)
         for row in execution_rows:
             route = normalized_tasks[row["task_id"]]
-            snapshot = resolve_execution_profile(
-                route["runtime_environment"], route["provider_id"], route["capability_level"], config
-            )
+            if route["runtime_environment"] in {"codex_cli", "codex_automation"}:
+                snapshot = {
+                    **route,
+                    "model": "legacy-unavailable",
+                    "reasoning": "medium",
+                    "attempt_timeout_seconds": int(
+                        config["task_execution"]["task_lease_seconds"]
+                    ),
+                    "max_retries": 0,
+                }
+            else:
+                snapshot = resolve_execution_profile(
+                    route["runtime_environment"], route["provider_id"], route["capability_level"], config
+                )
             database.execute(
                 """INSERT INTO executions_new(
                   execution_id, task_id, status, started_at, heartbeat_at, lease_expires_at, finished_at,

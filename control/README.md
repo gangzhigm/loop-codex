@@ -1,7 +1,7 @@
 # Control 代码导航
 
 `control/` 根目录只保留跨角色共享的 `loopctl.py`、`loopdb.py` 和本导航。
-Supervisor、Operator、Planner、Worker、Runner 都位于仓库根目录对应角色目录；
+Supervisor、Operator、Scheduler、Worker、Runner 都位于仓库根目录对应目录；Planner 是 Scheduler 内部阶段；
 可复用基础模块位于 `control/loop_agent/`。
 
 所有文本输入输出使用 UTF-8。SQLite 写入必须经过 `loopctl.py` 暴露的控制面，
@@ -14,13 +14,13 @@ Supervisor、Operator、Planner、Worker、Runner 都位于仓库根目录对应
 | `loopctl.py` | CLI 参数、命令分发、`validate/state` | 具体任务状态机实现 |
 | `loopdb.py` | 导出当前数据库公共 API | SQL 业务实现 |
 | `../operator/secretctl.py` | 系统密钥库的人工管理入口 | 任务数据库 |
-| `../planner/control.py` | Planner 预检领取、heartbeat 和结果发布协议 | Scheduler 周期与 AI 调用 |
-| `../planner/main.py` | Planner 单实例、预检排队与执行分发周期 | 任务领取与 AI 执行 |
-| `../planner/execution_dispatch.py` | 只读选择一个 READY 自动任务并启动一次 Runner | 原子 claim 与业务实现 |
+| `../scheduler/planner_control.py` | Scheduler 内部 Planner 预检领取、heartbeat 和结果发布协议 | Scheduler 周期与 AI 调用 |
+| `../scheduler/main.py` | Scheduler 单实例、heartbeat 和两条独立调度周期 | 任务领取与 AI 执行 |
+| `../scheduler/execution_dispatch.py` | 选择一个 READY 自动任务并通过受控事务排入正式 AI 队列 | Runner 候选选择、AI Worker 启动与业务实现 |
 | `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
-| `../runner/agent_runtime.py` | 内部 Agent 的 claim、heartbeat、Provider 工具循环和 finish | 周期调度 |
-| `../runner/planner_runner.py` | 只读确认 Planner 交付的 task-id | Provider、AI 预检和任务写回 |
-| `../supervisor/main.py` | 按 PID 与 heartbeat 监控并恢复独立 Dashboard 与 Planner | 任务查询、领取与任务表写入 |
+| `../runner/agent_runtime.py` | 常驻读取两类 AI 队列、计算容量、选择候选并发布 heartbeat/快照 | 当前不启动 AI Worker，不执行模型、工具或 finish |
+| `../worker/agent_runtime.py` | 内部 Agent 的 claim、heartbeat、Provider 工具循环和 finish | 周期调度 |
+| `../supervisor/main.py` | 按 PID 与 heartbeat 监控并恢复独立 Dashboard、Scheduler 与 Runner | 任务查询、领取与任务表写入 |
 | `../client/dashboard_server.py` | 独立本机 HTTP 进程、Secret API、静态资源服务、PID 与 heartbeat | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
 | `../common/service_runtime.py` | 三个常驻服务共用的 PID、heartbeat、停止请求和清理契约 | 业务调度与任务状态 |
@@ -87,7 +87,7 @@ configuration / tasks.normalization / tasks.scopes
                  ↓
 database.schema / database.task_store / database.state / database.validation
                  ↓
-operator / planner / worker / supervisor / runner
+operator / scheduler / worker / supervisor / runner
                  ↓
 根目录共享入口
 ```
@@ -105,16 +105,16 @@ operator / planner / worker / supervisor / runner
 3. 检查 `database/task_store.py` 的任务与子表写入。
 4. 运行 `python control/loopctl.py validate` 查看跨表错误。
 
-Planner 状态说明：
+Scheduler 与 Planner 状态说明：
 
-1. Planner 预检链按配置选择 `DRAFT/UNINSPECTED`，通过 loopctl 原子转换为 `DRAFT/QUEUED`。
-2. 预检 Runner 只能领取 Planner 已创建的 execution，并把任务推进为 `INSPECTING` 后再发布结果。
-3. Planner 执行链独立选择 `PENDING/READY` 自动任务，每轮最多启动一个内部 Agent Runner。
-4. 内部 Agent Runner 通过 loopctl 原子 claim；Planner 不领取任务，也不直接调用模型。
+1. Scheduler 预检链按配置选择 `DRAFT/UNINSPECTED`，通过 loopctl 原子转换为 `DRAFT/QUEUED`。
+2. Scheduler 正式排队链选择 `PENDING/READY` 自动任务，通过 loopctl 原子转换为 `QUEUED/READY` 并创建 `WORKER/QUEUED` execution。
+3. Runner 独立读取 Planner 与 Worker 队列，计算预检、全局和平台容量并选择候选。
+4. 当前 Runner 明确不启动 AI Worker；预检领取、`QUEUED -> RUNNING`、模型调用和后续生命周期尚未接入。
 
 Worker 无法领取任务：
 
-1. 检查任务是否为 `PENDING/READY` 且路由四元组匹配。
+1. 检查任务是否已由 Dispatcher 从 `PENDING/READY` 原子排入 `QUEUED/READY`，并存在匹配的 `WORKER/QUEUED` execution。
 2. 检查 `database/task_store.py` 投影出的依赖状态和 scope queue position。
 3. 检查 `../worker/control.py` 的全局/平台容量和动态冲突列表。
 4. 检查 `control/recovery.py` 是否保留了 `QUARANTINED` 锁。
@@ -141,7 +141,7 @@ Supervisor 异常：
 1. `data/runtime/supervisor.pid` 标识当前 `main.py serve` 进程。
 2. `data/runtime/supervisor-heartbeat.json` 证明主监控循环仍在按周期推进。
 3. `health_run.py` 只负责恢复 Supervisor 主进程，组件状态由 `main.py serve` 负责。
-4. Supervisor、Dashboard 与 Planner 都通过 `common/service_runtime.py` 维护各自的 PID、heartbeat 和停止请求；Supervisor 不读取任务数量，也不拥有其他进程的生命周期。
+4. Supervisor、Dashboard、Scheduler 与 Runner 都通过 `common/service_runtime.py` 维护各自的 PID、heartbeat 和停止请求；Supervisor 不读取任务数量，也不拥有其他进程的业务生命周期。
 5. 停止 Supervisor 不会停止 Dashboard；Dashboard 异常退出时，运行中的 Supervisor 会重新启动它。
 
 ## 回归测试
@@ -154,7 +154,7 @@ Supervisor 异常：
 | `_loop_support.py` | UTF-8 路径、临时数据库、任务构造、CLI 调用和历史 Schema fixture；不定义独立测试场景 |
 | `test_loop_configuration.py` | 初始化配置、状态投影和执行路由 |
 | `test_loop_migrations.py` | 旧 JSON、SQLite Schema 和混合锁迁移 |
-| `test_loop_planner.py` | Planner 兼容入口禁用和历史数据只读保留 |
+| `test_loop_planner.py` | Scheduler 周期、Planner 预检状态机和执行分发 |
 | `test_loop_claiming.py` | 领取、容量、优先级、依赖和 scope 锁 |
 | `test_loop_recovery.py` | 心跳、租约、超时、隔离和人工恢复 |
 | `test_loop_lifecycle.py` | 人工确认、阻塞答复、归档和重新排队 |

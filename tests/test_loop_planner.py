@@ -3,24 +3,21 @@ from __future__ import annotations
 import threading
 import subprocess
 from dataclasses import replace
-from pathlib import Path
-from unittest.mock import patch
 
 from _loop_support import *  # noqa: F403
 from loopdb import CONFIG_PATH, list_tasks
-from planner.main import (
+from scheduler.main import (
     REPOSITORY_ROOT,
-    run_planner_schedule,
+    run_scheduler,
     schedule_preflights,
 )
-from planner.execution_dispatch import (
+from scheduler.execution_dispatch import (
     EventLogger,
     ExecutionDispatcher,
     ExecutionDispatchSettings,
     select_candidate,
 )
-from planner.task_query import load_draft_tasks, select_draft_tasks
-from runner.planner_runner import receive_planner_task
+from runner.agent_runtime import queue_snapshot
 
 
 class _Clock:
@@ -55,49 +52,8 @@ class _Runtime:
         return False
 
 
-class PlannerReadOnlyDiscoveryTests(LoopTestCase):
-    @staticmethod
-    def selection_task(
-        task_id: str,
-        *,
-        priority: str,
-        preflight_status: str = "UNINSPECTED",
-        created_at: str = "2026-08-19T10:00:00+08:00",
-    ) -> dict[str, object]:
-        return {
-            "id": task_id,
-            "status": "DRAFT",
-            "preflight_status": preflight_status,
-            "priority": priority,
-            "created_at": created_at,
-        }
-
-    def test_draft_query_returns_complete_read_only_task_projections(self) -> None:
-        self.enqueue_draft("DRAFT-A")
-        self.enqueue_draft("DRAFT-B")
-        self.add_task("READY-C", "project-1")
-        database = connect(self.db_path)
-        before = database.execute(
-            "SELECT id, status, preflight_status, row_version FROM tasks ORDER BY id"
-        ).fetchall()
-        history_count = database.execute("SELECT count(*) FROM task_history").fetchone()[0]
-        database.close()
-
-        tasks = load_draft_tasks(self.db_path)
-
-        self.assertEqual([task["id"] for task in tasks], ["DRAFT-A", "DRAFT-B"])
-        self.assertTrue(all(task["status"] == "DRAFT" for task in tasks))
-        self.assertTrue(all("operator_definition" in task for task in tasks))
-        database = connect(self.db_path)
-        after = database.execute(
-            "SELECT id, status, preflight_status, row_version FROM tasks ORDER BY id"
-        ).fetchall()
-        after_history_count = database.execute("SELECT count(*) FROM task_history").fetchone()[0]
-        database.close()
-        self.assertEqual([tuple(row) for row in after], [tuple(row) for row in before])
-        self.assertEqual(after_history_count, history_count)
-
-    def test_shared_task_query_filters_in_database_and_preserves_all_tasks(self) -> None:
+class SchedulerAndPlannerTests(LoopTestCase):
+    def test_shared_task_projection_filters_status_and_preserves_all_tasks(self) -> None:
         self.enqueue_draft("FILTER-DRAFT")
         self.add_task("FILTER-READY", "project-1")
         database = connect(self.db_path)
@@ -114,46 +70,6 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
         finally:
             database.close()
 
-    def test_selection_fills_only_available_slots_using_configured_priority(self) -> None:
-        drafts = [
-            self.selection_task("LOW-OLD", priority="low"),
-            self.selection_task("CRITICAL-NEW", priority="critical", created_at="2026-08-19T11:00:00+08:00"),
-            self.selection_task("CRITICAL-OLD", priority="critical"),
-            self.selection_task("QUEUED", priority="blocker", preflight_status="QUEUED"),
-        ]
-        with patch("planner.task_query.load_draft_tasks", return_value=drafts):
-            selection = select_draft_tasks(
-                self.db_path,
-                max_active_executions=3,
-                priority_levels=["blocker", "critical", "high", "medium", "low"],
-            )
-
-        self.assertEqual(selection["draft_total"], 4)
-        self.assertEqual(selection["processing_count"], 1)
-        self.assertEqual(selection["available_slots"], 2)
-        self.assertEqual(
-            [task["id"] for task in selection["selected_tasks"]],
-            ["CRITICAL-OLD", "CRITICAL-NEW"],
-        )
-
-    def test_selection_returns_no_tasks_when_configured_capacity_is_full(self) -> None:
-        drafts = [
-            self.selection_task("PROCESSING-A", priority="critical", preflight_status="INSPECTING"),
-            self.selection_task("PROCESSING-B", priority="medium", preflight_status="INSPECTING"),
-            self.selection_task("WAITING", priority="blocker"),
-        ]
-        with patch("planner.task_query.load_draft_tasks", return_value=drafts):
-            selection = select_draft_tasks(
-                self.db_path,
-                max_active_executions=2,
-                priority_levels=["blocker", "critical", "high", "medium", "low"],
-            )
-
-        self.assertEqual(selection["processing_count"], 2)
-        self.assertEqual(selection["available_slots"], 0)
-        self.assertEqual(selection["selected_count"], 0)
-        self.assertEqual(selection["selected_tasks"], [])
-
     def test_schedule_queries_immediately_then_at_configured_interval(self) -> None:
         clock = _Clock()
         runtime = _Runtime(clock)
@@ -165,11 +81,11 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
             if len(query_times) == 2:
                 shutdown_event.set()
 
-        run_planner_schedule(
+        run_scheduler(
             runtime, 12345, shutdown_event,
             heartbeat_interval_seconds=15,
-            query_interval_seconds=300,
-            query_action=query,
+            preflight_interval_seconds=300,
+            preflight_action=query,
             monotonic=clock.monotonic,
         )
 
@@ -192,13 +108,13 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
             if len(execution_times) == 2:
                 shutdown_event.set()
 
-        run_planner_schedule(
+        run_scheduler(
             runtime,
             12345,
             shutdown_event,
             heartbeat_interval_seconds=15,
-            query_interval_seconds=300,
-            query_action=preflight,
+            preflight_interval_seconds=300,
+            preflight_action=preflight,
             execution_interval_seconds=900,
             execution_action=execute,
             monotonic=clock.monotonic,
@@ -214,6 +130,12 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
             "capability_level": "L3",
             "execution_policy": "automatic",
             "depends_on": [],
+            "lock_mode": "project",
+            "scope": ["project-1/file.txt"],
+            "planner_supplement": {
+                "technical_acceptance": ["verified"],
+                "evidence": ["inspected"],
+            },
         }
         tasks = [
             {**base, "id": "NOT-READY", "status": "PENDING", "preflight_status": "FAILED"},
@@ -224,85 +146,82 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
 
         self.assertEqual(selected["id"], "READY")
 
-    def test_execution_dispatch_starts_agent_runner_without_claiming(self) -> None:
+    def test_execution_dispatch_atomically_queues_worker_execution(self) -> None:
         config = load_initialization_config()
         settings = replace(
             ExecutionDispatchSettings.from_config(config),
             database_path=self.db_path,
         )
-        task = {
-            "id": "EXECUTION-READY",
-            "status": "PENDING",
-            "preflight_status": "READY",
-            "runtime_environment": "self_hosted_agent",
-            "provider_id": "deepseek",
-            "capability_level": "L3",
-            "execution_policy": "automatic",
-            "depends_on": [],
-        }
-        launched: dict[str, object] = {}
-
-        def launch(command: list[str], cwd: Path) -> int:
-            launched.update(command=command, cwd=cwd)
-            return 24680
+        self.add_task("EXECUTION-READY", "project-1", capability_level="L3")
 
         result = ExecutionDispatcher(
             settings,
             config,
-            snapshot_reader=lambda _settings, _config: ([task], []),
-            launcher=launch,
+            execution_id_factory=lambda _level: "worker-l3-queued",
             logger=EventLogger(None),
         ).run()
 
-        command = launched["command"]
-        self.assertEqual(result["outcome"], "RUNNER_STARTED")
-        self.assertEqual(result["candidate_task_id"], "EXECUTION-READY")
-        self.assertEqual(result["runner_pid"], 24680)
-        self.assertIn(str(REPOSITORY_ROOT / "runner" / "agent_runtime.py"), command)
-        self.assertNotIn("claim", command)
+        database = connect(self.db_path)
+        task = database.execute(
+            "SELECT status, assigned_agent FROM tasks WHERE id='EXECUTION-READY'"
+        ).fetchone()
+        execution = database.execute(
+            "SELECT task_id, status, execution_kind FROM executions "
+            "WHERE execution_id='worker-l3-queued'"
+        ).fetchone()
+        database.close()
+        self.assertEqual(result["outcome"], "QUEUED")
+        self.assertEqual(tuple(task), ("QUEUED", None))
+        self.assertEqual(tuple(execution), ("EXECUTION-READY", "QUEUED", "WORKER"))
 
-    def test_execution_dispatch_respects_global_and_platform_capacity(self) -> None:
+    def test_execution_dispatch_does_not_queue_the_same_task_twice(self) -> None:
         config = load_initialization_config()
         settings = replace(
             ExecutionDispatchSettings.from_config(config),
             database_path=self.db_path,
-            global_max_active_executions=1,
-            platform_max_active_executions=1,
         )
-        task = {
-            "id": "CAPACITY-READY",
-            "status": "PENDING",
-            "preflight_status": "READY",
-            "runtime_environment": "self_hosted_agent",
-            "provider_id": "deepseek",
-            "capability_level": "L3",
-            "execution_policy": "automatic",
-            "depends_on": [],
-        }
+        self.add_task("QUEUE-ONCE-WORKER", "project-1", capability_level="L3")
+        first = ExecutionDispatcher(
+            settings, config,
+            execution_id_factory=lambda _level: "worker-queue-once",
+            logger=EventLogger(None),
+        ).run()
+        second = ExecutionDispatcher(settings, config, logger=EventLogger(None)).run()
+        database = connect(self.db_path)
+        count = database.execute(
+            "SELECT count(*) FROM executions WHERE task_id='QUEUE-ONCE-WORKER'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(first["outcome"], "QUEUED")
+        self.assertEqual(second["outcome"], "NO_TASK")
+        self.assertEqual(count, 1)
 
-        global_result = ExecutionDispatcher(
+    def test_runner_selects_both_queue_kinds_without_launching(self) -> None:
+        config = load_initialization_config()
+        self.enqueue_draft("RUNNER-PLANNER")
+        self.run_ctl("schedule-preflight", "--config", str(CONFIG_PATH))
+        self.add_task("RUNNER-WORKER", "project-1", capability_level="L3")
+        settings = replace(
+            ExecutionDispatchSettings.from_config(config), database_path=self.db_path
+        )
+        ExecutionDispatcher(
             settings,
             config,
-            snapshot_reader=lambda _settings, _config: (
-                [task],
-                [{"runtime_environment": "self_hosted_agent"}],
-            ),
-            launcher=lambda _command, _cwd: self.fail("容量已满时不得启动 Runner"),
-            logger=EventLogger(None),
-        ).run()
-        platform_result = ExecutionDispatcher(
-            replace(settings, global_max_active_executions=2),
-            config,
-            snapshot_reader=lambda _settings, _config: (
-                [task],
-                [{"runtime_environment": "self_hosted_agent"}],
-            ),
-            launcher=lambda _command, _cwd: self.fail("容量已满时不得启动 Runner"),
+            execution_id_factory=lambda _level: "runner-worker-queued",
             logger=EventLogger(None),
         ).run()
 
-        self.assertEqual((global_result["outcome"], global_result["limit_scope"]), ("SLOT_FULL", "global"))
-        self.assertEqual((platform_result["outcome"], platform_result["limit_scope"]), ("SLOT_FULL", "platform"))
+        snapshot = queue_snapshot(self.db_path, config)
+
+        self.assertFalse(snapshot["launch_enabled"])
+        self.assertEqual(snapshot["planner"]["queued"], 1)
+        self.assertEqual(snapshot["worker"]["queued"], 1)
+        self.assertEqual(
+            snapshot["planner"]["candidates"][0]["execution_kind"], "PLANNER"
+        )
+        self.assertEqual(
+            snapshot["worker"]["candidates"][0]["execution_kind"], "WORKER"
+        )
 
     def test_schedule_atomically_queues_only_configured_capacity(self) -> None:
         for task_id in ("QUEUE-A", "QUEUE-B", "QUEUE-C"):
@@ -365,40 +284,9 @@ class PlannerReadOnlyDiscoveryTests(LoopTestCase):
         )
 
         command = captured["command"]
-        self.assertEqual(result["event"], "planner.preflight_schedule.completed")
+        self.assertEqual(result["event"], "scheduler.preflight_schedule.completed")
         self.assertIn(str(REPOSITORY_ROOT / "control" / "loopctl.py"), command)
         self.assertIn("schedule-preflight", command)
-        self.assertNotIn("planner_runner.py", " ".join(command))
-
-    def test_planner_runner_receipt_is_read_only_and_stops_before_ai(self) -> None:
-        self.enqueue_draft("HANDOFF-RECEIVER")
-        database = connect(self.db_path)
-        before = database.execute(
-            "SELECT status, preflight_status, row_version FROM tasks "
-            "WHERE id='HANDOFF-RECEIVER'"
-        ).fetchone()
-        database.close()
-
-        result = receive_planner_task(
-            self.db_path,
-            load_initialization_config(),
-            execution_id="planner-receiver",
-            task_id="HANDOFF-RECEIVER",
-        )
-
-        self.assertEqual(result["outcome"], "PLANNER_TASK_RECEIVED")
-        self.assertEqual(result["next_action"], "AI_PREFLIGHT_NOT_ENABLED")
-        database = connect(self.db_path)
-        after = database.execute(
-            "SELECT status, preflight_status, row_version FROM tasks "
-            "WHERE id='HANDOFF-RECEIVER'"
-        ).fetchone()
-        preflight_count = database.execute(
-            "SELECT count(*) FROM preflight_executions"
-        ).fetchone()[0]
-        database.close()
-        self.assertEqual(tuple(after), tuple(before))
-        self.assertEqual(preflight_count, 0)
 
     def test_targeted_preflight_claim_and_ready_publish_worker_contract(self) -> None:
         self.enqueue_draft("PLANNER-FIRST")

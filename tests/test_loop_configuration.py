@@ -9,9 +9,9 @@ from _loop_support import *  # noqa: F403
 class LoopConfigurationTests(LoopTestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "5.2.0")
+        self.assertEqual(config["config_version"], "5.4.0")
         self.assertEqual(config["prompts"]["operator"], "operator/operator.md")
-        self.assertEqual(config["prompts"]["planner"], "planner/planner.md")
+        self.assertEqual(config["prompts"]["planner"], "scheduler/planner.md")
         self.assertEqual(config["prompts"]["worker"], "worker/worker.md")
         self.assertNotIn("automations", config)
         self.assertEqual(config["health"]["scheduler"], "windows_task_scheduler")
@@ -55,27 +55,27 @@ class LoopConfigurationTests(LoopTestCase):
                 },
             },
         )
+        scheduler = config["scheduler"]
+        self.assertEqual(scheduler["heartbeat_interval_seconds"], 15)
+        self.assertIsInstance(scheduler["preflight"]["scheduled"], bool)
+        self.assertEqual(scheduler["preflight"]["interval_minutes"], 5)
+        self.assertIsInstance(scheduler["execution"]["scheduled"], bool)
+        self.assertEqual(scheduler["execution"]["interval_minutes"], 15)
         self.assertEqual(
-            config["planner"]["scheduler"],
-            {
-                "scheduled": True,
-                "interval_minutes": 5,
-                "heartbeat_interval_seconds": 15,
-                "runner_log_path": "data/runtime/planner-runner.log",
-            },
+            scheduler["execution"]["log_path"],
+            "data/runtime/scheduler-execution-dispatch.log",
         )
+        self.assertEqual(scheduler["execution"]["runtime_environment"], "self_hosted_agent")
+        self.assertEqual(scheduler["execution"]["provider_id"], "deepseek")
+        self.assertEqual(scheduler["execution"]["supported_capability_levels"], list(CAPABILITY_LEVELS))
+        self.assertEqual(config["runner"]["heartbeat_interval_seconds"], 15)
+        self.assertEqual(config["runner"]["queue_poll_interval_seconds"], 5)
         self.assertEqual(
-            config["planner"]["execution_scheduler"],
-            {
-                "scheduled": True,
-                "interval_minutes": 15,
-                "working_directory": str(BASE_DIR),
-                "log_path": "data/runtime/planner-execution-dispatch.log",
-                "runtime_environment": "self_hosted_agent",
-                "provider_id": "deepseek",
-                "supported_capability_levels": list(CAPABILITY_LEVELS),
-            },
+            set(config["supervisor"]["components"]),
+            {"dashboard", "scheduler", "runner"},
         )
+        self.assertNotIn("scheduler", config["planner"])
+        self.assertNotIn("execution_scheduler", config["planner"])
         self.assertNotIn("dispatcher", config)
         self.assertEqual(set(config["execution_profiles"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
         self.assertEqual(
@@ -128,7 +128,7 @@ class LoopConfigurationTests(LoopTestCase):
         result = validate_database(database)
         database.close()
         self.assertTrue(result["ok"], result["errors"])
-        self.assertEqual(result["schema_version"], "3.8.0")
+        self.assertEqual(result["schema_version"], "3.9.0")
 
     def test_fresh_schema_has_capability_routing_and_execution_snapshot(self) -> None:
         database = connect(self.db_path)

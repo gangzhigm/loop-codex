@@ -119,6 +119,35 @@ def write_task_root_config(
         raise OperationsApiError(HTTPStatus.SERVICE_UNAVAILABLE, "全局任务工作区保存失败") from error
 
 
+def write_scheduler_automation_config(
+    config_path: Path,
+    config: Mapping[str, Any],
+    chain: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    """原子更新 Scheduler 单条调度链的自动化开关。"""
+    chain_key = {"planner": "preflight", "dispatcher": "execution"}.get(chain)
+    if chain_key is None or not isinstance(enabled, bool):
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "Scheduler 自动化配置无效")
+    updated = copy.deepcopy(dict(config))
+    scheduler = updated.get("scheduler")
+    if not isinstance(scheduler, dict) or not isinstance(scheduler.get(chain_key), dict):
+        raise OperationsApiError(HTTPStatus.BAD_REQUEST, "Scheduler 自动化配置缺失")
+    scheduler[chain_key]["scheduled"] = enabled
+    temporary = config_path.with_name(f"{config_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(updated, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        temporary.replace(config_path)
+        return load_initialization_config(config_path)
+    except (OSError, ValueError) as error:
+        temporary.unlink(missing_ok=True)
+        raise OperationsApiError(HTTPStatus.SERVICE_UNAVAILABLE, "Scheduler 自动化配置保存失败") from error
+
+
 def provider_secret_refs(config: Mapping[str, Any]) -> dict[str, str]:
     execution_profiles = config.get("execution_profiles")
     self_hosted = execution_profiles.get("self_hosted_agent") if isinstance(execution_profiles, Mapping) else None
@@ -341,6 +370,7 @@ def operations_config_payload(
     ]
     task_execution = config.get("task_execution")
     planner = config.get("planner")
+    scheduler = config.get("scheduler")
     dashboard = config.get("dashboard")
     self_hosted_agent = config.get("self_hosted_agent")
     health = config.get("health")
@@ -365,10 +395,8 @@ def operations_config_payload(
         for key, value in (self_hosted_agent.items() if isinstance(self_hosted_agent, Mapping) else [])
         if key in {"max_steps", "max_final_repairs", "model_timeout_seconds", "tool_timeout_seconds"}
     ]
-    planner_scheduler = planner.get("scheduler") if isinstance(planner, Mapping) else {}
-    planner_execution_scheduler = (
-        planner.get("execution_scheduler") if isinstance(planner, Mapping) else {}
-    )
+    scheduler_preflight = scheduler.get("preflight") if isinstance(scheduler, Mapping) else {}
+    scheduler_execution = scheduler.get("execution") if isinstance(scheduler, Mapping) else {}
     return {
         "ok": True,
         "generated_at": now_shanghai(),
@@ -405,19 +433,27 @@ def operations_config_payload(
                 "id": "planner",
                 "title": "Planner 管理",
                 "items": [
-                    item("planner-prompt", "Planner 协议", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "Planner 的预检排队与正式执行分发边界。", "读取时生效", "文件存在性检查"),
-                    item("planner-runtime", "执行运行环境", _config_value(planner_execution_scheduler if isinstance(planner_execution_scheduler, Mapping) else {}, "runtime_environment"), "config/initialization.json", "Planner 只选择匹配运行环境与 Provider 的 READY 自动任务。", "需重启 Planner", "配置加载时校验"),
-                    item("planner-preflight-cadence", "预检排队周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "选择 DRAFT/UNINSPECTED 任务并通过 loopctl 原子排入预检队列。", "需重启 Planner", "Planner 日志"),
-                    item("planner-execution-cadence", "执行分发周期", f"每 {_config_value(planner_execution_scheduler if isinstance(planner_execution_scheduler, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "选择 PENDING/READY 自动任务，每轮最多启动一个 Runner，不等待执行结束。", "需重启 Planner", "Planner 执行分发日志"),
-                    item("planner-heartbeat", "Heartbeat 周期", f"每 {_config_value(planner_scheduler if isinstance(planner_scheduler, Mapping) else {}, 'heartbeat_interval_seconds')} 秒", "config/initialization.json", "两条调度链共享一个 Planner 进程 heartbeat。", "需重启 Planner", "heartbeat 文件"),
-                    item("planner-boundary", "预检安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "预检 Runner 只读检查，并通过受控 loopctl 写回。", "需重启 Planner", "配置加载时校验"),
+                    item("planner-prompt", "Planner 协议", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "Planner 预检阶段的状态、结果和安全边界。", "读取时生效", "文件存在性检查"),
+                    item("planner-runtime", "预检运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "预检 execution 只处理匹配运行环境与 Provider 的草稿任务。", "需重启预检 Runner", "配置加载时校验"),
+                    item("planner-capacity", "预检并发上限", _config_value(planner if isinstance(planner, Mapping) else {}, "max_active_executions"), "config/initialization.json", "QUEUED 与 INSPECTING 预检 execution 共享的容量上限。", "下次排队生效", "排队事务校验"),
+                    item("planner-boundary", "预检安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "预检 Runner 只读检查，并通过受控 loopctl 写回。", "需重启预检 Runner", "配置加载时校验"),
+                ],
+            },
+            {
+                "id": "scheduler",
+                "title": "Scheduler 管理",
+                "items": [
+                    item("scheduler-service", "常驻 Scheduler", "main.py serve", "scheduler/main.py", "统一维护 heartbeat，并独立推进预检与正式执行排队。", "当前生效", "data/runtime/health-state.json", "active"),
+                    item("scheduler-preflight-cadence", "预检排队周期", f"每 {_config_value(scheduler_preflight if isinstance(scheduler_preflight, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "选择 DRAFT/UNINSPECTED 任务并通过 loopctl 原子排入 Planner 预检队列。", "需重启 Scheduler", "Scheduler 日志"),
+                    item("scheduler-execution-cadence", "正式排队周期", f"每 {_config_value(scheduler_execution if isinstance(scheduler_execution, Mapping) else {}, 'interval_minutes')} 分钟", "config/initialization.json", "选择 PENDING/READY 自动任务并原子创建 WORKER/QUEUED execution。", "需重启 Scheduler", "正式排队日志"),
+                    item("scheduler-heartbeat", "Heartbeat 周期", f"每 {_config_value(scheduler if isinstance(scheduler, Mapping) else {}, 'heartbeat_interval_seconds')} 秒", "config/initialization.json", "两条调度链共享一个 Scheduler 进程 heartbeat。", "需重启 Scheduler", "heartbeat 文件"),
                 ],
             },
             {
                 "id": "supervisor",
                 "title": "Supervisor 管理",
                 "items": [
-                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "周期检查并恢复独立 Dashboard 与 Planner 的可核实状态。", "当前生效", "data/runtime/health-state.json", "active"),
+                    item("supervisor-service", "常驻 Supervisor", "main.py serve", "supervisor/main.py", "周期检查并恢复独立 Dashboard、Scheduler 与 Runner 的可核实状态。", "当前生效", "data/runtime/health-state.json", "active"),
                     item("supervisor-health", "服务恢复边界", "Windows 健康任务", "config/initialization.json", "健康任务只探测并恢复 Supervisor 主进程，不领取或执行任务。", "当前生效", "健康任务运行结果"),
                 ],
             },
@@ -436,7 +472,7 @@ def operations_config_payload(
                 "title": "Runner 管理",
                 "items": [
                     item("self-hosted-limits", "自建 Agent 运行上限", self_hosted_limits or "未配置", "config/initialization.json", "自建 Agent 的步骤、模型、工具和输出边界。", "需重启", "配置加载时校验"),
-                    item("runner-service", "独立 Runner 服务", "尚未部署", "部署设计", "当前仅提供单次 Runner 入口，尚未安装常驻 Runner 服务。", "受保护", "尚未实现", "planned"),
+                    item("runner-service", "独立 Runner 服务", "main.py serve", "runner/agent_runtime.py", "常驻读取两类队列、计算容量并选择候选；当前明确不启动 AI Worker。", "当前生效", "data/runtime/runner-queue-state.json", "active"),
                 ],
             },
         ],

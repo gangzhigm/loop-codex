@@ -439,7 +439,7 @@ def command_update(args: argparse.Namespace) -> None:
         ).fetchone()
         if not task:
             raise LoopError("任务不存在")
-        if task["status"] in {"RUNNING", "CONFIRMED", "CANCELLED"}:
+        if task["status"] in {"QUEUED", "RUNNING", "CONFIRMED", "CANCELLED"}:
             raise LoopError(f"{task['status']} 任务不能修改")
         if task["preflight_status"] in {"QUEUED", "INSPECTING"}:
             raise LoopError("任务已进入 Planner 队列，不能并发修改")
@@ -584,10 +584,10 @@ def command_migrate_internal_runtime(args: argparse.Namespace) -> None:
             "WHERE runtime_environment IN ('codex_cli', 'codex_automation') "
             "ORDER BY id"
         ).fetchall()
-        running = [task["id"] for task in tasks if task["status"] == "RUNNING"]
-        if running:
+        active = [task["id"] for task in tasks if task["status"] in {"QUEUED", "RUNNING"}]
+        if active:
             raise LoopError(
-                "存在 RUNNING 任务，拒绝迁移运行环境: " + ", ".join(running)
+                "存在 QUEUED 或 RUNNING 任务，拒绝迁移运行环境: " + ", ".join(active)
             )
 
         for task in tasks:
@@ -875,8 +875,8 @@ def command_cancel(args: argparse.Namespace) -> None:
         ).fetchone()
         if not row:
             raise LoopError("任务不存在")
-        if row["status"] == "RUNNING":
-            raise LoopError("RUNNING 任务不能取消")
+        if row["status"] in {"QUEUED", "RUNNING"}:
+            raise LoopError("QUEUED 或 RUNNING 任务不能取消")
         if row["preflight_status"] in {"QUEUED", "INSPECTING"}:
             raise LoopError("任务已进入 Planner 队列，不能取消")
         if row["archived_at"] is not None:

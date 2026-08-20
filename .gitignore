@@ -12,3 +12,9 @@ data/runtime/
 # SQLite WAL 模式的可重建运行文件；权威任务事实仍是主 sqlite3 文件。
 data/*.sqlite3-wal
 data/*.sqlite3-shm
+
+# Dashboard 前端依赖和 TypeScript/Vite 中间文件；client/dist 是可直接部署的静态产物。
+client/frontend/node_modules/
+client/frontend/*.tsbuildinfo
+client/frontend/vite.config.js
+client/frontend/vite.config.d.ts

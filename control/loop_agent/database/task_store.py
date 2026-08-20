@@ -234,6 +234,7 @@ def insert_task(
         "DRAFT",
         "NEEDS_REVIEW",
         "PENDING",
+        "QUEUED",
         "RUNNING",
         "WAITING_CONFLICT",
         "WAITING_HUMAN",
@@ -271,9 +272,10 @@ def insert_task(
     runtime_environment, provider_id = normalize_execution_target(
         runtime_environment, provider_id
     )
-    if capability_level is not None:
+    route_capability_level = capability_level or estimated_capability_level
+    if route_capability_level is not None:
         resolve_execution_profile(
-            runtime_environment, provider_id, capability_level
+            runtime_environment, provider_id, route_capability_level
         )
     stamp = task.get("created_at") or now_shanghai()
     progress = task.get("progress") or {}

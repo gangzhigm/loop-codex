@@ -6,8 +6,8 @@
 2. 将子命令绑定到 Operator、Planner、Worker 或共享控制模块；
 3. 把可公开的控制面异常统一转换为 UTF-8 JSON。
 
-实际状态机不在这里：Operator 位于 ``operator/control.py``，Planner 预检控制协议
-位于 ``planner/control.py``，Worker 位于 ``worker/control.py``，
+实际状态机不在这里：Operator 位于 ``operator/control.py``，Scheduler 内部的 Planner
+预检控制协议位于 ``scheduler/planner_control.py``，Worker 位于 ``worker/control.py``，
 迁移和恢复等共享逻辑位于 ``loop_agent/control``。
 
 手工排查顺序：
@@ -56,7 +56,7 @@ from loop_agent.control.migration import command_migrate
 from loop_agent.control.recovery import command_recover
 
 # Planner 预检通过独立状态机领取草稿、维护心跳并发布 Worker 执行契约。
-from planner.control import (
+from scheduler.planner_control import (
     command_schedule_preflight,
     command_preflight_claim,
     command_preflight_fail,
@@ -64,6 +64,7 @@ from planner.control import (
     command_preflight_needs_review,
     command_preflight_ready,
 )
+from scheduler.execution_dispatch import command_schedule_execution
 
 # Worker 子命令负责原子领取、租约心跳、动态扩锁和最终回写。
 from worker.control import (
@@ -145,6 +146,9 @@ def parser() -> argparse.ArgumentParser:
     schedule_preflight = commands.add_parser("schedule-preflight")
     schedule_preflight.add_argument("--config", default=str(CONFIG_PATH))
     schedule_preflight.set_defaults(handler=command_schedule_preflight)
+    schedule_execution = commands.add_parser("schedule-execution")
+    schedule_execution.add_argument("--config", default=str(CONFIG_PATH))
+    schedule_execution.set_defaults(handler=command_schedule_execution)
     preflight_claim = commands.add_parser("preflight-claim")
     preflight_claim.add_argument("execution_id")
     preflight_claim.add_argument("--task-id")

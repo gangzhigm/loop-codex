@@ -28,9 +28,9 @@
 先确认当前入口赋予的角色，再完整遵循对应权威提示词；不得把一个角色的权限扩展到另一个角色。
 
 - 人工任务管理 Operator：`operator/operator.md`。只管理任务，不实现任务业务内容或管理外部客户端自动化。
-- Planner 调度服务：`planner/planner.md`。维护 PID、heartbeat 和正常停止；分别周期安排 DRAFT 预检排队与 READY 自动任务执行分发，任务领取和 AI 执行仍由对应 Runner 负责。
+- Scheduler 调度服务：`scheduler/main.py` 与内部 Planner 预检协议 `scheduler/planner.md`。维护 PID、heartbeat 和正常停止；分别周期安排 Planner 预检排队与 READY 自动任务执行分发，不领取任务或调用模型。
 - 通用单任务 Worker 协议：`worker/worker.md`。每次只领取并处理一个与入口身份匹配的 READY 任务。
-- Self-hosted Agent Worker：宿主循环、队列领取、heartbeat、工具边界和 finish 由 `runner/agent_runtime.py` 负责，Provider 只实现中立模型协议适配。
+- Self-hosted Agent Worker：`runner/agent_runtime.py` 只维护自身 PID、heartbeat 和 Worker 子进程；`worker/agent_runtime.py` 负责单任务领取、heartbeat、工具边界和 finish，Provider 只实现中立模型协议适配。
 - 健康检查：Windows 任务计划程序运行 `supervisor/run.ps1`，检查并在必要时恢复 `supervisor/main.py serve`；不领取任务。
 
 详细状态、恢复、拆分、归档和执行规则属于对应角色提示词及控制代码；本文件只保存跨角色且稳定的共同边界。`README.md` 仅供人工导航，不是角色执行事实源。

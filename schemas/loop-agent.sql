@@ -1,12 +1,12 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 30800;
+PRAGMA user_version = 30900;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN (
-    'DRAFT', 'NEEDS_REVIEW', 'PENDING', 'RUNNING', 'WAITING_CONFLICT', 'WAITING_HUMAN',
+    'DRAFT', 'NEEDS_REVIEW', 'PENDING', 'QUEUED', 'RUNNING', 'WAITING_CONFLICT', 'WAITING_HUMAN',
     'SUCCEEDED', 'CONFIRMED', 'FAILED', 'CANCELLED'
   )),
   priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS executions (
   execution_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN (
-    'RUNNING', 'FINISHED', 'EXPIRED', 'STALLED', 'TIMED_OUT'
+    'QUEUED', 'RUNNING', 'FINISHED', 'EXPIRED', 'STALLED', 'TIMED_OUT'
   )),
   started_at TEXT NOT NULL,
   heartbeat_at TEXT NOT NULL,
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS executions (
 
 CREATE INDEX IF NOT EXISTS idx_executions_active ON executions(status, lease_expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_one_active_task
-  ON executions(task_id) WHERE status='RUNNING';
+  ON executions(task_id) WHERE status IN ('QUEUED', 'RUNNING');
 
 CREATE TABLE IF NOT EXISTS preflight_executions (
   execution_id TEXT PRIMARY KEY,

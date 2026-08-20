@@ -93,15 +93,6 @@ class ServiceRuntimeFiles:
         )
 
     @classmethod
-    def from_config(
-        cls,
-        config: dict[str, Any],
-        component: str,
-    ) -> "ServiceRuntimeFiles":
-        """兼容旧 Scheduler 调用；新代码使用 ``from_component_config``。"""
-        return cls.from_component_config(config, component)
-
-    @classmethod
     def supervisor(cls) -> "ServiceRuntimeFiles":
         """构造由 Windows 健康任务管理的 Supervisor 运行文件契约。"""
         return cls(

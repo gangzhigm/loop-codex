@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from pathlib import Path
 from typing import IO, Any
@@ -12,6 +14,19 @@ DETACHED_PROCESS_FLAGS = (
     | subprocess.DETACHED_PROCESS
     | subprocess.CREATE_NO_WINDOW
 )
+SENSITIVE_ENVIRONMENT_NAME = re.compile(
+    r"(secret|credential|password|api[_-]?key|access[_-]?token|private[_-]?key|authorization)",
+    re.IGNORECASE,
+)
+
+
+def safe_process_environment() -> dict[str, str]:
+    """返回不含名称表明为凭据的子进程环境副本。"""
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not SENSITIVE_ENVIRONMENT_NAME.search(name)
+    }
 
 
 def launch_detached_process(

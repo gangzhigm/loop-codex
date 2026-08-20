@@ -13,7 +13,7 @@ CREATE TABLE tasks_new (
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN (
-    'DRAFT', 'NEEDS_REVIEW', 'PENDING', 'RUNNING', 'WAITING_CONFLICT', 'WAITING_HUMAN',
+    'DRAFT', 'NEEDS_REVIEW', 'PENDING', 'QUEUED', 'RUNNING', 'WAITING_CONFLICT', 'WAITING_HUMAN',
     'SUCCEEDED', 'CONFIRMED', 'FAILED', 'CANCELLED'
   )),
   priority TEXT NOT NULL CHECK (priority IN ('blocker', 'critical', 'high', 'medium', 'low')),
@@ -74,7 +74,7 @@ CREATE TABLE executions_new (
   execution_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN (
-    'RUNNING', 'FINISHED', 'EXPIRED', 'STALLED', 'TIMED_OUT'
+    'QUEUED', 'RUNNING', 'FINISHED', 'EXPIRED', 'STALLED', 'TIMED_OUT'
   )),
   started_at TEXT NOT NULL,
   heartbeat_at TEXT NOT NULL,
@@ -140,4 +140,3 @@ CREATE TABLE preflight_executions (
   recovery_action TEXT CHECK (recovery_action IS NULL OR recovery_action = 'requeue')
 )
 """
-

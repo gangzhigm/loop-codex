@@ -92,7 +92,7 @@ def validate_database(
         if invalid_diagnostics:
             errors.append("任务结果诊断无效: " + ",".join(invalid_diagnostics))
     if uses_preflight_schema(database) and not uses_hybrid_scope_schema(database):
-        errors.append("当前 Schema 3.8.0 尚未迁移到混合 scope 锁结构")
+        errors.append("当前数据库尚未迁移到混合 scope 锁结构")
     invalid_confirmed = database.execute(
         """SELECT t.id FROM tasks t WHERE t.status='CONFIRMED' AND NOT EXISTS (
           SELECT 1 FROM task_history h WHERE h.task_id=t.id AND h.to_status='CONFIRMED' AND h.from_status='SUCCEEDED'
@@ -173,7 +173,7 @@ def validate_database(
                 """SELECT id FROM tasks WHERE
                   (status='DRAFT' AND preflight_status NOT IN ('UNINSPECTED','QUEUED','INSPECTING')) OR
                   (status='NEEDS_REVIEW' AND preflight_status<>'FAILED') OR
-                  (status IN ('PENDING','RUNNING','WAITING_CONFLICT','WAITING_HUMAN') AND preflight_status<>'READY') OR
+                  (status IN ('PENDING','QUEUED','RUNNING','WAITING_CONFLICT','WAITING_HUMAN') AND preflight_status<>'READY') OR
                   (preflight_status='READY' AND (capability_level IS NULL OR lock_mode IS NULL OR
                     NOT EXISTS (SELECT 1 FROM task_scopes s WHERE s.task_id=tasks.id) OR
                     NOT EXISTS (SELECT 1 FROM task_technical_acceptance a WHERE a.task_id=tasks.id) OR
@@ -201,12 +201,29 @@ def validate_database(
                     "Planner execution 状态无效: "
                     + ",".join(row[0] for row in invalid_planners)
                 )
+            invalid_worker_queues = database.execute(
+                """SELECT e.execution_id AS identity FROM executions e LEFT JOIN tasks t ON t.id=e.task_id
+                WHERE e.status='QUEUED' AND (
+                  t.id IS NULL OR t.status<>'QUEUED' OR t.preflight_status<>'READY'
+                )
+                UNION ALL
+                SELECT 'task:' || t.id AS identity FROM tasks t WHERE t.status='QUEUED'
+                AND NOT EXISTS (
+                  SELECT 1 FROM executions queued
+                  WHERE queued.task_id=t.id AND queued.status='QUEUED'
+                )"""
+            ).fetchall()
+            if invalid_worker_queues:
+                errors.append(
+                    "Worker execution 队列状态无效: "
+                    + ",".join(row[0] for row in invalid_worker_queues)
+                )
         if uses_recovery_schema(database):
             invalid_recoveries = database.execute(
                 "SELECT execution_id FROM executions WHERE "
                 "(status IN ('STALLED','TIMED_OUT') AND (recovery_required<>1 OR finished_at IS NULL "
                 "OR termination_reason IS NULL)) OR "
-                "(status IN ('RUNNING','FINISHED','EXPIRED') AND recovery_required=1)"
+                "(status IN ('QUEUED','RUNNING','FINISHED','EXPIRED') AND recovery_required=1)"
             ).fetchall()
             if invalid_recoveries:
                 errors.append(

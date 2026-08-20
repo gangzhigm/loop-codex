@@ -9,6 +9,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONTROL_ROOT = REPOSITORY_ROOT / "control"
 RUNTIME_DIR = REPOSITORY_ROOT / "data" / "runtime"
 RUNNERS_DIR = RUNTIME_DIR / "runners"
+RUNNER_QUEUE_STATE = RUNTIME_DIR / "runner-queue-state.json"
 HEALTH_LOCK = RUNTIME_DIR / "health-supervisor.lock"
 HEALTH_STATE = RUNTIME_DIR / "health-state.json"
 PID_PATH = RUNTIME_DIR / "supervisor.pid"

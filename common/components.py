@@ -1,4 +1,4 @@
-"""Supervisor 对 Planner 和 Dashboard 的组件管理方法。"""
+"""Supervisor 对 Scheduler 和 Dashboard 的组件管理方法。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ from common.paths import (
     HEALTH_STATE,
     REPOSITORY_ROOT,
 )
-from common.runners import runner_snapshot
 from common.service_runtime import ServiceRuntimeFiles
 from common.windows import process_alive, windows_powershell
 
@@ -92,7 +91,7 @@ def component_specs(
     config: dict[str, Any],
     desired_states: dict[str, bool] | None = None,
 ) -> tuple[ComponentSpec, ...]:
-    """从已校验配置构造 Dashboard 与 Planner 的稳定运行契约。"""
+    """从已校验配置构造 Dashboard、Scheduler 与 Runner 的运行契约。"""
     components = config["supervisor"]["components"]
     desired = desired_states or {}
 
@@ -114,17 +113,23 @@ def component_specs(
         )
 
     dashboard = build("dashboard", "Dashboard", True, ())
-    planner = build(
-        "planner",
-        "Planner Scheduler",
+    scheduler = build(
+        "scheduler",
+        "Scheduler",
         (
-            config["planner"]["scheduler"]["scheduled"] is True
-            or config["planner"]["execution_scheduler"]["scheduled"] is True
+            config["scheduler"]["preflight"]["scheduled"] is True
+            or config["scheduler"]["execution"]["scheduled"] is True
         )
-        and desired.get("planner", True),
+        and desired.get("scheduler", True),
         ("serve",),
     )
-    return dashboard, planner
+    runner = build(
+        "runner",
+        "Runner",
+        desired.get("runner", True),
+        ("serve",),
+    )
+    return dashboard, scheduler, runner
 
 
 def is_component_process(pid: int, spec: ComponentSpec) -> bool:
@@ -304,7 +309,7 @@ def ensure_component(
             "message": (
                 f"{spec.display_name} 自动调度已关闭。"
                 if stopped
-                else f"{spec.display_name} 已收到停止请求；已启动的 Runner 不受影响。"
+                else f"{spec.display_name} 已收到停止请求；正在等待进程安全退出。"
             ),
         }
 
@@ -394,9 +399,8 @@ def component_snapshot(
     *,
     start_timeout_seconds: float,
     stop_timeout_seconds: float,
-    runner_heartbeat_timeout_seconds: float = 120,
 ) -> dict[str, dict[str, Any]]:
-    """管理两个独立常驻组件，并只读汇总动态 Runner 状态。"""
+    """管理 Dashboard、Scheduler 与 Runner 三个独立常驻组件。"""
 
     def inspect(spec: ComponentSpec) -> dict[str, Any]:
         """把单个组件的意外监控异常限制在本轮状态中。"""
@@ -416,21 +420,4 @@ def component_snapshot(
                 "message": f"{spec.display_name} 监控失败：{type(error).__name__}",
             }
 
-    managed = {spec.key: inspect(spec) for spec in specs}
-    try:
-        runners = runner_snapshot(runner_heartbeat_timeout_seconds)
-    except Exception as error:
-        # 动态 Runner 的观察故障不能影响 Scheduler 管理或 Supervisor heartbeat。
-        runners = {
-            "component": "runners",
-            "status": "UNAVAILABLE",
-            "checked_at": now_shanghai(),
-            "active_count": 0,
-            "observed_count": 0,
-            "message": f"Runner 状态读取失败：{type(error).__name__}",
-            "instances": [],
-        }
-    return {
-        **managed,
-        "runners": runners,
-    }
+    return {spec.key: inspect(spec) for spec in specs}

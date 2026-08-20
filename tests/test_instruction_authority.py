@@ -29,7 +29,7 @@ class InstructionAuthorityTests(unittest.TestCase):
     def test_all_role_prompts_are_registered_and_documented(self) -> None:
         expected = {
             "operator": "operator/operator.md",
-            "planner": "planner/planner.md",
+            "planner": "scheduler/planner.md",
             "worker": "worker/worker.md",
         }
 
@@ -43,7 +43,9 @@ class InstructionAuthorityTests(unittest.TestCase):
     def test_runtime_authorities_are_documented_and_exist(self) -> None:
         authorities = (
             "runner/agent_runtime.py",
-            "planner/execution_dispatch.py",
+            "worker/agent_runtime.py",
+            "scheduler/main.py",
+            "scheduler/execution_dispatch.py",
             "control/loop_agent/providers/deepseek.py",
             "control/loopdb.py",
             "control/loopctl.py",
@@ -85,7 +87,7 @@ class InstructionAuthorityTests(unittest.TestCase):
         self.assertIn("本文只供人工快速了解和排障", self.readme)
         self.assertNotIn("docs/architecture.md", self.readme)
         self.assertNotIn("docs/initialization.md", self.readme)
-        for relative_path in ("planner/planner.md", "worker/worker.md"):
+        for relative_path in ("scheduler/planner.md", "worker/worker.md"):
             with self.subTest(role_context=relative_path):
                 text = (ROOT / relative_path).read_text(encoding="utf-8")
                 self.assertNotIn("README.md", text)
@@ -94,7 +96,7 @@ class InstructionAuthorityTests(unittest.TestCase):
     def test_prompts_do_not_duplicate_deployment_values(self) -> None:
         prompt_paths = (
             "operator/operator.md",
-            "planner/planner.md",
+            "scheduler/planner.md",
             "worker/worker.md",
         )
         prompt_text = "\n".join(
@@ -117,7 +119,7 @@ class InstructionAuthorityTests(unittest.TestCase):
 
         for relative_path in (
             "operator/operator.md",
-            "planner/planner.md",
+            "scheduler/planner.md",
             "worker/worker.md",
         ):
             with self.subTest(config_reference=relative_path):

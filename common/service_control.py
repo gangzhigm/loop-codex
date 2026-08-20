@@ -10,7 +10,7 @@ from common.files import read_json_object, write_json_atomic
 from common.paths import SERVICE_CONTROL
 
 
-SERVICES = ("supervisor", "planner")
+SERVICES = ("supervisor", "scheduler", "runner")
 
 
 def service_control_state() -> dict[str, bool]:

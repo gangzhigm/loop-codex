@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,6 @@ class RunnerState:
             "mode": mode,
             "runtime_environment": runtime_environment,
             "execution_id": execution_id,
-            "task_id": None,
             "runner_pid": os.getpid(),
             "worker_pid": None,
             "status": "RUNNING",
@@ -65,7 +65,7 @@ class RunnerState:
 
     def update(self, **fields: object) -> None:
         """更新任务、子进程或阶段信息，并同步刷新观察 heartbeat。"""
-        allowed = {"task_id", "worker_pid", "status"}
+        allowed = {"worker_pid", "status"}
         if not set(fields).issubset(allowed):
             raise ValueError("Runner 状态包含不允许更新的字段")
         with self.lock:
@@ -101,41 +101,35 @@ class RunnerState:
             return
 
 
-class ObservedWorkerController:
-    """在不改变 loopctl 协议的前提下，把 Worker 生命周期镜像到 Runner 状态。"""
+class RunnerHeartbeat:
+    """仅维护 Runner 自身观察 heartbeat，不参与 Worker 业务事务。"""
 
-    def __init__(self, controller: Any, state: RunnerState) -> None:
-        self.controller = controller
+    def __init__(self, state: RunnerState, interval_seconds: float) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("Runner heartbeat interval must be positive")
         self.state = state
+        self.interval_seconds = interval_seconds
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
 
-    def claim(
-        self,
-        execution_id: str,
-        runtime_environment: str,
-        capability_level: str,
-        provider_id: str | None = None,
-    ) -> dict[str, Any]:
-        result = self.controller.claim(
-            execution_id, runtime_environment, capability_level, provider_id
-        )
-        task = result.get("task")
-        if result.get("outcome") == "CLAIMED" and isinstance(task, dict):
-            self.state.update(task_id=str(task.get("id") or "") or None)
-        else:
-            self.state.touch()
-        return result
-
-    def heartbeat(self, execution_id: str, task_id: str) -> dict[str, Any]:
-        result = self.controller.heartbeat(execution_id, task_id)
+    def __enter__(self) -> "RunnerHeartbeat":
         self.state.touch()
-        return result
+        self.thread = threading.Thread(
+            target=self._run,
+            name="runner-observation-heartbeat",
+            daemon=True,
+        )
+        self.thread.start()
+        return self
 
-    def finish(
-        self, execution_id: str, task_id: str, result: dict[str, Any]
-    ) -> dict[str, Any]:
-        value = self.controller.finish(execution_id, task_id, result)
-        self.state.update(status="FINISHING", worker_pid=None)
-        return value
+    def _run(self) -> None:
+        while not self.stop_event.wait(self.interval_seconds):
+            self.state.touch()
+
+    def __exit__(self, *_: Any) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=max(1.0, min(self.interval_seconds, 5.0)))
 
 
 def _runner_identity_matches(pid: int, mode: str, runtime_environment: str) -> bool:
@@ -199,7 +193,6 @@ def _runner_snapshot(
         "mode": mode,
         "runtime_environment": runtime_environment,
         "execution_id": str(value.get("execution_id") or ""),
-        "task_id": value.get("task_id"),
         "pid": runner_pid,
         "worker_pid": value.get("worker_pid"),
         "runner_status": str(value.get("status") or ""),

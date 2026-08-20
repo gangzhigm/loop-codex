@@ -1,8 +1,9 @@
 # Local Agent Loop
 
 Local Agent Loop 是 `E:\code` 下的本地多项目任务控制中心。Operator 管理任务，
-Worker 在取得 scope 锁后执行，Dashboard 展示状态并提供受控操作。Planner 在一个常驻
-进程内独立调度草稿预检排队和 READY 任务 Runner 分发；各链路使用自己的周期和容量限制。
+Worker 在取得 scope 锁后执行，Dashboard 展示状态并提供受控操作。Scheduler 在一个常驻
+进程内独立安排 Planner 预检排队和 READY 任务正式执行排队；Runner 作为独立常驻 AI 管理器
+读取两类队列、计算容量并选择候选。当前实现停在启动 AI Worker 之前。
 系统仅支持 Windows，进程管理、计划任务和系统密钥存储均直接使用 Windows 能力。
 
 > 本文只供人工快速了解和排障，不是 AI 角色的必读提示词，也不是第二份配置源。
@@ -19,17 +20,18 @@ py -3 .\client\dashboard_server.py
 ```
 
 Dashboard 默认地址、端口及其他部署参数以 `config/initialization.json` 为准。
-Supervisor `serve` 用于人工前台运行，周期检查并恢复独立的 Dashboard、Planner，并观察动态 Runner；
+Supervisor `serve` 用于人工前台运行，周期检查并恢复独立的 Dashboard、Scheduler 和 Runner；
 Dashboard 也可通过 `client/dashboard_server.py` 单独启动，停止 Supervisor 不会停止 Dashboard；
 Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活和必要恢复。
 
 ## 工作流程
 
 1. Operator 通过 `loopctl.py` 创建或更新任务；新任务进入 `DRAFT/UNINSPECTED`。
-2. Planner 周期选择 `DRAFT/UNINSPECTED` 并通过 `loopctl.py` 原子排入预检队列。
-3. Planner 另一条周期链选择 `PENDING/READY` 自动任务，在容量允许时启动匹配 Runner；Runner 原子领取任务。
-4. Worker 持有有效 scope 锁后实现并验证，最终写回 `SUCCEEDED`、`FAILED` 或 `WAITING_HUMAN`。
-5. 人工复核成功任务后执行 `confirm`；终态任务可独立归档。
+2. Scheduler 周期选择 `DRAFT/UNINSPECTED` 并通过 `loopctl.py` 原子排入 Planner 预检队列。
+3. Scheduler 另一条周期链选择 `PENDING/READY` 自动任务，原子排入 `QUEUED/READY` 并创建 `WORKER/QUEUED` execution。
+4. Runner 读取 Planner 与 Worker 队列，计算容量并选择候选；当前不启动 AI Worker。
+5. AI Worker 启动、`QUEUED -> RUNNING` 领取及后续执行生命周期属于下一阶段，当前自动流程在队列边界停止。
+6. 人工复核成功任务后执行 `confirm`；终态任务可独立归档。
 
 任务状态只能通过 `control/loopctl.py` 或复用它的受控 Dashboard 操作修改，禁止直接写 SQLite。
 
@@ -38,14 +40,14 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 | 信息 | 权威来源 |
 | --- | --- |
 | 跨角色安全边界和角色入口 | `AGENTS.md` |
-| Operator、Planner 说明、通用 Worker 协议 | `operator/operator.md`、`planner/planner.md`、`worker/worker.md` |
-| 内部 Agent Worker 协议 | `worker/worker.md`、`runner/agent_runtime.py` |
+| Operator、Planner 说明、通用 Worker 协议 | `operator/operator.md`、`scheduler/planner.md`、`worker/worker.md` |
+| 内部 Agent Worker 协议 | `worker/worker.md`、`worker/agent_runtime.py` |
 | 运行环境、模型、周期、并发和部署参数 | `config/initialization.json` |
 | 任务、预检、execution、依赖和 scope 锁事实 | `data/loop-agent.sqlite3` |
 | Schema 与状态约束 | `schemas/loop-agent.sql`、`control/loop_agent/` |
 | 项目路由 | 实时读取 `E:\code\根目录清单.md` |
 | Dashboard 汇总健康状态 | `data/runtime/health-state.json` |
-| 动态 Runner 原始 heartbeat 登记 | `data/runtime/runners/` |
+| Runner 服务 heartbeat 与队列快照 | `data/runtime/runner-heartbeat.json`、`data/runtime/runner-queue-state.json` |
 | 脚本职责和回归命令 | `control/README.md` |
 
 README 只提供人工导航。若说明与配置、任务事实或控制代码冲突，以表中对应权威来源为准；
@@ -58,13 +60,14 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | 任务管理和状态迁移 | `control/loopctl.py` |
 | 数据库公共 API | `control/loopdb.py` |
 | 通用 Worker 角色协议 | `worker/worker.md` |
-| Planner 预检排队与执行分发服务 | `planner/main.py serve` |
-| Planner 阶段性交付接收 | `runner/planner_runner.py` |
-| Planner 内部单轮执行分发 | `planner/execution_dispatch.py` |
-| 内部 Agent 单任务运行 | `runner/agent_runtime.py` |
+| Scheduler 常驻双排队服务 | `scheduler/main.py` 的 `serve` 命令 |
+| Scheduler 内部正式执行排队 | `scheduler/execution_dispatch.py` |
+| Scheduler 内部 Planner 预检状态机 | `scheduler/planner_control.py` |
+| Runner 常驻 AI 队列管理 | `runner/agent_runtime.py` 的 `serve` 命令 |
+| 内部 Agent 单任务运行 | `worker/agent_runtime.py` |
 | DeepSeek Provider 适配 | `control/loop_agent/providers/deepseek.py` |
 | Dashboard 独立 HTTP 服务 | `client/dashboard_server.py` |
-| Dashboard 与 Scheduler 进程监控 | `supervisor/main.py` |
+| Dashboard、Scheduler 与 Runner 进程监控 | `supervisor/main.py` |
 | Supervisor 健康检查实现 | `supervisor/health_run.py` |
 
 各运行环境只领取与自身路由、能力等级和执行策略匹配的 READY 任务。具体模型、超时、
@@ -97,23 +100,28 @@ py -3 .\control\loopctl.py validate
 
 控制面测试的职责拆分、专项命令和部署检查见 `control/README.md`。
 
+Dashboard 使用 React、TypeScript 和 Vite，源码与开发说明位于 `client/frontend/`；
+Python 服务直接提供已提交的 `client/dist/`，生产启动不运行 npm 或加载 CDN。
+
 ## 目录导航
 
 | 路径 | 内容 |
 | --- | --- |
 | `AGENTS.md` | 跨角色稳定边界 |
 | `operator/` | Operator 提示词、任务控制状态机和密钥管理入口 |
-| `planner/` | Planner 预检排队、执行分发和预检控制协议 |
+| `scheduler/` | 常驻调度服务、Planner 预检协议/状态机与正式执行排队 |
 | `worker/` | Worker 提示词与任务执行状态机 |
-| `runner/` | Worker 执行 Runner 和 Planner 阶段性交付接收入口 |
+| `runner/` | 常驻 AI 队列管理器；当前不启动 AI Worker |
 | `config/initialization.json` | 唯一部署配置源 |
 | `schemas/loop-agent.sql` | 当前数据库 Schema |
 | `control/loopctl.py` | 任务控制 CLI |
 | `control/loop_agent/` | 控制面、数据库、运行时、Provider 和 Dashboard 内部实现 |
 | `supervisor/` | Supervisor 主进程、健康检查与 Windows 计划任务安装器 |
-| `common/service_runtime.py` | Supervisor、Dashboard、Planner 共用的运行文件生命周期 |
+| `common/service_runtime.py` | Supervisor、Dashboard、Scheduler、Runner 共用的运行文件生命周期 |
 | `tests/` | Python 回归测试 |
-| `client/` | Dashboard 前端静态资源与本机 HTTP/API 服务 |
+| `client/frontend/` | React、TypeScript 和 Vite Dashboard 源码 |
+| `client/dist/` | Dashboard 可直接部署的本地静态产物 |
+| `client/dashboard_server.py` | Dashboard 本机 HTTP/API 与静态资源服务 |
 | `data/` | SQLite、任务附件、备份、PID、日志和健康状态 |
 | `data/loop-agent.sqlite3` | 唯一任务事实源 |
 | `data/assets/` | 任务附件目录 |

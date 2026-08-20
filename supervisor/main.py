@@ -1,6 +1,6 @@
 """仅支持 Windows 的 Supervisor 常驻监控进程。
 
-``serve`` 根据初始化配置监控并恢复独立运行的 Dashboard 与 Planner Scheduler。
+``serve`` 根据初始化配置监控并恢复独立运行的 Dashboard、Scheduler 与 Runner。
 组件管理、运行文件和 Windows 进程方法集中在根目录
 ``common``，本文件只保留命令行入口和长期监控循环。
 """
@@ -49,7 +49,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def serve_supervisor(args: argparse.Namespace) -> None:
-    """持续确保两个独立服务进程符合配置状态。"""
+    """持续确保三个独立服务进程符合配置状态。"""
     config_path = Path(args.config).resolve()
     database_path = Path(args.db).resolve()
     config = load_initialization_config(config_path)
@@ -73,7 +73,7 @@ def serve_supervisor(args: argparse.Namespace) -> None:
         while not shutdown_event.is_set():
             if runtime.stop_requested(pid):
                 break
-            # 每轮重读配置，使 Planner 开关无需重启 Supervisor 即可生效。
+            # 每轮重读配置，使服务开关无需重启 Supervisor 即可生效。
             config = load_initialization_config(config_path)
             desired_states = service_control_state()
             if not desired_states["supervisor"]:
@@ -81,9 +81,6 @@ def serve_supervisor(args: argparse.Namespace) -> None:
             specs = component_specs(config, desired_states)
             start_timeout = float(config["supervisor"]["component_start_timeout_seconds"])
             stop_timeout = float(config["supervisor"]["component_stop_timeout_seconds"])
-            runner_timeout = float(
-                config["supervisor"]["runner_heartbeat_timeout_seconds"]
-            )
             if args.monitor_interval_seconds is None:
                 monitor_interval = float(config["supervisor"]["monitor_interval_seconds"])
             monitors = component_snapshot(
@@ -92,7 +89,6 @@ def serve_supervisor(args: argparse.Namespace) -> None:
                 config_path,
                 start_timeout_seconds=start_timeout,
                 stop_timeout_seconds=stop_timeout,
-                runner_heartbeat_timeout_seconds=runner_timeout,
             )
             record_monitor_state(monitors, supervisor_pid=pid)
             runtime.write_heartbeat(pid)

@@ -131,7 +131,7 @@ def command_schedule_preflight(args: argparse.Namespace) -> None:
             queued.append(
                 {"task_id": str(task["id"]), "execution_id": execution_id}
             )
-        revision = bump_revision(database, "planner-scheduler")
+        revision = bump_revision(database, "scheduler-preflight")
         commit(database)
         output(
             {
