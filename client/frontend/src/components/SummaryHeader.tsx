@@ -13,7 +13,7 @@ export function SummaryHeader({ tasks, activeFilter, onFilterChange, onOpenSetti
   const counts = primaryCounts(tasks);
   const current = tasks.filter((task) => !task.archived_at);
   const total = Math.max(1, current.length);
-  const segments = [counts.closed, counts.active, counts.review, current.filter((task) => task.status === "FAILED").length, counts.draft + counts.pending];
+  const segments = [counts.closed, counts.active, counts.review, counts.queued, counts.draft + counts.pending];
 
   return (
     <header className="app-header">
@@ -42,6 +42,7 @@ export function SummaryHeader({ tasks, activeFilter, onFilterChange, onOpenSetti
         </div>
       </div>
       <nav className="header-actions" aria-label="应用操作">
+        <a href="/runtime-logs.html">运行日志</a>
         <a href="/operations.html">运维配置</a>
         <button className="icon-button" type="button" title="Provider 密钥" aria-label="Provider 密钥" onClick={onOpenSettings}>
           <Settings size={18} />

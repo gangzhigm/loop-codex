@@ -58,13 +58,17 @@ from loop_agent.control.recovery import command_recover
 # Planner 预检通过独立状态机领取草稿、维护心跳并发布 Worker 执行契约。
 from scheduler.planner_control import (
     command_schedule_preflight,
+    command_unschedule_preflight,
     command_preflight_claim,
     command_preflight_fail,
     command_preflight_heartbeat,
     command_preflight_needs_review,
     command_preflight_ready,
 )
-from scheduler.execution_dispatch import command_schedule_execution
+from scheduler.execution_dispatch import (
+    command_schedule_execution,
+    command_unschedule_execution,
+)
 
 # Worker 子命令负责原子领取、租约心跳、动态扩锁和最终回写。
 from worker.control import (
@@ -146,9 +150,19 @@ def parser() -> argparse.ArgumentParser:
     schedule_preflight = commands.add_parser("schedule-preflight")
     schedule_preflight.add_argument("--config", default=str(CONFIG_PATH))
     schedule_preflight.set_defaults(handler=command_schedule_preflight)
+    unschedule_preflight = commands.add_parser("unschedule-preflight")
+    unschedule_preflight.add_argument("task_id")
+    unschedule_preflight.add_argument("--reason")
+    unschedule_preflight.add_argument("--expected-row-version", type=int, required=True)
+    unschedule_preflight.set_defaults(handler=command_unschedule_preflight)
     schedule_execution = commands.add_parser("schedule-execution")
     schedule_execution.add_argument("--config", default=str(CONFIG_PATH))
     schedule_execution.set_defaults(handler=command_schedule_execution)
+    unschedule_execution = commands.add_parser("unschedule-execution")
+    unschedule_execution.add_argument("task_id")
+    unschedule_execution.add_argument("--reason")
+    unschedule_execution.add_argument("--expected-row-version", type=int, required=True)
+    unschedule_execution.set_defaults(handler=command_unschedule_execution)
     preflight_claim = commands.add_parser("preflight-claim")
     preflight_claim.add_argument("execution_id")
     preflight_claim.add_argument("--task-id")

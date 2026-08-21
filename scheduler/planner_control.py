@@ -71,12 +71,7 @@ def command_schedule_preflight(args: argparse.Namespace) -> None:
         )
         candidates = database.execute(
             "SELECT * FROM tasks WHERE status='DRAFT' "
-            "AND preflight_status='UNINSPECTED' AND runtime_environment=? "
-            "AND provider_id=?",
-            (
-                settings["default_runtime_environment"],
-                settings["provider_id"],
-            ),
+            "AND preflight_status='UNINSPECTED'"
         ).fetchall()
         ordered = sorted(
             candidates,
@@ -86,7 +81,9 @@ def command_schedule_preflight(args: argparse.Namespace) -> None:
                 str(task["id"]),
             ),
         )
-        selected = ordered[:available]
+        selected = ordered[
+            : min(available, int(settings["max_tasks_per_cycle"]))
+        ]
         stamp = now_shanghai()
         start = datetime.fromisoformat(stamp)
         lease = (
@@ -145,6 +142,70 @@ def command_schedule_preflight(args: argparse.Namespace) -> None:
                 "queued_count": len(queued),
                 "queued": queued,
                 "recovered": recovered,
+                "revision": revision,
+            }
+        )
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
+def command_unschedule_preflight(args: argparse.Namespace) -> None:
+    """人工撤回尚未领取的 Planner 排队 execution，并保留完整审计记录。"""
+    database = connect(args.db)
+    try:
+        transaction(database)
+        task = database.execute(
+            "SELECT * FROM tasks WHERE id=?",
+            (args.task_id,),
+        ).fetchone()
+        if task is None:
+            raise LoopError("任务不存在")
+        require_expected_row_version(args, task["row_version"])
+        if task["status"] != "DRAFT" or task["preflight_status"] != "QUEUED":
+            raise LoopError("只有尚未领取的 Planner 排队任务可以撤回")
+        execution_id = task["preflight_execution_id"]
+        execution = database.execute(
+            "SELECT * FROM preflight_executions WHERE execution_id=? AND task_id=?",
+            (execution_id, args.task_id),
+        ).fetchone()
+        if execution is None or execution["status"] != "QUEUED":
+            raise LoopError("Planner execution 已被领取或状态不匹配")
+        stamp = now_shanghai()
+        reason = args.reason or "Operator 人工撤回 Planner 排队。"
+        execution_changed = database.execute(
+            "UPDATE preflight_executions SET status='FINISHED', finished_at=?, "
+            "outcome=NULL, termination_reason=? WHERE execution_id=? AND status='QUEUED'",
+            (stamp, reason, execution_id),
+        ).rowcount
+        task_changed = database.execute(
+            "UPDATE tasks SET preflight_status='UNINSPECTED', preflight_execution_id=NULL, "
+            "preflight_started_at=NULL, preflight_completed_at=NULL, preflight_failure=NULL, "
+            "updated_at=?, progress_summary='Planner 排队已人工撤回。', "
+            "progress_next_step='等待 Planner 再次排队。', row_version=row_version+1 "
+            "WHERE id=? AND status='DRAFT' AND preflight_status='QUEUED' "
+            "AND preflight_execution_id=? AND row_version=?",
+            (stamp, args.task_id, execution_id, task["row_version"]),
+        ).rowcount
+        if execution_changed != 1 or task_changed != 1:
+            raise LoopError("撤回 Planner 排队时任务发生并发变化")
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES(?, ?, 'DRAFT', 'DRAFT', 'task-manager', ?)",
+            (args.task_id, stamp, reason),
+        )
+        revision = bump_revision(database, "task-manager")
+        commit(database)
+        output(
+            {
+                "outcome": "PREFLIGHT_UNSCHEDULED",
+                "task_id": args.task_id,
+                "execution_id": execution_id,
+                "status": "DRAFT",
+                "preflight_status": "UNINSPECTED",
+                "row_version": int(task["row_version"]) + 1,
                 "revision": revision,
             }
         )
@@ -251,7 +312,7 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
     config = load_initialization_config()
     settings = config["planner"]
     boundary = settings["client_boundary"]
-    if args.runtime_environment != settings["default_runtime_environment"]:
+    if args.runtime_environment != settings["worker_runtime_environment"]:
         raise LoopError("Planner runtime_environment 与初始化配置不匹配")
     if args.sandbox != boundary["sandbox"] or args.sandbox != "read-only":
         raise LoopError("Planner 必须由 read-only sandbox 入口领取")
@@ -272,12 +333,9 @@ def command_preflight_claim(args: argparse.Namespace) -> None:
             "WHERE p.execution_id=? AND p.status='QUEUED' "
             "AND t.status='DRAFT' AND t.preflight_status='QUEUED' "
             "AND t.preflight_execution_id=p.execution_id "
-            "AND t.runtime_environment=? AND t.provider_id=? "
             "AND (? IS NULL OR t.id=?)",
             (
                 args.execution_id,
-                settings["default_runtime_environment"],
-                settings["provider_id"],
                 task_id,
                 task_id,
             ),

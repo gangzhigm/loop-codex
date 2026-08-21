@@ -18,7 +18,7 @@ export type TaskStatus =
 
 export type Priority = "blocker" | "critical" | "high" | "medium" | "low";
 export type CapabilityLevel = "L1" | "L2" | "L3" | "L4" | "L5";
-export type PrimaryFilter = "draft" | "review" | "pending" | "active" | "closed" | "archived";
+export type PrimaryFilter = "all" | "draft" | "review" | "pending" | "queued" | "active" | "closed" | "archived";
 
 export interface TaskProgress {
   percent: number;

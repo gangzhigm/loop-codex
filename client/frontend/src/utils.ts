@@ -27,23 +27,30 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
 
 export const PRIORITY_LABELS = { blocker: "阻断", critical: "紧急", high: "高", medium: "中", low: "低" } as const;
 export const PREFLIGHT_LABELS = {
-  UNINSPECTED: "待静态检查",
-  QUEUED: "等待静态检查",
-  INSPECTING: "静态检查中",
-  READY: "已就绪",
+  UNINSPECTED: "未进入 Planner 队列",
+  QUEUED: "Planner 队列中",
+  INSPECTING: "Planner 处理中",
+  READY: "预检完成",
   FAILED: "预检未通过",
 } as const;
 export const PRIORITY_ORDER = { blocker: 0, critical: 1, high: 2, medium: 3, low: 4 } as const;
 export const CAPABILITY_LEVELS: CapabilityLevel[] = ["L1", "L2", "L3", "L4", "L5"];
-export const REVIEW_STATUSES = new Set<TaskStatus>(["NEEDS_REVIEW", "WAITING_HUMAN", "STALLED"]);
+export const REVIEW_STATUSES = new Set<TaskStatus>([
+  "NEEDS_REVIEW",
+  "WAITING_CONFLICT",
+  "WAITING_HUMAN",
+  "BLOCKED",
+  "STALLED",
+]);
 export const ACTIVE_STATUSES = new Set<TaskStatus>(["CLAIMED", "RUNNING"]);
 export const CLOSED_STATUSES = new Set<TaskStatus>(["SUCCEEDED", "CONFIRMED", "FAILED", "CANCELLED"]);
-export const QUEUE_STATUSES = new Set<TaskStatus>(["PENDING", "QUEUED", "WAITING_CONFLICT", "BLOCKED"]);
 
 export const PRIMARY_FILTERS: Array<{ id: PrimaryFilter; label: string; help: string }> = [
+  { id: "all", label: "全部任务", help: "包含已归档任务" },
   { id: "draft", label: "草稿", help: "DRAFT" },
-  { id: "review", label: "需确认", help: "NEEDS_REVIEW、WAITING_HUMAN、STALLED" },
-  { id: "pending", label: "待执行", help: "PENDING、QUEUED 与兼容队列状态" },
+  { id: "review", label: "待处理", help: "需确认、冲突、等待人工、阻塞或卡顿" },
+  { id: "pending", label: "待执行", help: "PENDING" },
+  { id: "queued", label: "AI 队列", help: "QUEUED" },
   { id: "active", label: "执行中", help: "CLAIMED、RUNNING" },
   { id: "closed", label: "已结束", help: "未归档终态任务" },
   { id: "archived", label: "已归档", help: "archived_at 已设置" },
@@ -139,11 +146,13 @@ export function taskProjects(task: Task, state: DashboardState): string[] {
 }
 
 export function matchesPrimary(task: Task, filter: PrimaryFilter): boolean {
+  if (filter === "all") return true;
   if (filter === "archived") return Boolean(task.archived_at);
   if (task.archived_at) return false;
   if (filter === "draft") return task.status === "DRAFT";
   if (filter === "review") return REVIEW_STATUSES.has(task.status);
-  if (filter === "pending") return QUEUE_STATUSES.has(task.status);
+  if (filter === "pending") return task.status === "PENDING";
+  if (filter === "queued") return task.status === "QUEUED";
   if (filter === "active") return ACTIVE_STATUSES.has(task.status);
   return CLOSED_STATUSES.has(task.status);
 }
@@ -252,9 +261,11 @@ export function isHeartbeatLate(task: Task, state: DashboardState): boolean {
 
 export function primaryCounts(tasks: Task[]): Record<PrimaryFilter, number> {
   return {
+    all: tasks.length,
     draft: tasks.filter((task) => !task.archived_at && task.status === "DRAFT").length,
     review: tasks.filter((task) => !task.archived_at && REVIEW_STATUSES.has(task.status)).length,
-    pending: tasks.filter((task) => !task.archived_at && QUEUE_STATUSES.has(task.status)).length,
+    pending: tasks.filter((task) => !task.archived_at && task.status === "PENDING").length,
+    queued: tasks.filter((task) => !task.archived_at && task.status === "QUEUED").length,
     active: tasks.filter((task) => !task.archived_at && ACTIVE_STATUSES.has(task.status)).length,
     closed: tasks.filter((task) => !task.archived_at && CLOSED_STATUSES.has(task.status)).length,
     archived: tasks.filter((task) => Boolean(task.archived_at)).length,

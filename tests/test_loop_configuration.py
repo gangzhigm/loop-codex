@@ -9,10 +9,11 @@ from _loop_support import *  # noqa: F403
 class LoopConfigurationTests(LoopTestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "5.4.0")
+        self.assertEqual(config["config_version"], "5.5.0")
         self.assertEqual(config["prompts"]["operator"], "operator/operator.md")
         self.assertEqual(config["prompts"]["planner"], "scheduler/planner.md")
         self.assertEqual(config["prompts"]["worker"], "worker/worker.md")
+        self.assertEqual(set(config["prompts"]), {"operator", "planner", "worker"})
         self.assertNotIn("automations", config)
         self.assertEqual(config["health"]["scheduler"], "windows_task_scheduler")
         self.assertEqual(config["health"]["interval_minutes"], 30)
@@ -23,13 +24,15 @@ class LoopConfigurationTests(LoopTestCase):
         self.assertEqual(config["task_execution"]["global_max_active_executions"], 8)
         self.assertEqual(
             config["task_execution"]["platform_max_active_executions"],
-            {"self_hosted_agent": 8},
+            {"self_hosted_agent": 8, "codex_cli": 4},
         )
         self.assertNotIn("profile_parallel_limits", config["task_execution"])
         self.assertNotIn("capability_parallel_limits", config["task_execution"])
         self.assertEqual(config["planner"]["execution_kind"], "PLANNER")
         self.assertEqual(config["planner"]["default_runtime_environment"], "self_hosted_agent")
         self.assertEqual(config["planner"]["provider_id"], "deepseek")
+        self.assertEqual(config["planner"]["worker_runtime_environment"], "codex_cli")
+        self.assertIsNone(config["planner"]["worker_provider_id"])
         self.assertEqual(config["planner"]["capability_level"], "L3")
         self.assertEqual(config["planner"]["max_retries"], 1)
         self.assertGreaterEqual(config["planner"]["attempt_timeout_seconds"], config["planner"]["lease_seconds"])
@@ -65,8 +68,7 @@ class LoopConfigurationTests(LoopTestCase):
             scheduler["execution"]["log_path"],
             "data/runtime/scheduler-execution-dispatch.log",
         )
-        self.assertEqual(scheduler["execution"]["runtime_environment"], "self_hosted_agent")
-        self.assertEqual(scheduler["execution"]["provider_id"], "deepseek")
+        self.assertEqual(scheduler["execution"]["max_tasks_per_cycle"], 1)
         self.assertEqual(scheduler["execution"]["supported_capability_levels"], list(CAPABILITY_LEVELS))
         self.assertEqual(config["runner"]["heartbeat_interval_seconds"], 15)
         self.assertEqual(config["runner"]["queue_poll_interval_seconds"], 5)
@@ -80,6 +82,10 @@ class LoopConfigurationTests(LoopTestCase):
         self.assertEqual(set(config["execution_profiles"]), set(CANONICAL_RUNTIME_ENVIRONMENTS))
         self.assertEqual(
             set(config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]["capabilities"]),
+            set(CAPABILITY_LEVELS),
+        )
+        self.assertEqual(
+            set(config["execution_profiles"]["codex_cli"]["capabilities"]),
             set(CAPABILITY_LEVELS),
         )
         self.assertEqual(

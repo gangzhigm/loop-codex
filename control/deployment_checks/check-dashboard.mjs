@@ -21,6 +21,7 @@ const paths = {
   styles: resolve(frontendRoot, "src/styles.css"),
   capacity: resolve(frontendRoot, "src/components/CapacityPanel.tsx"),
   tasks: resolve(frontendRoot, "src/components/TaskTable.tsx"),
+  header: resolve(frontendRoot, "src/components/SummaryHeader.tsx"),
   detail: resolve(frontendRoot, "src/components/TaskDetailDialog.tsx"),
   secrets: resolve(frontendRoot, "src/components/SecretDrawer.tsx"),
   server: resolve(clientRoot, "dashboard_server.py"),
@@ -28,6 +29,9 @@ const paths = {
   operationsHtml: resolve(clientRoot, "operations.html"),
   operationsJavaScript: resolve(clientRoot, "operations.js"),
   operationsCss: resolve(clientRoot, "operations.css"),
+  runtimeLogsHtml: resolve(clientRoot, "runtime-logs.html"),
+  runtimeLogsJavaScript: resolve(clientRoot, "runtime-logs.js"),
+  runtimeLogsCss: resolve(clientRoot, "runtime-logs.css"),
 };
 
 const entries = await Promise.all(Object.entries(paths).map(async ([key, path]) => [key, await readFile(path, "utf8")]));
@@ -58,11 +62,12 @@ assert(source.capacity.includes("服务监控") && source.capacity.includes("Sup
 assert(source.capacity.includes("数据库") && source.capacity.includes("state.database"), "服务监控缺少数据库状态");
 assert(source.server.includes('payload["database"]'), "状态 API 未提供数据库服务状态");
 assert(source.server.includes('payload["scheduler_control"]') && source.types.includes("scheduler_control"), "状态 API 未提供 Scheduler 链自动化状态");
-assert(source.capacity.includes("automation-switch") && source.capacity.includes("restart") && source.capacity.includes("trigger"), "服务监控缺少重启、自动化开关或单次触发控件");
+assert(source.capacity.includes("automation-button") && source.capacity.includes('const action = enabled ? "stop" : "start"') && source.capacity.includes("restart") && source.capacity.includes("trigger"), "服务监控缺少服务启停、重启、自动化按钮或单次触发控件");
 assert(source.tasks.includes("scopeBlockGroups") && source.utilities.includes("blocked_by_task_ids"), "任务表未展示范围锁等待");
 assert(source.tasks.includes("scope_queue_position"), "任务表未展示 scope 队列位置");
 assert(source.tasks.includes("dependencyIndicatorState"), "任务表缺少依赖状态灯");
 assert(source.tasks.includes("PREFLIGHT_LABELS"), "DRAFT 行缺少预检状态");
+assert(source.tasks.includes("主/子状态") && source.tasks.includes("phase-stack"), "任务表缺少主状态与子状态列");
 assert(source.tasks.includes("心跳超时") && source.tasks.includes("formatDuration"), "任务表缺少 heartbeat 或耗时展示");
 assert(source.tasks.includes("copyFeedback") && source.tasks.includes("复制失败"), "复制任务 ID 缺少结果反馈");
 assert(source.utilities.includes("contextualFilterValues") && source.app.includes("resetInvalidFilters"), "任务筛选未实现联动候选项和失效值重置");
@@ -87,7 +92,7 @@ assert(!source.server.includes('"/dashboard.html"'), "Dashboard Server 仍保留
 
 assert(/@media \(max-width: 700px\)/.test(source.styles), "Dashboard 缺少移动端布局");
 assert(source.styles.includes("overflow-wrap: anywhere"), "长路径缺少安全换行");
-assert(source.styles.includes("grid-template-columns: repeat(6, minmax(76px, 1fr))"), "顶部生命周期统计未保持六列");
+assert(source.styles.includes("grid-template-columns: repeat(8, minmax(76px, 1fr))"), "顶部任务统计未保持八列");
 assert(source.styles.includes("tbody tr { display: grid"), "窄视图任务表未转换为稳定卡片行");
 
 assert(/<meta\s+charset=["']UTF-8["']/i.test(source.dist), "构建入口缺少 UTF-8 声明");
@@ -108,6 +113,14 @@ assert(source.operationsJavaScript.includes('const OPERATIONS_ENDPOINT = "/api/o
 assert(source.operationsJavaScript.includes("textContent"), "运维页面未使用安全文本渲染");
 assert(!/secret_ref|authorization|hidden_reasoning|response_body/i.test(source.operationsHtml + source.operationsJavaScript), "运维页面包含敏感字段名称");
 assert(/@media \(max-width: 560px\)/.test(source.operationsCss), "运维页面缺少窄视图布局");
+assert(source.server.includes('RUNTIME_LOGS_API_PATH = "/api/runtime-logs"'), "Dashboard Server 缺少运行日志 API");
+assert(source.server.includes("RUNTIME_LOG_FILENAMES"), "运行日志 API 未固定日志来源");
+assert(source.runtimeLogsHtml.includes('href="/runtime-logs.css"') && source.runtimeLogsHtml.includes('src="/runtime-logs.js"'), "运行日志页面未加载专用资源");
+assert(source.runtimeLogsHtml.includes('href="/" aria-label="返回任务面板"'), "运行日志页面缺少返回任务面板入口");
+assert(source.runtimeLogsJavaScript.includes('const RUNTIME_LOGS_ENDPOINT = "/api/runtime-logs"'), "运行日志页面未使用专用 API");
+assert(source.runtimeLogsJavaScript.includes("textContent") && source.runtimeLogsJavaScript.includes("window.setInterval"), "运行日志页面缺少安全渲染或轮询");
+assert(/@media \(max-width: 560px\)/.test(source.runtimeLogsCss), "运行日志页面缺少窄视图布局");
+assert(source.header.includes('href="/runtime-logs.html"'), "主面板缺少运行日志入口");
 
 if (errors.length) {
   console.error(`Dashboard 检查失败，共 ${errors.length} 项：`);

@@ -62,7 +62,10 @@ def main() -> None:
     config = load_initialization_config(Path(args.config))
     workspace = Path(config["workspace"]["task_root"])
     provider = load_provider(args.provider, config)
-    controller = SubprocessLoopController(Path(args.db) if args.db else None)
+    controller = SubprocessLoopController(
+        Path(args.db) if args.db else None,
+        timeout_seconds=float(config["task_execution"]["controller_timeout_seconds"]),
+    )
     agent = SingleTaskAgent(
         provider=provider,
         controller=controller,

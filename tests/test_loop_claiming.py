@@ -49,10 +49,7 @@ class LoopClaimingTests(LoopTestCase):
 
     def test_capability_claim_snapshots_resolved_configuration(self) -> None:
         self.add_task("CAPABILITY-SNAPSHOT", "project-1", capability_level="L3")
-        result = self.run_ctl(
-            "claim", "capability-snapshot", "--capability-level", "L3",
-            "--runtime-environment", "self_hosted_agent", "--provider-id", "deepseek",
-        )
+        result = self.claim("capability-snapshot", "L3")
         self.assertEqual(result["outcome"], "CLAIMED")
         database = connect(self.db_path)
         before = dict(
@@ -116,8 +113,13 @@ class LoopClaimingTests(LoopTestCase):
         conflict = self.claim(
             "agent-conflict", runtime_environment="self_hosted_agent", provider_id="deepseek"
         )
-        self.assertEqual(conflict["outcome"], "CONFLICT")
-        self.assertEqual(conflict["task_id"], "AGENT-CONFLICT")
+        self.assertEqual(conflict["outcome"], "NO_TASK")
+        database = connect(self.db_path)
+        status = database.execute(
+            "SELECT status FROM tasks WHERE id='AGENT-CONFLICT'"
+        ).fetchone()[0]
+        database.close()
+        self.assertEqual(status, "PENDING")
 
     def test_blocker_is_first_priority_within_profile(self) -> None:
         self.add_task("OLDER-CRITICAL", "project-1", "critical")
@@ -153,8 +155,7 @@ class LoopClaimingTests(LoopTestCase):
         first = self.claim("exec-blocker")
         self.assertEqual(first["task"]["id"], "BLOCKER")
         second = self.claim("exec-conflict")
-        self.assertEqual(second["outcome"], "CONFLICT")
-        self.assertEqual(second["task_id"], "CONFLICT")
+        self.assertEqual(second["outcome"], "NO_TASK")
         finished = self.finish("exec-blocker", "BLOCKER")
         self.assertEqual(finished["requeued_conflicts"], [])
         database = connect(self.db_path)
@@ -177,7 +178,6 @@ class LoopClaimingTests(LoopTestCase):
         claimed = self.claim("exec-legacy-conflict")
 
         self.assertEqual(claimed["task"]["id"], "LEGACY-CONFLICT")
-        self.assertEqual(claimed["requeued"], ["LEGACY-CONFLICT"])
         database = connect(self.db_path)
         audit_count = database.execute(
             "SELECT count(*) FROM task_conflicts WHERE task_id='LEGACY-CONFLICT'"
@@ -200,7 +200,6 @@ class LoopClaimingTests(LoopTestCase):
 
         self.assertEqual(result["outcome"], "CLAIMED")
         self.assertEqual(result["task"]["id"], "RUNNABLE")
-        self.assertEqual(result["deferred_conflicts"][0]["task_id"], "CONFLICT")
         database = connect(self.db_path)
         conflict_status = database.execute(
             "SELECT status FROM tasks WHERE id='CONFLICT'"
@@ -279,8 +278,7 @@ class LoopClaimingTests(LoopTestCase):
         conflict = self.claim("exec-file-case")
         self.assertEqual(first["task"]["id"], "FILE-A")
         self.assertEqual(second["task"]["id"], "FILE-B")
-        self.assertEqual(conflict["outcome"], "CONFLICT")
-        self.assertEqual(conflict["task_id"], "FILE-A-CASE")
+        self.assertEqual(conflict["outcome"], "NO_TASK")
         database = connect(self.db_path)
         self.assertEqual(
             database.execute("SELECT status FROM tasks WHERE id='FILE-A-CASE'").fetchone()[0],
@@ -304,11 +302,12 @@ class LoopClaimingTests(LoopTestCase):
         self.assertEqual(self.claim("exec-module")["task"]["id"], "MODULE-SRC")
         result = self.claim("exec-docs")
         self.assertEqual(result["task"]["id"], "FILE-IN-DOCS")
-        self.assertEqual(result["deferred_conflicts"][0]["task_id"], "FILE-IN-SRC")
+        database = connect(self.db_path)
         self.assertEqual(
-            result["deferred_conflicts"][0]["conflicts"][0]["requested_scope_key"],
-            "file:project-1::src/inside.py",
+            database.execute("SELECT status FROM tasks WHERE id='FILE-IN-SRC'").fetchone()[0],
+            "PENDING",
         )
+        database.close()
         self.add_task(
             "PROJECT-LOCK", "project-2", "critical", lock_mode="project",
             scope=["project-2/any/file.py"],
@@ -318,7 +317,7 @@ class LoopClaimingTests(LoopTestCase):
             scope=["project-2/other.py"],
         )
         self.assertEqual(self.claim("exec-project")["task"]["id"], "PROJECT-LOCK")
-        self.assertEqual(self.claim("exec-project-file")["outcome"], "CONFLICT")
+        self.assertEqual(self.claim("exec-project-file")["outcome"], "NO_TASK")
 
     def test_multi_lock_conflict_leaves_no_partial_lock(self) -> None:
         self.add_task(
@@ -331,7 +330,7 @@ class LoopClaimingTests(LoopTestCase):
         )
         self.claim("exec-lock-b")
         result = self.claim("exec-lock-a-b")
-        self.assertEqual(result["outcome"], "CONFLICT")
+        self.assertEqual(result["outcome"], "NO_TASK")
         database = connect(self.db_path)
         lock_keys = [row[0] for row in database.execute(
             "SELECT scope_key FROM scope_locks ORDER BY scope_key"

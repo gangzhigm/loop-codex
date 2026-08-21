@@ -94,6 +94,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
     scheduler_preflight = scheduler.get("preflight") or {}
     scheduler_execution = scheduler.get("execution") or {}
     runner = config.get("runner") or {}
+    validation_worker = runner.get("validation_worker") or {}
+    codex_cli = config.get("codex_cli") or {}
     health = config.get("health") or {}
     supervisor = config.get("supervisor") or {}
     supervisor_components = supervisor.get("components") or {}
@@ -182,8 +184,18 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
             for specification in provider_factories.values()
         )
     )
+    codex_profiles = execution_profiles.get("codex_cli") or {}
+    codex_profiles_valid = (
+        isinstance(codex_profiles, dict)
+        and codex_profiles.get("provider_id") is None
+        and set((codex_profiles.get("capabilities") or {})) == set(CAPABILITY_LEVELS)
+        and all(
+            valid_profile_fields(profile)
+            for profile in codex_profiles["capabilities"].values()
+        )
+    )
     valid = (
-        config.get("config_version") == "5.4.0"
+        config.get("config_version") == "5.5.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -193,11 +205,14 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and prompts.get("operator") == "operator/operator.md"
         and prompts.get("planner") == "scheduler/planner.md"
         and prompts.get("worker") == "worker/worker.md"
+        and set(prompts) == {"operator", "planner", "worker"}
         and (BASE_DIR / prompts["operator"]).is_file()
         and (BASE_DIR / prompts["planner"]).is_file()
         and (BASE_DIR / prompts["worker"]).is_file()
         and isinstance(execution.get("heartbeat_interval_seconds"), int)
         and execution["heartbeat_interval_seconds"] >= 1
+        and isinstance(execution.get("controller_timeout_seconds"), (int, float))
+        and execution["controller_timeout_seconds"] > 0
         and isinstance(execution.get("stalled_after_seconds"), int)
         and execution["stalled_after_seconds"] >= 1
         and isinstance(execution.get("task_lease_seconds"), int)
@@ -206,6 +221,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and execution["max_attempts"] >= 1
         and isinstance(execution.get("global_max_active_executions"), int)
         and execution["global_max_active_executions"] >= 1
+        and isinstance(execution.get("max_queued_executions"), int)
+        and execution["max_queued_executions"] >= execution["global_max_active_executions"]
         and set(platform_limits) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
         and all(
             isinstance(platform_limits[platform], int) and platform_limits[platform] >= 1
@@ -217,6 +234,10 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner.get("default_runtime_environment") == "self_hosted_agent"
         and planner.get("provider_id") in providers
         and planner.get("provider_id") in provider_factories
+        and isinstance(planner.get("max_tasks_per_cycle"), int)
+        and planner["max_tasks_per_cycle"] >= 1
+        and planner.get("worker_runtime_environment") == "codex_cli"
+        and planner.get("worker_provider_id") is None
         and planner.get("capability_level") in CAPABILITY_LEVELS
         and isinstance(planner.get("max_retries"), int)
         and planner["max_retries"] >= 0
@@ -224,6 +245,8 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner["max_active_executions"] >= 1
         and isinstance(planner.get("heartbeat_interval_seconds"), int)
         and planner["heartbeat_interval_seconds"] >= 1
+        and isinstance(planner.get("controller_timeout_seconds"), (int, float))
+        and planner["controller_timeout_seconds"] > 0
         and isinstance(planner.get("stalled_after_seconds"), int)
         and planner["stalled_after_seconds"] >= planner["heartbeat_interval_seconds"]
         and isinstance(planner.get("lease_seconds"), int)
@@ -238,13 +261,13 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and isinstance(scheduler_execution.get("scheduled"), bool)
         and isinstance(scheduler_execution.get("interval_minutes"), int)
         and scheduler_execution["interval_minutes"] >= 1
+        and isinstance(scheduler_execution.get("max_tasks_per_cycle"), int)
+        and scheduler_execution["max_tasks_per_cycle"] >= 1
         and scheduler_execution.get("log_path")
         == "data/runtime/scheduler-execution-dispatch.log"
         and (BASE_DIR / scheduler_execution["log_path"])
         .resolve()
         .is_relative_to(BASE_DIR)
-        and scheduler_execution.get("runtime_environment") == "self_hosted_agent"
-        and scheduler_execution.get("provider_id") in providers
         and isinstance(
             scheduler_execution.get("supported_capability_levels"), list
         )
@@ -254,6 +277,21 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and runner["heartbeat_interval_seconds"] >= 1
         and isinstance(runner.get("queue_poll_interval_seconds"), int)
         and runner["queue_poll_interval_seconds"] >= 1
+        and isinstance(runner.get("worker_launch_enabled"), bool)
+        and runner.get("allow_legacy_direct_claim") is False
+        and isinstance(runner.get("child_termination_grace_seconds"), (int, float))
+        and runner["child_termination_grace_seconds"] > 0
+        and isinstance(validation_worker.get("enabled"), bool)
+        and isinstance(validation_worker.get("task_id_prefix"), str)
+        and bool(validation_worker["task_id_prefix"].strip())
+        and isinstance(validation_worker.get("task_marker"), str)
+        and bool(validation_worker["task_marker"].strip())
+        and isinstance(validation_worker.get("planner_ready_delay_seconds"), int)
+        and validation_worker["planner_ready_delay_seconds"] >= 1
+        and validation_worker.get("artifact_directory") == "data/runtime/validation"
+        and (BASE_DIR / validation_worker["artifact_directory"])
+        .resolve()
+        .is_relative_to(BASE_DIR)
         and planner_boundary.get("sandbox") == "read-only"
         and planner_boundary.get("approval_policy") == "never"
         and planner_boundary.get("network_access") is False
@@ -307,6 +345,23 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and valid_runtime_environment_config
         and set(execution_profiles) == set(CANONICAL_RUNTIME_ENVIRONMENTS)
         and self_hosted_profiles_valid
+        and codex_profiles_valid
+        and isinstance(codex_cli.get("executable"), str)
+        and bool(codex_cli["executable"].strip())
+        and codex_cli.get("prompt") == "worker/codex-worker.md"
+        and (BASE_DIR / codex_cli["prompt"]).is_file()
+        and isinstance(codex_cli.get("use_user_config"), bool)
+        and codex_cli.get("planner_use_user_config") is False
+        and codex_cli.get("sandbox") == "workspace-write"
+        and codex_cli.get("planner_sandbox") == "read-only"
+        and isinstance(codex_cli.get("termination_grace_seconds"), (int, float))
+        and codex_cli["termination_grace_seconds"] > 0
+        and isinstance(codex_cli.get("process_poll_interval_seconds"), (int, float))
+        and 0 < codex_cli["process_poll_interval_seconds"] <= 5
+        and isinstance(codex_cli.get("max_stdout_chars"), int)
+        and codex_cli["max_stdout_chars"] >= 1024
+        and isinstance(codex_cli.get("max_stderr_chars"), int)
+        and codex_cli["max_stderr_chars"] >= 1024
         and health.get("scheduler") == "windows_task_scheduler"
         and isinstance(health.get("task_name"), str)
         and bool(health["task_name"].strip())

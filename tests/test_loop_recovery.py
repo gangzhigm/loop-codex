@@ -155,9 +155,13 @@ class LoopRecoveryTests(LoopTestCase):
         claimed = self.claim("exec-other-after-quarantine")
 
         self.assertEqual(claimed["task"]["id"], "OTHER-FILE")
-        conflict = claimed["deferred_conflicts"][0]["conflicts"][0]
-        self.assertEqual(conflict["blocker_lock_status"], "QUARANTINED")
         database = connect(self.db_path)
+        projected = {
+            task["id"]: task
+            for task in state_payload(database, load_initialization_config())["tasks"]
+        }
+        conflict = projected["DESCENDANT-FILE"]["blocking_scopes"][0]
+        self.assertEqual(conflict["blocker_lock_status"], "QUARANTINED")
         descendant_status = database.execute(
             "SELECT status FROM tasks WHERE id='DESCENDANT-FILE'"
         ).fetchone()[0]
@@ -210,7 +214,7 @@ class LoopRecoveryTests(LoopTestCase):
         database.close()
 
         result = self.claim("exec-no-duplicate")
-        self.assertEqual(result["outcome"], "CONFLICT")
+        self.assertEqual(result["outcome"], "NO_TASK")
         self.assertEqual(result["recovery_required"][0]["recovery_confirmation"], "runner_confirmed_terminated")
         database = connect(self.db_path)
         self.assertEqual(
@@ -242,11 +246,15 @@ class LoopRecoveryTests(LoopTestCase):
         self.add_task("CONFLICT-2", "project-1", "high")
         self.claim("exec-blocker")
         conflict_result = self.claim("exec-conflicts")
-        self.assertEqual(conflict_result["outcome"], "CONFLICT")
-        self.assertEqual(
-            [item["task_id"] for item in conflict_result["deferred_conflicts"]],
-            ["CONFLICT-1", "CONFLICT-2"],
-        )
+        self.assertEqual(conflict_result["outcome"], "NO_TASK")
+        database = connect(self.db_path)
+        projected = {
+            task["id"]: task
+            for task in state_payload(database, load_initialization_config())["tasks"]
+        }
+        database.close()
+        self.assertEqual(projected["CONFLICT-1"]["blocked_by_task_ids"], ["BLOCKER"])
+        self.assertEqual(projected["CONFLICT-2"]["blocked_by_task_ids"], ["BLOCKER"])
         self.add_task("NEW-RUNNABLE", "project-2", "medium")
         database = connect(self.db_path)
         database.execute(
@@ -303,7 +311,7 @@ class LoopRecoveryTests(LoopTestCase):
         database = connect(self.db_path)
         history_count = database.execute(
             "SELECT count(*) FROM task_history WHERE task_id='RECOVERY-ACTIONS' "
-            "AND actor='human-safe-recovery'"
+            "AND actor='runner-safe-recovery'"
         ).fetchone()[0]
         database.close()
         self.assertEqual(history_count, 2)

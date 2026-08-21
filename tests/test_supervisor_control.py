@@ -55,16 +55,18 @@ class SupervisorControlTests(unittest.TestCase):
         self.assertEqual(runner.entry, REPOSITORY_ROOT / "runner" / "agent_runtime.py")
         self.assertEqual(runner.arguments, ("serve",))
 
-    def test_scheduler_runs_when_either_lane_is_enabled(self) -> None:
+    def test_scheduler_service_is_independent_from_automation_lanes(self) -> None:
         config = copy.deepcopy(load_initialization_config())
         config["scheduler"]["preflight"]["scheduled"] = False
+        config["scheduler"]["execution"]["scheduled"] = False
         dashboard, scheduler, runner = component_specs(config)
         self.assertTrue(dashboard.enabled)
         self.assertTrue(scheduler.enabled)
         self.assertTrue(runner.enabled)
 
-        config["scheduler"]["execution"]["scheduled"] = False
-        _dashboard, scheduler, runner = component_specs(config)
+        _dashboard, scheduler, runner = component_specs(
+            config, {"scheduler": False, "runner": True}
+        )
         self.assertFalse(scheduler.enabled)
         self.assertTrue(runner.enabled)
 
@@ -131,14 +133,15 @@ class SupervisorControlTests(unittest.TestCase):
 
             self.assertTrue(runtime.stop_requested(12345))
 
-    def test_runner_observes_queues_without_starting_worker_business(self) -> None:
+    def test_runner_starts_only_the_restricted_validation_worker(self) -> None:
         runner = (REPOSITORY_ROOT / "runner" / "agent_runtime.py").read_text(encoding="utf-8")
         worker = (REPOSITORY_ROOT / "worker" / "agent_runtime.py").read_text(encoding="utf-8")
         for business_symbol in ("SingleTaskAgent", "SubprocessLoopController", "load_provider"):
             self.assertNotIn(business_symbol, runner)
             self.assertIn(business_symbol, worker)
-        self.assertNotIn("subprocess.Popen", runner)
-        self.assertIn('"launch_enabled": False', runner)
+        self.assertIn("subprocess.Popen", runner)
+        self.assertIn("verification_worker.py", runner)
+        self.assertIn("validation_eligible", runner)
 
 
 if __name__ == "__main__":

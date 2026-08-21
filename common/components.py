@@ -116,11 +116,7 @@ def component_specs(
     scheduler = build(
         "scheduler",
         "Scheduler",
-        (
-            config["scheduler"]["preflight"]["scheduled"] is True
-            or config["scheduler"]["execution"]["scheduled"] is True
-        )
-        and desired.get("scheduler", True),
+        desired.get("scheduler", True),
         ("serve",),
     )
     runner = build(

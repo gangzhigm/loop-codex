@@ -373,6 +373,7 @@ def operations_config_payload(
     scheduler = config.get("scheduler")
     dashboard = config.get("dashboard")
     self_hosted_agent = config.get("self_hosted_agent")
+    codex_cli = config.get("codex_cli")
     health = config.get("health")
     priority_policy = config.get("priority_policy")
     prompts = config.get("prompts")
@@ -426,6 +427,7 @@ def operations_config_payload(
                 "title": "Operator 管理",
                 "items": [
                     item("operator-prompt", "Operator 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "operator"), "config/initialization.json", "人工任务管理对话的任务创建、更新、状态和归档约束。", "读取时生效", "文件存在性检查"),
+                    item("task-default-runtime", "任务默认运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "Operator 未指定任务后端时采用的默认路由。", "新建任务时生效", "配置加载时校验"),
                     item("priority-policy", "任务优先级策略", priority_policy.get("levels", "未配置") if isinstance(priority_policy, Mapping) else "未配置", "config/initialization.json", "任务优先级层级和项目默认优先级策略。", "新建或更新任务时生效", "配置加载时校验"),
                 ],
             },
@@ -434,7 +436,7 @@ def operations_config_payload(
                 "title": "Planner 管理",
                 "items": [
                     item("planner-prompt", "Planner 协议", _config_value(prompts if isinstance(prompts, Mapping) else {}, "planner"), "config/initialization.json", "Planner 预检阶段的状态、结果和安全边界。", "读取时生效", "文件存在性检查"),
-                    item("planner-runtime", "预检运行环境", _config_value(planner if isinstance(planner, Mapping) else {}, "default_runtime_environment"), "config/initialization.json", "预检 execution 只处理匹配运行环境与 Provider 的草稿任务。", "需重启预检 Runner", "配置加载时校验"),
+                    item("planner-runtime", "Planner Worker 环境", _config_value(planner if isinstance(planner, Mapping) else {}, "worker_runtime_environment"), "config/initialization.json", "Planner Worker 路由独立于任务最终执行环境。", "需重启 Runner", "配置加载时校验"),
                     item("planner-capacity", "预检并发上限", _config_value(planner if isinstance(planner, Mapping) else {}, "max_active_executions"), "config/initialization.json", "QUEUED 与 INSPECTING 预检 execution 共享的容量上限。", "下次排队生效", "排队事务校验"),
                     item("planner-boundary", "预检安全边界", _config_value(planner if isinstance(planner, Mapping) else {}, "client_boundary", "sandbox"), "config/initialization.json", "预检 Runner 只读检查，并通过受控 loopctl 写回。", "需重启预检 Runner", "配置加载时校验"),
                 ],
@@ -462,6 +464,7 @@ def operations_config_payload(
                 "title": "Worker 管理",
                 "items": [
                     item("worker-prompt", "Worker 提示词", _config_value(prompts if isinstance(prompts, Mapping) else {}, "worker"), "config/initialization.json", "不同执行入口共同遵循的单任务、scope 锁和结果写回协议。", "读取时生效", "文件存在性检查"),
+                    item("codex-worker-prompt", "Codex Worker 提示词", _config_value(codex_cli if isinstance(codex_cli, Mapping) else {}, "prompt"), "config/initialization.json", "宿主管理的 Codex Worker 只执行任务并返回结构化结果。", "读取时生效", "文件存在性检查"),
                     item("global-capacity", "全局并发上限", _config_value(task_execution if isinstance(task_execution, Mapping) else {}, "global_max_active_executions"), "config/initialization.json", "所有运行环境共享的活动 execution 上限。", "需重启", "领取事务校验"),
                     item("platform-capacity", "平台并发上限", platform_capacities, "config/initialization.json", "每个运行环境的活动 execution 上限。", "需重启", "领取事务校验"),
                     item("human-approvals", "人工批准动作", approval_actions, "config/initialization.json", "Worker 必须由人工明确批准的高风险动作。", "受保护", "领取与 finish 事务校验"),
@@ -472,7 +475,7 @@ def operations_config_payload(
                 "title": "Runner 管理",
                 "items": [
                     item("self-hosted-limits", "自建 Agent 运行上限", self_hosted_limits or "未配置", "config/initialization.json", "自建 Agent 的步骤、模型、工具和输出边界。", "需重启", "配置加载时校验"),
-                    item("runner-service", "独立 Runner 服务", "main.py serve", "runner/agent_runtime.py", "常驻读取两类队列、计算容量并选择候选；当前明确不启动 AI Worker。", "当前生效", "data/runtime/runner-queue-state.json", "active"),
+                    item("runner-service", "独立 Runner 服务", "main.py serve", "runner/agent_runtime.py", "常驻读取两类队列、计算容量并维护匹配的 AI Worker 子进程。", "当前生效", "data/runtime/runner-queue-state.json", "active"),
                 ],
             },
         ],

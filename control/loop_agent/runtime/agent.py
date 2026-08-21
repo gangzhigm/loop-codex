@@ -85,17 +85,14 @@ class SingleTaskAgent:
             raise AgentRuntimeError(
                 "runtime environment and capability level must be explicit and valid"
             )
-        execution_profile = ExecutionProfile.resolve(
+        configured_profile = ExecutionProfile.resolve(
             self.config, runtime_environment, provider_id, capability_level
         )
-        validate_startup = getattr(self.provider, "validate_startup", None)
-        if callable(validate_startup):
-            validate_startup(execution_profile)
         claim = self.controller.claim(
             execution_id,
-            execution_profile.runtime_environment,
-            execution_profile.capability_level,
-            execution_profile.provider_id,
+            configured_profile.runtime_environment,
+            configured_profile.capability_level,
+            configured_profile.provider_id,
         )
         outcome = claim.get("outcome")
         if outcome != "CLAIMED":
@@ -103,6 +100,14 @@ class SingleTaskAgent:
                 raise AgentRuntimeError("claim returned an unknown outcome")
             self.logger.event("claim_finished", outcome=outcome)
             return claim
+        execution_profile = (
+            ExecutionProfile.from_snapshot(claim["execution_profile"])
+            if "execution_profile" in claim
+            else configured_profile
+        )
+        validate_startup = getattr(self.provider, "validate_startup", None)
+        if callable(validate_startup):
+            validate_startup(execution_profile)
         task = claim.get("task")
         if not isinstance(task, dict):
             raise AgentRuntimeError("claim omitted task")

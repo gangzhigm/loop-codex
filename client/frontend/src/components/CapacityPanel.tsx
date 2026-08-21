@@ -29,9 +29,12 @@ function ServiceActions({
   pending: string | null;
   onControl: Props["onControl"];
 }) {
+  const action = enabled ? "stop" : "start";
+  const label = `${enabled ? "停止" : "启动"} ${service}`;
   return <span className="service-monitor-actions" aria-label={`${service} 服务控制`}>
-    <button type="button" className="icon-button small" disabled={enabled || pending !== null} title={`启动 ${service}`} aria-label={`启动 ${service}`} onClick={() => onControl(service, "start")}><Play size={14} /></button>
-    <button type="button" className="icon-button small" disabled={!enabled || pending !== null} title={`停止 ${service}`} aria-label={`停止 ${service}`} onClick={() => onControl(service, "stop")}><Square size={13} /></button>
+    <button type="button" className="icon-button small" disabled={pending !== null} title={label} aria-label={label} onClick={() => onControl(service, action)}>
+      {enabled ? <Square size={13} /> : <Play size={14} />}
+    </button>
     <button type="button" className="icon-button small" disabled={!enabled || pending !== null} title={`重启 ${service}`} aria-label={`重启 ${service}`} onClick={() => onControl(service, "restart")}><RefreshCw size={14} /></button>
   </span>;
 }
@@ -48,11 +51,12 @@ function ChainActions({
   onControl: Props["onControl"];
 }) {
   const name = service === "planner" ? "Planner" : "Dispatcher";
+  const action = automationEnabled ? "disable" : "enable";
+  const label = automationEnabled ? "关闭自动化" : "开启自动化";
   return <span className="service-monitor-actions" aria-label={`${name} 调度控制`}>
-    <label className="automation-switch" title={`${automationEnabled ? "关闭" : "开启"}${name}自动化`}>
-      <input type="checkbox" checked={automationEnabled} disabled={pending !== null} aria-label={`${automationEnabled ? "关闭" : "开启"}${name}自动化`} onChange={() => onControl(service, automationEnabled ? "disable" : "enable")} />
-      <span aria-hidden="true" />
-    </label>
+    <button type="button" className="automation-button" disabled={pending !== null} title={`${label} ${name}`} aria-label={`${label} ${name}`} onClick={() => onControl(service, action)}>
+      {automationEnabled ? <Square size={12} /> : <Play size={12} />}
+    </button>
     <button type="button" className="icon-button small" disabled={pending !== null} title={`单次触发 ${name}`} aria-label={`单次触发 ${name}`} onClick={() => onControl(service, "trigger")}><Play size={14} /></button>
   </span>;
 }

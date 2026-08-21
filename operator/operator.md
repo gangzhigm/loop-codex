@@ -45,9 +45,9 @@
    - 用户确认前不得创建子任务、取消原任务或用建议覆盖原始任务事实。用户已明确批准具体拆分方案时，才按下一步执行。
 4. 拆分已有任务时，先创建全部替代任务；确认全部创建成功后，再取消原任务并在原因中记录替代任务 ID。不得物理删除原任务或丢失历史；`QUEUED` 或 `RUNNING` 任务不得拆分，必须先退出当前执行流程。
 5. 新任务无论信息是否完整都以 `DRAFT/UNINSPECTED` 创建。保存用户原始业务描述、业务验收、priority、runtime_environment、依赖、附件、`scope_hint` 和 `estimated_capability_level`；最终 capability 与精确 scope 保持未定。未指定环境时使用初始化配置中的默认环境，用户指定时保持不变。
-6. Planner 把选中的任务原子排入 `DRAFT/QUEUED` 并创建预检 execution，但当前不自动启动预检 Runner。因此新任务可能停在队列中，不会仅靠 Scheduler 自动进入 `PENDING/READY`；不得绕过预检队列直接进入 PENDING。
+6. Planner 把选中的任务原子排入 `DRAFT/QUEUED` 并创建预检 execution；Runner 可按配置启动只读 Planner Worker。Runner 不可用时任务停在队列中，不得绕过预检直接进入 PENDING。
 7. 用户提供文件或图片时，保存到 `data/assets/<task-id>/`，保留原始文件，计算 SHA-256，并写入 `task_attachments`。
-8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后核对 Planner 的预检排队状态；`PENDING/READY` 自动任务由 Scheduler 的 Dispatcher 原子排入 `QUEUED/READY`，再由 Runner 观察并选择候选。当前不会启动 AI Worker。
+8. 使用 `loopctl.py enqueue/update/requeue/cancel/confirm/archive/unarchive` 完成操作。`enqueue` 只创建 DRAFT，`update` 会清除旧 Planner 补充并回到 UNINSPECTED，`requeue` 处理 DRAFT/NEEDS_REVIEW 时同样不能绕过预检。DRAFT 创建后核对 Planner 的预检排队状态；`PENDING/READY` 自动任务由 Scheduler 的 Dispatcher 原子排入 `QUEUED/READY`，再由 Runner 选择并启动匹配 Worker。
 9. 从 `/api/state` 复核任务 ID、主状态、preflight_status、Operator 原始定义、Planner 补充、priority、runtime_environment、预估/最终等级、scope hint、精确 scope、lock_mode、拆分建议、附件和 archived_at。不要借复核读取或判断源码或业务实现。
 10. 最终只汇报任务管理结果；明确说明未检查或执行项目代码。
 
@@ -71,15 +71,15 @@
 - `L5`：跨项目、数据库迁移、并发锁、权限、支付、架构或高风险任务；也可配合 `execution_policy=manual` 用于人工批准的一次性执行。
 - 心跳停滞、租约回收、执行中断、工具故障和缺少人工信息不属于实现失败，不得据此升级。首次真实实现失败可提高一个等级；连续两次真实实现失败必须先评估拆分。
 - `QUEUED` 或 `RUNNING` 任务不得修改能力等级、平台或执行策略。Operator 修改任何可执行边界会让任务回到 DRAFT/UNINSPECTED，必须重新经过 Planner 排队和预检。
-- Worker 的模型、推理参数和执行限制只从初始化配置读取。Planner 只是预检业务阶段；Scheduler 维护自己的 heartbeat，并独立执行预检与正式执行排队。Runner 是单独的常驻 AI 管理器，读取两类队列、计算容量并选择候选。进程状态由 Supervisor 和初始化配置管理。
+- Worker 的模型、推理参数和执行限制由 Dispatcher 固化到 execution；Worker 领取后使用该不可变快照。Planner 是预检业务阶段；Scheduler 维护自己的 heartbeat，并独立执行预检与正式执行排队。Runner 是单独的常驻 AI 管理器，读取两类队列、计算容量、路由并维护 Worker 子进程。
 
 ## 运行环境规则
 
 - `self_hosted_agent`：只由指定 Provider 的内部 Agent 显式领取。使用 DeepSeek 时必须显式设置 `provider_id=deepseek`。
-- `codex_automation` 和 `codex_cli` 只可能出现在已有 SQLite 历史记录中，不是当前可选运行环境；新建、更新或重新执行任务时必须选择当前配置登记的内部环境。
+- `codex_cli` 是 Runner 管理的当前可选执行环境，任务使用它时 `provider_id` 必须为空；`codex_automation` 只保留为 SQLite 历史值，不是当前可选环境。
 - 用户没有明确指定运行环境时，使用 `planner.default_runtime_environment`；用户明确指定已登记环境时以用户选择为准，不得让其他入口兜底领取。
 - 运行环境列表、显示名称和入口参数读取 `config/initialization.json`。用户未指定时允许 `enqueue` 使用 `planner.default_runtime_environment`；Operator 必须在结果中说明采用了该默认值。Planner 不得改变已保存的环境。
-- 环境已登记不等于对应 AI Worker 已可用。创建任务时只保存路由事实；Scheduler 可将任务排入预检或正式执行队列，Runner 不可用时任务会停在相应 `QUEUED` 状态。当前 Runner 只观察队列并选择候选，不启动 AI Worker。
+- 环境已登记不等于对应 AI Worker 依赖一定可用。创建任务时只保存路由事实；Scheduler 可将任务排入预检或正式执行队列，Runner 或对应后端不可用时任务会停在相应 `QUEUED` 状态或由受控 Worker 报告失败。
 - 运行环境与优先级、能力等级、Provider、执行策略、依赖和 scope 锁独立；全局与各平台活动 execution 上限从初始化配置读取并跨运行环境共同计算，scope 冲突也不因运行环境不同而放行。
 - `QUEUED` 或 `RUNNING` 任务不得修改运行环境。修改或重新排队后，必须由匹配环境的入口领取并从 API 复核。
 
@@ -113,7 +113,7 @@
 - Scheduler 通过 `loopctl.py schedule-preflight` 把选中任务原子改为 `DRAFT/QUEUED` 并创建 `PLANNER/QUEUED` execution；它不直接启动预检 Runner。
 - Planner 只定义预检的排队、领取、heartbeat 和结果写回状态机，不拥有 Scheduler 的服务生命周期或正式 Worker 排队链。
 - Dispatcher 选择依赖完成且路由匹配的 `PENDING/READY` 自动任务，原子改为 `QUEUED/READY` 并创建 `WORKER/QUEUED` execution；它不启动 Runner 或 AI Worker。
-- Runner 是独立常驻 AI 管理器，读取两类队列、计算预检/全局/平台容量并选择候选；当前不执行领取或启动 AI Worker。
+- Runner 是独立常驻 AI 管理器，读取两类队列、计算预检/全局/平台容量并启动匹配 Worker；Runner 本身不领取任务或修改任务状态。
 - `preflight-claim|preflight-heartbeat|preflight-ready|preflight-needs-review|preflight-fail` 是预检 Runner 的受控状态机；Operator 不调用这些命令。
 - 数据库中的 Planner 字段、execution、READY 任务和历史证据都是事实记录；不得清理或伪造。
 - Supervisor 只管理 Dashboard、Scheduler 和 Runner 的进程存活，不参与任务选择、领取或状态迁移。

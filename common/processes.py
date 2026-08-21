@@ -25,7 +25,8 @@ def safe_process_environment() -> dict[str, str]:
     return {
         name: value
         for name, value in os.environ.items()
-        if not SENSITIVE_ENVIRONMENT_NAME.search(name)
+        if name.casefold() != "codex_home"
+        and not SENSITIVE_ENVIRONMENT_NAME.search(name)
     }
 
 

@@ -40,14 +40,15 @@ $root = Split-Path -Parent (Split-Path -Parent $resolvedConfig)
 $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
-Assert-Condition ($config.config_version -eq '5.4.0') 'config_version 为 5.4.0'
+Assert-Condition ($config.config_version -eq '5.5.0') 'config_version 为 5.5.0'
 Assert-Condition ($config.database.schema_version -eq '3.9.0') 'Schema 契约为 3.9.0'
 Assert-Condition ($config.prompts.planner -eq 'scheduler/planner.md') 'Planner 提示词路径唯一且已登记'
 
 $promptPaths = @(
     $config.prompts.operator,
     $config.prompts.planner,
-    $config.prompts.worker
+    $config.prompts.worker,
+    $config.codex_cli.prompt
 )
 foreach ($relativePath in $promptPaths) {
     $fullPath = Join-Path $root $relativePath
@@ -84,30 +85,36 @@ Assert-Condition ($preflightScheduler.scheduled -is [bool]) 'Scheduler 预检排
 Assert-Condition ($preflightScheduler.interval_minutes -ge 1) 'Scheduler 预检排队周期有效'
 Assert-Condition ($config.planner.default_runtime_environment -eq 'self_hosted_agent') 'Planner 默认目标为内部 Agent 环境'
 Assert-Condition ($config.planner.provider_id -eq 'deepseek') 'Planner 显式登记内部 Provider'
+Assert-Condition ($config.planner.worker_runtime_environment -eq 'codex_cli') 'Planner Worker 使用 Codex CLI'
+Assert-Condition ($null -eq $config.planner.worker_provider_id) 'Planner Codex Worker 不伪造 Provider'
+Assert-Condition ($config.planner.capability_level -eq 'L3') 'Planner Worker 固定使用 L3'
 Assert-Condition ($null -eq $config.automations) '初始化配置不包含外部客户端自动化定义'
 $runtimeNames = @($config.runtime_environments.PSObject.Properties.Name | Sort-Object)
-Assert-Condition (($runtimeNames -join '|') -eq 'self_hosted_agent') '只登记内部 Agent 运行环境'
+Assert-Condition (($runtimeNames -join '|') -eq 'codex_cli|self_hosted_agent') '登记 Runner 可管理的内部执行环境'
 $profileNames = @($config.execution_profiles.PSObject.Properties.Name | Sort-Object)
-Assert-Condition (($profileNames -join '|') -eq 'self_hosted_agent') '只登记内部 Agent execution profile'
+Assert-Condition (($profileNames -join '|') -eq 'codex_cli|self_hosted_agent') '登记 Worker execution profiles'
 $executionScheduler = $scheduler.execution
 Assert-Condition ($executionScheduler.scheduled -is [bool]) 'Scheduler 执行分发开关为布尔值'
 Assert-Condition ($executionScheduler.interval_minutes -ge 1) 'Scheduler 执行分发周期有效'
-Assert-Condition ($executionScheduler.runtime_environment -eq 'self_hosted_agent') 'Scheduler 只分发内部 Agent 任务'
-Assert-Condition ($executionScheduler.provider_id -eq 'deepseek') 'Scheduler 执行分发显式登记内部 Provider'
+Assert-Condition ($executionScheduler.max_tasks_per_cycle -ge 1) 'Dispatcher 单轮排队上限有效'
 Assert-Condition ($config.runner.heartbeat_interval_seconds -ge 1) 'Runner heartbeat 周期有效'
 Assert-Condition ($config.runner.queue_poll_interval_seconds -ge 1) 'Runner 队列观察周期有效'
+Assert-Condition ($config.runner.worker_launch_enabled -is [bool]) 'Runner AI Worker 启动开关为布尔值'
+Assert-Condition ($config.codex_cli.sandbox -eq 'workspace-write') '正式 Codex Worker 使用可写沙箱'
+Assert-Condition ($config.codex_cli.planner_sandbox -eq 'read-only') 'Planner Codex Worker 使用只读沙箱'
 
 $operatorPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.operator)
 $plannerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.planner)
 $workerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.worker)
+$codexWorkerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.codex_cli.prompt)
 $loopctlSource = Read-Utf8Strict -Path (Join-Path $root 'control\loopctl.py')
 $plannerControlSource = Read-Utf8Strict -Path (Join-Path $root 'scheduler\planner_control.py')
 $schedulerMainSource = Read-Utf8Strict -Path (Join-Path $root 'scheduler\main.py')
 $schedulerDispatchSource = Read-Utf8Strict -Path (Join-Path $root 'scheduler\execution_dispatch.py')
 $runnerSource = Read-Utf8Strict -Path (Join-Path $root 'runner\agent_runtime.py')
-Assert-Condition ($plannerPrompt -match 'DRAFT/QUEUED') 'Planner 提示词声明持久排队边界'
-Assert-Condition ($plannerPrompt -match '不是常驻调度服务') 'Planner 提示词声明非服务边界'
-Assert-Condition ($plannerPrompt -match '不拥有正式 Worker 执行排队') 'Planner 提示词声明正式执行排队边界'
+Assert-Condition ($plannerPrompt -match '不负责周期调度') 'Planner Worker 提示词声明非服务边界'
+Assert-Condition ($plannerPrompt -match '判断完成任务需要的最终能力等级') 'Planner Worker 负责最终能力判断'
+Assert-Condition ($plannerPrompt -match '判断任务是否应拆分') 'Planner Worker 负责拆分建议'
 Assert-Condition ($schedulerMainSource -match 'runtime\.write_heartbeat') 'Scheduler 主进程发布 heartbeat'
 Assert-Condition ($schedulerMainSource -match 'schedule-preflight') 'Scheduler 主进程通过 loopctl 执行持久排队'
 Assert-Condition ($schedulerMainSource -match 'schedule-execution') 'Scheduler 主进程通过 loopctl 执行正式持久排队'
@@ -116,8 +123,8 @@ Assert-Condition ($schedulerMainSource -match 'execution_interval_seconds') 'Sch
 Assert-Condition ($schedulerDispatchSource -match "status='QUEUED'") 'Dispatcher 创建正式 QUEUED execution'
 Assert-Condition ($schedulerDispatchSource -notmatch 'subprocess\.Popen|launch_detached_process') 'Dispatcher 不启动 Runner 或 Worker'
 Assert-Condition ($schedulerMainSource -notmatch 'planner_runner\.py') 'Scheduler 主进程不直接引用预检 Runner'
-Assert-Condition ($runnerSource -match 'launch_enabled.*False') 'Runner 明确禁用 AI Worker 启动'
-Assert-Condition ($runnerSource -notmatch 'subprocess\.Popen') 'Runner 当前阶段不启动 AI Worker'
+Assert-Condition ($runnerSource -match '_launch_ai_workers') 'Runner 统一启动 AI Worker'
+Assert-Condition ($runnerSource -match 'execution_kind') 'Runner 按 execution kind 路由 Worker'
 Assert-Condition ($operatorPrompt -match 'Planner 阶段状态') 'Operator 提示词声明 Planner 阶段状态'
 Assert-Condition (
     ($loopctlSource -match 'from scheduler\.planner_control import') -and
@@ -128,17 +135,19 @@ Assert-Condition ($workerPrompt -match 'scope_lock_credential') 'Worker 编辑�
 Assert-Condition ($workerPrompt -match 'extend-scope') 'Worker 新范围写入前原子扩锁'
 Assert-Condition ($workerPrompt -match '唯一允许自动恢复的已跟踪范围外文件') 'Worker 仅允许自动恢复严格证明归属的已跟踪字节码缓存'
 Assert-Condition ($workerPrompt -match '不得删除文件、修改索引、使用通配符或递归操作') 'Worker 字节码恢复不得扩大为删除或批量回退权限'
+Assert-Condition ($codexWorkerPrompt -match '不调用 `loopctl.py`') 'Codex Worker 不直接操作控制面'
+Assert-Condition ($codexWorkerPrompt -match '宿主负责 heartbeat') 'Codex Worker 由宿主管理生命周期'
 Assert-Condition ($config.self_hosted_agent.provider_factories.deepseek -eq 'loop_agent.providers.deepseek:create_provider') '内部 Provider 工厂路径已登记'
 
 [ordered]@{
     outcome = 'VALID'
     config = $resolvedConfig
     checks = $script:Checks.Count
-    runtime_environment = 'self_hosted_agent'
+    runtime_environments = @('self_hosted_agent', 'codex_cli')
     operator_actions = @(
         '复核 Scheduler 预检排队、正式执行排队、独立周期和 heartbeat 边界。',
         '逐条复核内部运行环境 L1-L5 的模型、reasoning 和 attempt 参数。',
         '确认 Planner 预检控制协议仍通过 loopctl.py 受控。',
-        '确认 Scheduler 只执行两类持久排队，Runner 当前只观察队列、计算容量和选择候选。'
+        '确认 Scheduler 只执行两类持久排队，Runner 负责容量、路由和 Worker 子进程。'
     )
 } | ConvertTo-Json -Depth 5

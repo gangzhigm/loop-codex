@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from loopdb import (
     normalize_scope,
     resolve_execution_profile,
     scope_keys_conflict,
+    state_payload,
     validate_database,
 )
 
@@ -119,6 +121,32 @@ class LoopTestCase(unittest.TestCase):
         runtime_environment: str = "self_hosted_agent",
         provider_id: str | None = "deepseek",
     ) -> dict[str, object]:
+        database = connect(self.db_path)
+        exists = database.execute(
+            "SELECT 1 FROM executions WHERE execution_id=?", (execution_id,)
+        ).fetchone()
+        database.close()
+        if exists is None:
+            from scheduler.execution_dispatch import (
+                EventLogger,
+                ExecutionDispatcher,
+                ExecutionDispatchSettings,
+            )
+
+            config = load_initialization_config()
+            settings = replace(
+                ExecutionDispatchSettings.from_config(config),
+                database_path=self.db_path,
+                supported_capability_levels=(capability_level,),
+                max_tasks_per_cycle=1,
+            )
+            ExecutionDispatcher(
+                settings,
+                config,
+                execution_id_factory=lambda _level: execution_id,
+                logger=EventLogger(None),
+                route_filter=(runtime_environment, provider_id),
+            ).run()
         arguments = [
             "claim",
             execution_id,
@@ -220,9 +248,12 @@ class LoopTestCase(unittest.TestCase):
         return self.run_ctl("enqueue", str(path))
 
     def planner_claim(self, execution_id: str) -> dict[str, object]:
+        runtime_environment = load_initialization_config()["planner"][
+            "worker_runtime_environment"
+        ]
         return self.run_ctl(
             "preflight-claim", execution_id,
-            "--runtime-environment", "self_hosted_agent",
+            "--runtime-environment", runtime_environment,
             "--sandbox", "read-only",
         )
 

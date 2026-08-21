@@ -151,7 +151,7 @@ class AttachmentImageTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "3.9.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
-            {"self_hosted_agent": 8},
+            {"self_hosted_agent": 8, "codex_cli": 4},
         )
         self.assertEqual(payload["settings"]["global_max_active_executions"], 8)
         self.assertEqual(routes["DASHBOARD-AGENT-L2"], ("L2", "self_hosted_agent", "deepseek"))
@@ -413,6 +413,8 @@ class SecretApiTests(unittest.TestCase):
         self.config_path = self.base_dir / "initialization.json"
         self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
         self.db_path = self.base_dir / "unused.sqlite3"
+        self.runtime_log_dir = self.base_dir / "runtime"
+        self.runtime_log_dir.mkdir()
         database = connect(self.db_path)
         initialize_schema(database)
         database.close()
@@ -424,6 +426,7 @@ class SecretApiTests(unittest.TestCase):
             runtime_config_path=self.config_path,
             secret_store=self.store,
             health_state_path=self.health_state,
+            runtime_log_dir=self.runtime_log_dir,
             provider_verifiers={"deepseek": lambda candidate: not candidate.startswith("reject-")},
         )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -526,6 +529,45 @@ class SecretApiTests(unittest.TestCase):
         provider = secret_item["value"][0]
         self.assertEqual(set(provider), {"provider_id", "configured", "backend", "status", "last_validated_at", "validation_scope", "persistent", "mutable", "repair"})
 
+    def test_runtime_logs_page_reads_only_fixed_sources(self) -> None:
+        (self.runtime_log_dir / "scheduler.log").write_text(
+            "scheduler started\n"
+            '{"at":"2026-08-21T12:00:00+08:00","event":"scheduler.preflight_schedule.completed","outcome":"QUEUED","task_id":"PLAN-1"}\n'
+            '{"at":"2026-08-21T12:01:00+08:00","event":"scheduler.execution_schedule.completed","outcome":"NO_TASK"}\n',
+            encoding="utf-8",
+        )
+        (self.runtime_log_dir / "scheduler-execution-dispatch.log").write_text(
+            '{"at":"2026-08-21T12:01:00+08:00","outcome":"QUEUED","task_id":"WORK-1","execution_id":"worker-1"}\n',
+            encoding="utf-8",
+        )
+        (self.runtime_log_dir / "runner.log").write_text(
+            '{"component":"runner","status":"OBSERVING","checked_at":"2026-08-21T12:02:00+08:00","launch_enabled":false}\n',
+            encoding="utf-8",
+        )
+
+        for path, content_type in [
+            ("/runtime-logs.html", "text/html"),
+            ("/runtime-logs.js", "application/javascript"),
+            ("/runtime-logs.css", "text/css"),
+        ]:
+            status, headers, body = self.raw_request(path)
+            self.assertEqual(status, 200)
+            self.assertIn(content_type, headers["Content-Type"])
+            self.assertTrue(body)
+
+        status, _headers, payload = self.request("GET", "/api/runtime-logs")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(set(payload["logs"]), {"planner", "dispatcher", "runner"})
+        self.assertEqual(payload["logs"]["planner"]["entries"][0]["details"]["task_id"], "PLAN-1")
+        self.assertEqual(payload["logs"]["dispatcher"]["entries"][0]["event"], "dispatcher.execution_dispatch")
+        self.assertEqual(payload["logs"]["runner"]["entries"][0]["event"], "runner.queue_snapshot")
+        self.assertNotIn("execution_schedule", json.dumps(payload["logs"]["planner"], ensure_ascii=False))
+
+        status, _headers, payload = self.request("GET", "/api/runtime-logs?source=runner")
+        self.assertEqual(status, 400)
+        self.assertFalse(payload["ok"])
+
     def test_react_dashboard_and_local_build_assets_are_available(self) -> None:
         status, headers, body = self.raw_request("/")
         self.assertEqual(status, 200)
@@ -568,6 +610,11 @@ class SecretApiTests(unittest.TestCase):
         )
 
     def test_service_actions_support_restart_and_reject_incorrect_confirmation(self) -> None:
+        self.config["scheduler"]["execution"]["scheduled"] = True
+        self.config_path.write_text(
+            json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self.server.runtime_config = self.config
         state = {"supervisor": True, "scheduler": True}
         with (
             patch("client.dashboard_server.service_control_state", return_value=state),
@@ -603,6 +650,11 @@ class SecretApiTests(unittest.TestCase):
         self.assertIn("明确确认", payload["error"])
 
     def test_scheduler_chain_actions_persist_automation_and_run_once(self) -> None:
+        self.config["scheduler"]["execution"]["scheduled"] = True
+        self.config_path.write_text(
+            json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self.server.runtime_config = self.config
         state = {"supervisor": True, "scheduler": True}
         with (
             patch("client.dashboard_server.service_control_state", return_value=state),

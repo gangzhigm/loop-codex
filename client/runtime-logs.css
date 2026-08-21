@@ -1,0 +1,32 @@
+:root { color-scheme: light; --ink: #17212b; --muted: #607080; --line: #d7dde3; --panel: #fff; --page: #f3f6f8; --accent: #176c72; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); line-height: 1.5; }
+.app-header { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 76px; padding: 16px max(24px, calc((100% - 1120px) / 2)); background: var(--accent); color: #fff; }
+.brand { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgba(255,255,255,.45); border-radius: 5px; color: #fff; font-size: 12px; font-weight: 800; text-decoration: none; }
+.eyebrow { margin: 0; color: inherit; font-size: 11px; font-weight: 700; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 0; font-size: 19px; }
+.dashboard-link { color: #fff; font-size: 14px; text-underline-offset: 3px; }
+main { width: min(1120px, calc(100% - 48px)); margin: 28px auto 48px; }
+.overview, .log-panel { border: 1px solid var(--line); background: var(--panel); }
+.overview { display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 20px; }
+.overview h2 { margin-bottom: 0; font-size: 18px; }
+.overview .eyebrow { color: var(--accent); }
+.updated-at, #source-meta { margin-bottom: 0; color: var(--muted); font-size: 12px; }
+.status { min-height: 0; margin: 12px 0; color: #8a2424; font-size: 13px; }
+.status:empty { margin: 0; }
+.log-tabs { display: flex; gap: 8px; margin: 18px 0 12px; }
+.log-tabs button { min-width: 108px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 5px; background: var(--panel); color: var(--accent); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.log-tabs button.active { background: var(--accent); color: #fff; }
+.log-panel-header { display: flex; align-items: start; justify-content: space-between; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.log-panel-header h2 { margin-bottom: 4px; font-size: 16px; }
+.entry-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.entries { display: grid; }
+.log-entry { padding: 14px 20px; border-bottom: 1px solid #e8edf0; }
+.log-entry:last-child { border-bottom: 0; }
+.log-entry-header { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.log-entry strong { color: var(--accent); font-size: 13px; overflow-wrap: anywhere; }
+.log-entry time { color: var(--muted); font-family: Consolas, monospace; font-size: 11px; white-space: nowrap; }
+.log-entry pre { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: #344250; font: 12px/1.55 Consolas, "Microsoft YaHei", monospace; }
+.empty-state { padding: 32px 20px; margin-bottom: 0; color: var(--muted); text-align: center; }
+@media (max-width: 560px) { .app-header { padding: 14px 18px; } main { width: min(100% - 28px, 1120px); margin-top: 16px; } .overview, .log-panel-header { align-items: start; flex-direction: column; } .log-tabs button { flex: 1; min-width: 0; } .log-entry-header { align-items: start; flex-direction: column; gap: 3px; } .log-entry time { white-space: normal; } }

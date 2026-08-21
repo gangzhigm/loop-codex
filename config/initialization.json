@@ -1,5 +1,5 @@
 {
-  "config_version": "5.4.0",
+  "config_version": "5.5.0",
   "workspace": {
     "name": "Cross-Project Local Agent Loop",
     "timezone": "Asia/Shanghai",
@@ -21,6 +21,13 @@
       "entry": {
         "type": "self_hosted_agent",
         "claim_argument": "self_hosted_agent"
+      }
+    },
+    "codex_cli": {
+      "name": "Codex CLI",
+      "entry": {
+        "type": "codex_cli",
+        "claim_argument": "codex_cli"
       }
     }
   },
@@ -62,16 +69,54 @@
           }
         }
       }
+    },
+    "codex_cli": {
+      "provider_id": null,
+      "capabilities": {
+        "L1": {
+          "model": "gpt-5.6-luna",
+          "reasoning": "medium",
+          "attempt_timeout_seconds": 3600,
+          "max_retries": 1
+        },
+        "L2": {
+          "model": "gpt-5.6-terra",
+          "reasoning": "medium",
+          "attempt_timeout_seconds": 3600,
+          "max_retries": 1
+        },
+        "L3": {
+          "model": "gpt-5.6-terra",
+          "reasoning": "high",
+          "attempt_timeout_seconds": 3600,
+          "max_retries": 1
+        },
+        "L4": {
+          "model": "gpt-5.6-terra",
+          "reasoning": "xhigh",
+          "attempt_timeout_seconds": 3600,
+          "max_retries": 1
+        },
+        "L5": {
+          "model": "gpt-5.6-sol",
+          "reasoning": "high",
+          "attempt_timeout_seconds": 3600,
+          "max_retries": 1
+        }
+      }
     }
   },
   "task_execution": {
     "heartbeat_interval_seconds": 30,
+    "controller_timeout_seconds": 30,
     "stalled_after_seconds": 300,
     "task_lease_seconds": 3600,
     "max_attempts": 2,
     "global_max_active_executions": 8,
+    "max_queued_executions": 16,
     "platform_max_active_executions": {
-      "self_hosted_agent": 8
+      "self_hosted_agent": 8,
+      "codex_cli": 4
     },
     "scope_conflict_mode": "project",
     "require_human_approval_for": [
@@ -86,10 +131,14 @@
     "execution_kind": "PLANNER",
     "default_runtime_environment": "self_hosted_agent",
     "provider_id": "deepseek",
+    "max_tasks_per_cycle": 3,
+    "worker_runtime_environment": "codex_cli",
+    "worker_provider_id": null,
     "capability_level": "L3",
     "max_retries": 1,
-    "max_active_executions": 2,
+    "max_active_executions": 3,
     "heartbeat_interval_seconds": 30,
+    "controller_timeout_seconds": 30,
     "stalled_after_seconds": 300,
     "lease_seconds": 600,
     "attempt_timeout_seconds": 1800,
@@ -125,9 +174,8 @@
     "execution": {
       "scheduled": false,
       "interval_minutes": 15,
+      "max_tasks_per_cycle": 1,
       "log_path": "data/runtime/scheduler-execution-dispatch.log",
-      "runtime_environment": "self_hosted_agent",
-      "provider_id": "deepseek",
       "supported_capability_levels": [
         "L1",
         "L2",
@@ -139,7 +187,29 @@
   },
   "runner": {
     "heartbeat_interval_seconds": 15,
-    "queue_poll_interval_seconds": 5
+    "queue_poll_interval_seconds": 5,
+    "worker_launch_enabled": true,
+    "allow_legacy_direct_claim": false,
+    "child_termination_grace_seconds": 5,
+    "validation_worker": {
+      "enabled": true,
+      "task_id_prefix": "VALIDATION-",
+      "task_marker": "[runner-validation]",
+      "planner_ready_delay_seconds": 20,
+      "artifact_directory": "data/runtime/validation"
+    }
+  },
+  "codex_cli": {
+    "executable": "codex",
+    "prompt": "worker/codex-worker.md",
+    "use_user_config": true,
+    "planner_use_user_config": false,
+    "sandbox": "workspace-write",
+    "planner_sandbox": "read-only",
+    "termination_grace_seconds": 5,
+    "process_poll_interval_seconds": 0.1,
+    "max_stdout_chars": 200000,
+    "max_stderr_chars": 50000
   },
   "self_hosted_agent": {
     "provider_factories": {

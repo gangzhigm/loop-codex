@@ -13,6 +13,7 @@ import tempfile
 import time
 import types
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -35,6 +36,11 @@ from loop_agent.runtime.protocol import validate_final_result
 from loop_agent.runtime.sandbox import ScopePolicy, ToolSandbox
 from loopdb import connect, initialize_schema, insert_task, load_initialization_config, now_shanghai
 from loop_agent.secrets.store import EnvironmentBackend, SecretStore
+from scheduler.execution_dispatch import (
+    EventLogger,
+    ExecutionDispatcher,
+    ExecutionDispatchSettings,
+)
 
 
 class ScriptedProvider:
@@ -204,6 +210,31 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(len(controller.claims), 1)
         self.assertEqual(len(controller.finishes), 1)
         self.assertGreaterEqual(len(controller.heartbeats), 4)
+
+    def test_worker_uses_queued_execution_profile_after_config_changes(self) -> None:
+        provider = ScriptedProvider([success_result("queued profile used")])
+        startup_profiles: list[ExecutionProfile] = []
+        provider.validate_startup = startup_profiles.append  # type: ignore[attr-defined]
+        claim = {
+            "outcome": "CLAIMED",
+            "execution_profile": {
+                "runtime_environment": "self_hosted_agent",
+                "provider_id": "deepseek",
+                "capability_level": "L2",
+                "model": "queued-model",
+                "reasoning": "low",
+                "attempt_timeout_seconds": 2,
+                "max_retries": 0,
+            },
+            "task": self.task(),
+        }
+
+        result, _controller = self.run_agent(provider, claim)
+
+        self.assertEqual(result["result"]["status"], "SUCCEEDED")
+        self.assertEqual(startup_profiles[0].model, "queued-model")
+        self.assertEqual(provider.requests[0]["execution_profile"]["model"], "queued-model")
+        self.assertEqual(provider.requests[0]["execution_profile"]["reasoning"], "low")
 
     def test_patch_can_create_a_missing_scoped_text_file(self) -> None:
         provider = ScriptedProvider(
@@ -536,6 +567,20 @@ class AgentRuntimeTests(unittest.TestCase):
             project_paths=["project"],
         )
         database.close()
+        dispatch_config = load_initialization_config()
+        dispatch_settings = replace(
+            ExecutionDispatchSettings.from_config(dispatch_config),
+            database_path=database_path,
+            supported_capability_levels=("L2",),
+            max_tasks_per_cycle=1,
+        )
+        ExecutionDispatcher(
+            dispatch_settings,
+            dispatch_config,
+            execution_id_factory=lambda _level: "round-trip-execution",
+            logger=EventLogger(None),
+            route_filter=("self_hosted_agent", "deepseek"),
+        ).run()
         provider = ScriptedProvider([success_result("round trip verified")])
         agent = SingleTaskAgent(
             provider,

@@ -81,14 +81,25 @@ SECRET_API_PATH = "/api/secrets"
 OPERATIONS_API_PATH = "/api/operations-config"
 OPERATIONS_ACTION_PATH = "/api/operations-config/action"
 SERVICE_ACTION_PATH = "/api/service-action"
+RUNTIME_LOGS_API_PATH = "/api/runtime-logs"
 OPERATIONS_ASSETS = {
     "/operations.html": ("operations.html", "text/html; charset=utf-8"),
     "/operations.js": ("operations.js", "application/javascript; charset=utf-8"),
     "/operations.css": ("operations.css", "text/css; charset=utf-8"),
+    "/runtime-logs.html": ("runtime-logs.html", "text/html; charset=utf-8"),
+    "/runtime-logs.js": ("runtime-logs.js", "application/javascript; charset=utf-8"),
+    "/runtime-logs.css": ("runtime-logs.css", "text/css; charset=utf-8"),
 }
 FRONTEND_ASSET_SUFFIXES = {".css", ".ico", ".jpeg", ".jpg", ".js", ".png", ".svg", ".webp", ".woff2"}
 CLIENT_ROOT = Path(__file__).resolve().parent
 MAX_ACTION_BODY_BYTES = 4096
+RUNTIME_LOG_MAX_BYTES = 256 * 1024
+RUNTIME_LOG_MAX_ENTRIES = 200
+RUNTIME_LOG_FILENAMES = {
+    "planner": "scheduler.log",
+    "dispatcher": "scheduler-execution-dispatch.log",
+    "runner": "runner.log",
+}
 
 
 class SecretApiError(Exception):
@@ -98,6 +109,89 @@ class SecretApiError(Exception):
         """保存对客户端公开的安全消息与响应状态。"""
         super().__init__(message)
         self.status = status
+
+
+def _read_log_tail(path: Path, *, max_bytes: int = RUNTIME_LOG_MAX_BYTES) -> list[str]:
+    """以受限字节数读取 UTF-8 日志尾部，避免日志增长拖慢 Dashboard。"""
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - max_bytes))
+        content = handle.read()
+    # 历史 Windows 控制台输出可能混入损坏字节；保留其余 UTF-8 记录供页面继续展示。
+    text = content.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if size > max_bytes and lines:
+        lines = lines[1:]
+    return lines
+
+
+def _runtime_log_entry(source: str, line: str) -> dict[str, object] | None:
+    """将已知 JSON 记录投影为页面字段，其余行保留为普通日志文本。"""
+    message = line.strip()
+    if not message:
+        return None
+    try:
+        payload = json.loads(message)
+    except json.JSONDecodeError:
+        if source == "planner":
+            return None
+        return {"message": message}
+    if not isinstance(payload, dict):
+        return {"message": message}
+    event = payload.get("event")
+    if source == "planner" and (
+        not isinstance(event, str) or not event.startswith("scheduler.preflight_schedule.")
+    ):
+        return None
+    entry: dict[str, object] = {"details": payload}
+    if isinstance(payload.get("at"), str):
+        entry["at"] = payload["at"]
+    elif isinstance(payload.get("checked_at"), str):
+        entry["at"] = payload["checked_at"]
+    if isinstance(event, str):
+        entry["event"] = event
+    elif source == "dispatcher":
+        entry["event"] = "dispatcher.execution_dispatch"
+    elif source == "runner":
+        entry["event"] = "runner.queue_snapshot"
+    return entry
+
+
+def runtime_logs_payload(runtime_log_paths: Mapping[str, Path]) -> dict[str, object]:
+    """读取 Planner、Dispatcher、Runner 的固定日志源，不接受客户端文件路径。"""
+    logs: dict[str, object] = {}
+    for source, filename in RUNTIME_LOG_FILENAMES.items():
+        path = runtime_log_paths[source]
+        try:
+            entries = [
+                entry
+                for line in _read_log_tail(path)
+                if (entry := _runtime_log_entry(source, line)) is not None
+            ][-RUNTIME_LOG_MAX_ENTRIES:]
+            logs[source] = {
+                "source": filename,
+                "available": True,
+                "updated_at": now_shanghai(),
+                "entries": entries,
+            }
+        except FileNotFoundError:
+            logs[source] = {
+                "source": filename,
+                "available": False,
+                "updated_at": now_shanghai(),
+                "entries": [],
+                "message": "日志文件尚未创建。",
+            }
+        except OSError:
+            logs[source] = {
+                "source": filename,
+                "available": False,
+                "updated_at": now_shanghai(),
+                "entries": [],
+                "message": "日志暂时无法读取。",
+            }
+    return {"ok": True, "generated_at": now_shanghai(), "logs": logs}
 
 
 from client.service.operations import (
@@ -143,6 +237,7 @@ class DashboardServer(ThreadingHTTPServer):
         runtime_config_path: Path = CONFIG_PATH,
         secret_store: SecretStore | None = None,
         health_state_path: Path = HEALTH_STATE,
+        runtime_log_dir: Path = BASE_DIR / "data" / "runtime",
         provider_verifiers: Mapping[str, Callable[[str], bool | None]] | None = None,
     ):
         """校验仅本机绑定和 Secret API 配置，然后建立共享服务上下文。"""
@@ -166,6 +261,10 @@ class DashboardServer(ThreadingHTTPServer):
         self.operations_paths = {
             route: CLIENT_ROOT / filename
             for route, (filename, _content_type) in OPERATIONS_ASSETS.items()
+        }
+        self.runtime_log_paths = {
+            source: runtime_log_dir.resolve() / filename
+            for source, filename in RUNTIME_LOG_FILENAMES.items()
         }
         self.runtime_config = runtime_config
         self.secret_store = secret_store or create_secret_store(runtime_config)
@@ -820,6 +919,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     HTTPStatus.SERVICE_UNAVAILABLE,
                     {"ok": False, "error": "运维配置服务不可用"},
                 )
+            return
+        if path == RUNTIME_LOGS_API_PATH:
+            if request.query:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "运行日志接口不接受查询参数"})
+                return
+            self.send_json(HTTPStatus.OK, runtime_logs_payload(self.server.runtime_log_paths))
             return
         if path in OPERATIONS_ASSETS:
             asset_path = self.server.operations_paths[path]

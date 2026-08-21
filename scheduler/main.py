@@ -188,9 +188,6 @@ def serve_scheduler(args: argparse.Namespace) -> None:
         )
     preflight_scheduled = preflight_config["scheduled"] is True
     execution_scheduled = execution_settings.scheduled is True
-    if not preflight_scheduled and not execution_scheduled:
-        raise SystemExit("Scheduler 所有调度链均已关闭")
-
     heartbeat_interval = float(scheduler_config["heartbeat_interval_seconds"])
     preflight_interval = float(preflight_config["interval_minutes"]) * 60
     execution_interval = float(execution_settings.interval_minutes) * 60

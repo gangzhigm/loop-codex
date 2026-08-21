@@ -196,6 +196,48 @@ class SchedulerAndPlannerTests(LoopTestCase):
         self.assertEqual(second["outcome"], "NO_TASK")
         self.assertEqual(count, 1)
 
+    def test_unschedule_execution_returns_unclaimed_task_to_pending(self) -> None:
+        config = load_initialization_config()
+        settings = replace(
+            ExecutionDispatchSettings.from_config(config),
+            database_path=self.db_path,
+        )
+        self.add_task("WORKER-WITHDRAW", "project-1", capability_level="L3")
+        ExecutionDispatcher(
+            settings,
+            config,
+            execution_id_factory=lambda _level: "worker-withdraw-queued",
+            logger=EventLogger(None),
+        ).run()
+
+        result = self.run_ctl(
+            "unschedule-execution",
+            "WORKER-WITHDRAW",
+            "--expected-row-version",
+            "2",
+            "--reason",
+            "测试撤回正式 AI 队列。",
+        )
+
+        database = connect(self.db_path)
+        task = database.execute(
+            "SELECT status, preflight_status, row_version FROM tasks "
+            "WHERE id='WORKER-WITHDRAW'"
+        ).fetchone()
+        execution = database.execute(
+            "SELECT status, outcome, finished_at, termination_reason FROM executions "
+            "WHERE execution_id='worker-withdraw-queued'"
+        ).fetchone()
+        validation = validate_database(database)
+        database.close()
+        self.assertEqual(result["outcome"], "EXECUTION_UNSCHEDULED")
+        self.assertEqual(tuple(task), ("PENDING", "READY", 3))
+        self.assertEqual(execution["status"], "FINISHED")
+        self.assertIsNone(execution["outcome"])
+        self.assertIsNotNone(execution["finished_at"])
+        self.assertEqual(execution["termination_reason"], "测试撤回正式 AI 队列。")
+        self.assertTrue(validation["ok"], validation["errors"])
+
     def test_runner_selects_both_queue_kinds_without_launching(self) -> None:
         config = load_initialization_config()
         self.enqueue_draft("RUNNER-PLANNER")
@@ -213,8 +255,16 @@ class SchedulerAndPlannerTests(LoopTestCase):
 
         snapshot = queue_snapshot(self.db_path, config)
 
-        self.assertFalse(snapshot["launch_enabled"])
+        self.assertTrue(snapshot["launch_enabled"])
         self.assertEqual(snapshot["planner"]["queued"], 1)
+        self.assertEqual(
+            snapshot["planner"]["available_slots"],
+            int(config["planner"]["max_active_executions"]) - 1,
+        )
+        self.assertEqual(
+            snapshot["planner"]["launch_slots"],
+            int(config["planner"]["max_active_executions"]),
+        )
         self.assertEqual(snapshot["worker"]["queued"], 1)
         self.assertEqual(
             snapshot["planner"]["candidates"][0]["execution_kind"], "PLANNER"
@@ -228,9 +278,10 @@ class SchedulerAndPlannerTests(LoopTestCase):
             self.enqueue_draft(task_id)
 
         result = self.run_ctl("schedule-preflight", "--config", str(CONFIG_PATH))
+        capacity = min(3, int(load_initialization_config()["planner"]["max_active_executions"]))
 
         self.assertEqual(result["outcome"], "QUEUED")
-        self.assertEqual(result["queued_count"], 2)
+        self.assertEqual(result["queued_count"], capacity)
         database = connect(self.db_path)
         states = database.execute(
             "SELECT id, preflight_status, preflight_execution_id FROM tasks ORDER BY id"
@@ -242,11 +293,11 @@ class SchedulerAndPlannerTests(LoopTestCase):
         database.close()
         self.assertEqual(
             [row["preflight_status"] for row in states],
-            ["QUEUED", "QUEUED", "UNINSPECTED"],
+            ["QUEUED"] * capacity + ["UNINSPECTED"] * (3 - capacity),
         )
-        self.assertEqual([row["status"] for row in executions], ["QUEUED", "QUEUED"])
+        self.assertEqual([row["status"] for row in executions], ["QUEUED"] * capacity)
         self.assertEqual(
-            {row["preflight_execution_id"] for row in states[:2]},
+            {row["preflight_execution_id"] for row in states[:capacity]},
             {row["execution_id"] for row in executions},
         )
         self.assertTrue(validation["ok"], validation["errors"])
@@ -264,6 +315,46 @@ class SchedulerAndPlannerTests(LoopTestCase):
         ).fetchone()[0]
         database.close()
         self.assertEqual(count, 1)
+
+    def test_unschedule_preflight_returns_unclaimed_task_to_draft(self) -> None:
+        self.enqueue_draft("PLANNER-WITHDRAW")
+        scheduled = self.run_ctl(
+            "schedule-preflight", "--config", str(CONFIG_PATH)
+        )
+        execution_id = next(
+            item["execution_id"]
+            for item in scheduled["queued"]
+            if item["task_id"] == "PLANNER-WITHDRAW"
+        )
+
+        result = self.run_ctl(
+            "unschedule-preflight",
+            "PLANNER-WITHDRAW",
+            "--expected-row-version",
+            "2",
+            "--reason",
+            "测试撤回 Planner 排队。",
+        )
+
+        database = connect(self.db_path)
+        task = database.execute(
+            "SELECT status, preflight_status, preflight_execution_id, row_version "
+            "FROM tasks WHERE id='PLANNER-WITHDRAW'"
+        ).fetchone()
+        execution = database.execute(
+            "SELECT status, outcome, finished_at, termination_reason "
+            "FROM preflight_executions WHERE execution_id=?",
+            (execution_id,),
+        ).fetchone()
+        validation = validate_database(database)
+        database.close()
+        self.assertEqual(result["outcome"], "PREFLIGHT_UNSCHEDULED")
+        self.assertEqual(tuple(task), ("DRAFT", "UNINSPECTED", None, 3))
+        self.assertEqual(execution["status"], "FINISHED")
+        self.assertIsNone(execution["outcome"])
+        self.assertIsNotNone(execution["finished_at"])
+        self.assertEqual(execution["termination_reason"], "测试撤回 Planner 排队。")
+        self.assertTrue(validation["ok"], validation["errors"])
 
     def test_scheduler_calls_loopctl_without_starting_runner(self) -> None:
         captured: dict[str, object] = {}
@@ -306,7 +397,7 @@ class SchedulerAndPlannerTests(LoopTestCase):
             "--task-id",
             "PLANNER-TARGET",
             "--runtime-environment",
-            "self_hosted_agent",
+            "codex_cli",
             "--sandbox",
             "read-only",
         )
@@ -346,7 +437,7 @@ class SchedulerAndPlannerTests(LoopTestCase):
             "--task-id",
             "DOES-NOT-EXIST",
             "--runtime-environment",
-            "self_hosted_agent",
+            "codex_cli",
             "--sandbox",
             "read-only",
         )
@@ -368,7 +459,7 @@ class SchedulerAndPlannerTests(LoopTestCase):
             "--task-id",
             "NOT-QUEUED",
             "--runtime-environment",
-            "self_hosted_agent",
+            "codex_cli",
             "--sandbox",
             "read-only",
         )

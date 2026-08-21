@@ -3,7 +3,8 @@
 四个命令共同组成一套带 fencing 的执行协议：
 
 ``claim``
-    在一个事务中选择兼容任务、创建 execution、取得全部已声明 scope 锁并转为 RUNNING；
+    在一个事务中接管 Dispatcher 已创建的兼容 QUEUED execution、取得全部已声明 scope 锁
+    并转为 RUNNING；
 ``heartbeat``
     同时续期 execution 租约和该 execution 持有的活动 scope 锁；
 ``extend-scope``
@@ -44,6 +45,7 @@ from loopdb import (
     expires_at,
     global_parallel_limit,
     json_dump,
+    load_initialization_config,
     normalize_execution_target,
     normalize_result_diagnostic,
     normalize_scope,
@@ -138,13 +140,6 @@ def command_claim(args: argparse.Namespace) -> None:
     database = connect(args.db)
     try:
         transaction(database)
-        if database.execute(
-            "SELECT 1 FROM executions WHERE execution_id=?", (args.execution_id,)
-        ).fetchone():
-            raise LoopError("execution-id 已存在")
-
-        # 统计容量前先转换停滞 execution。恢复流程会释放它占用的活动名额，但旧锁仍
-        # 保持隔离，直到恢复确认完成，不能因为“进程不在”就直接删除。
         transition_recovery_states(database, stalled_executions(database))
         recovery_required = recovery_required_records(database)
         compatible_recoveries = [
@@ -156,6 +151,196 @@ def command_claim(args: argparse.Namespace) -> None:
             and item["execution_policy"] == target["execution_policy"]
         ]
         requeued = requeue_resolved_conflicts(database)
+        queued_execution = database.execute(
+            "SELECT * FROM executions WHERE execution_id=?",
+            (args.execution_id,),
+        ).fetchone()
+
+        if queued_execution is not None:
+            if queued_execution["execution_kind"] != "WORKER":
+                raise LoopError("execution-kind 与 Worker 入口不匹配")
+            if queued_execution["status"] != "QUEUED":
+                raise LoopError("execution-id 已存在且不可领取")
+            route_fields = (
+                "runtime_environment",
+                "provider_id",
+                "capability_level",
+                "execution_policy",
+            )
+            if any(queued_execution[field] != target[field] for field in route_fields):
+                raise LoopError("Worker 启动档位与 QUEUED execution 快照不匹配")
+
+            active = int(
+                database.execute(
+                    "SELECT count(*) FROM executions WHERE status='RUNNING'"
+                ).fetchone()[0]
+            )
+            maximum = global_parallel_limit()
+            platform_active = int(
+                database.execute(
+                    "SELECT count(*) FROM executions WHERE status='RUNNING' "
+                    "AND runtime_environment=?",
+                    (target["runtime_environment"],),
+                ).fetchone()[0]
+            )
+            platform_maximum = platform_parallel_limit(target["runtime_environment"])
+            if active >= maximum or platform_active >= platform_maximum:
+                commit(database)
+                output(
+                    {
+                        "outcome": "SLOT_FULL",
+                        "limit_scope": "global" if active >= maximum else "platform",
+                        "execution_id": args.execution_id,
+                        "active": active,
+                        "maximum": maximum,
+                        "platform_active": platform_active,
+                        "platform_maximum": platform_maximum,
+                        "recovery_required": compatible_recoveries,
+                        "requeued": requeued,
+                    }
+                )
+                return
+            task_row = database.execute(
+                "SELECT * FROM tasks WHERE id=? AND status='QUEUED' "
+                "AND preflight_status='READY' AND runtime_environment=? "
+                "AND provider_id IS ? AND capability_level=? AND execution_policy=?",
+                (
+                    queued_execution["task_id"],
+                    target["runtime_environment"],
+                    target["provider_id"],
+                    target["capability_level"],
+                    target["execution_policy"],
+                ),
+            ).fetchone()
+            if task_row is None:
+                raise LoopError("QUEUED execution 与任务状态或路由不匹配")
+            if not dependencies_ready(database, task_row["id"]):
+                commit(database)
+                output(
+                    {
+                        "outcome": "NO_TASK",
+                        "execution_id": args.execution_id,
+                        "reason": "DEPENDENCY_NOT_READY",
+                        "recovery_required": compatible_recoveries,
+                        "requeued": requeued,
+                    }
+                )
+                return
+            scopes, conflicts = task_scopes_and_conflicts(database, task_row["id"])
+            if conflicts:
+                commit(database)
+                output(
+                    {
+                        "outcome": "CONFLICT",
+                        "execution_id": args.execution_id,
+                        "task_id": task_row["id"],
+                        "conflicts": conflicts,
+                        "recovery_required": compatible_recoveries,
+                        "requeued": requeued,
+                    }
+                )
+                return
+            stamp = now_shanghai()
+            expiry = expires_at(int(execution_setting("task_lease_seconds", 3600)))
+            changed_execution = database.execute(
+                "UPDATE executions SET status='RUNNING', heartbeat_at=?, lease_expires_at=? "
+                "WHERE execution_id=? AND status='QUEUED'",
+                (stamp, expiry, args.execution_id),
+            ).rowcount
+            if changed_execution != 1:
+                raise LoopError("领取 QUEUED execution 时发生并发变化")
+            for scope in scopes:
+                database.execute(
+                    "INSERT INTO scope_locks(scope_key, task_id, execution_id, acquired_at, lease_expires_at) "
+                    "VALUES(?, ?, ?, ?, ?)",
+                    (scope["scope_key"], task_row["id"], args.execution_id, stamp, expiry),
+                )
+            changed_task = database.execute(
+                "UPDATE tasks SET status='RUNNING', assigned_agent=?, started_at=?, updated_at=?, "
+                "heartbeat_at=?, completed_at=NULL, attempt=attempt+1, progress_summary=?, "
+                "progress_next_step=?, result_summary=NULL, result_error=NULL, "
+                "result_diagnostic_json=NULL, human_required=0, human_question=NULL, "
+                "human_options_json='[]', human_requested_at=NULL, human_responded_at=NULL, "
+                "human_response=NULL, row_version=row_version+1 "
+                "WHERE id=? AND status='QUEUED' AND row_version=?",
+                (
+                    args.execution_id,
+                    stamp,
+                    stamp,
+                    stamp,
+                    f"Runner Worker {args.execution_id} 已领取排队任务。",
+                    "在当前 Worker execution 中执行并验证。",
+                    task_row["id"],
+                    task_row["row_version"],
+                ),
+            ).rowcount
+            if changed_task != 1:
+                raise LoopError("领取 QUEUED 任务时发生并发变化")
+            database.execute(
+                "DELETE FROM task_verifications WHERE task_id=?", (task_row["id"],)
+            )
+            database.execute(
+                "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+                "VALUES(?, ?, 'QUEUED', 'RUNNING', ?, "
+                "'Runner Worker 原子领取已排队 execution 并获取 scope 锁。')",
+                (task_row["id"], stamp, args.execution_id),
+            )
+            revision = bump_revision(database, args.execution_id)
+            claimed = database.execute(
+                "SELECT * FROM tasks WHERE id=?", (task_row["id"],)
+            ).fetchone()
+            payload = task_dict(database, claimed)
+            lock_credential = scope_lock_credential(
+                database, args.execution_id, task_row["id"]
+            )
+            commit(database)
+            output(
+                {
+                    "outcome": "CLAIMED",
+                    "execution_id": args.execution_id,
+                    "execution_kind": "WORKER",
+                    "lease_expires_at": expiry,
+                    "active": active + 1,
+                    "maximum": maximum,
+                    "capability_level": target["capability_level"],
+                    "execution_policy": target["execution_policy"],
+                    "runtime_environment": target["runtime_environment"],
+                    "provider_id": target["provider_id"],
+                    "execution_profile": {
+                        "runtime_environment": queued_execution["runtime_environment"],
+                        "provider_id": queued_execution["provider_id"],
+                        "capability_level": queued_execution["capability_level"],
+                        "model": queued_execution["model"],
+                        "reasoning": queued_execution["reasoning"],
+                        "attempt_timeout_seconds": queued_execution["attempt_timeout_seconds"],
+                        "max_retries": queued_execution["max_retries"],
+                    },
+                    "platform_active": platform_active + 1,
+                    "platform_maximum": platform_maximum,
+                    "revision": revision,
+                    "scope_lock_credential": lock_credential,
+                    "recovery_required": compatible_recoveries,
+                    "requeued": requeued,
+                    "task": payload,
+                }
+            )
+            return
+
+        if not load_initialization_config()["runner"]["allow_legacy_direct_claim"]:
+            commit(database)
+            output(
+                {
+                    "outcome": "NO_TASK",
+                    "execution_id": args.execution_id,
+                    "reason": "EXECUTION_NOT_QUEUED",
+                    "recovery_required": compatible_recoveries,
+                    "requeued": requeued,
+                }
+            )
+            return
+
+        # 统计容量前先转换停滞 execution。恢复流程会释放它占用的活动名额，但旧锁仍
+        # 保持隔离，直到恢复确认完成，不能因为“进程不在”就直接删除。
         active = database.execute(
             "SELECT count(*) FROM executions WHERE status='RUNNING'"
         ).fetchone()[0]

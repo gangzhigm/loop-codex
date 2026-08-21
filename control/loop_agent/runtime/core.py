@@ -95,6 +95,32 @@ class ExecutionProfile:
             max_retries=int(value["max_retries"]),
         )
 
+    @classmethod
+    def from_snapshot(cls, value: Any) -> "ExecutionProfile":
+        """从控制面返回的不可变 execution 快照恢复执行档位。"""
+        if not isinstance(value, dict):
+            raise AgentRuntimeError("execution profile snapshot is missing")
+        try:
+            profile = cls(
+                runtime_environment=str(value["runtime_environment"]),
+                provider_id=value.get("provider_id"),
+                capability_level=str(value["capability_level"]),
+                model=str(value["model"]),
+                reasoning=str(value["reasoning"]),
+                attempt_timeout_seconds=float(value["attempt_timeout_seconds"]),
+                max_retries=int(value["max_retries"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise AgentRuntimeError("execution profile snapshot is invalid") from error
+        if (
+            not profile.model
+            or profile.reasoning not in {"low", "medium", "high", "xhigh"}
+            or profile.attempt_timeout_seconds <= 0
+            or profile.max_retries < 0
+        ):
+            raise AgentRuntimeError("execution profile snapshot is invalid")
+        return profile
+
     def request_payload(self) -> dict[str, Any]:
         """只返回允许 Provider 查看的一组路由字段。"""
         return {

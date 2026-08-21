@@ -3,7 +3,7 @@
 Local Agent Loop 是 `E:\code` 下的本地多项目任务控制中心。Operator 管理任务，
 Worker 在取得 scope 锁后执行，Dashboard 展示状态并提供受控操作。Scheduler 在一个常驻
 进程内独立安排 Planner 预检排队和 READY 任务正式执行排队；Runner 作为独立常驻 AI 管理器
-读取两类队列、计算容量并选择候选。当前实现停在启动 AI Worker 之前。
+读取两类队列、计算容量，并按 execution 类型、运行环境和能力等级启动 AI Worker。
 系统仅支持 Windows，进程管理、计划任务和系统密钥存储均直接使用 Windows 能力。
 
 > 本文只供人工快速了解和排障，不是 AI 角色的必读提示词，也不是第二份配置源。
@@ -29,8 +29,8 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 1. Operator 通过 `loopctl.py` 创建或更新任务；新任务进入 `DRAFT/UNINSPECTED`。
 2. Scheduler 周期选择 `DRAFT/UNINSPECTED` 并通过 `loopctl.py` 原子排入 Planner 预检队列。
 3. Scheduler 另一条周期链选择 `PENDING/READY` 自动任务，原子排入 `QUEUED/READY` 并创建 `WORKER/QUEUED` execution。
-4. Runner 读取 Planner 与 Worker 队列，计算容量并选择候选；当前不启动 AI Worker。
-5. AI Worker 启动、`QUEUED -> RUNNING` 领取及后续执行生命周期属于下一阶段，当前自动流程在队列边界停止。
+4. Runner 读取 `PLANNER/QUEUED`，启动只读 Codex Planner Worker并写回最终能力、范围、冲突判断或拆分建议。
+5. Runner 读取 `WORKER/QUEUED`，按 execution 固化档位启动 Self-hosted 或 Codex CLI Worker，Worker 原子转入 `RUNNING` 并完成任务。
 6. 人工复核成功任务后执行 `confirm`；终态任务可独立归档。
 
 任务状态只能通过 `control/loopctl.py` 或复用它的受控 Dashboard 操作修改，禁止直接写 SQLite。
@@ -65,6 +65,8 @@ README 只提供人工导航。若说明与配置、任务事实或控制代码�
 | Scheduler 内部 Planner 预检状态机 | `scheduler/planner_control.py` |
 | Runner 常驻 AI 队列管理 | `runner/agent_runtime.py` 的 `serve` 命令 |
 | 内部 Agent 单任务运行 | `worker/agent_runtime.py` |
+| Codex CLI 正式 Worker | `worker/codex_cli_runtime.py` |
+| Codex CLI Planner Worker | `worker/planner_codex_runtime.py` |
 | DeepSeek Provider 适配 | `control/loop_agent/providers/deepseek.py` |
 | Dashboard 独立 HTTP 服务 | `client/dashboard_server.py` |
 | Dashboard、Scheduler 与 Runner 进程监控 | `supervisor/main.py` |
@@ -111,7 +113,7 @@ Python 服务直接提供已提交的 `client/dist/`，生产启动不运行 npm
 | `operator/` | Operator 提示词、任务控制状态机和密钥管理入口 |
 | `scheduler/` | 常驻调度服务、Planner 预检协议/状态机与正式执行排队 |
 | `worker/` | Worker 提示词与任务执行状态机 |
-| `runner/` | 常驻 AI 队列管理器；当前不启动 AI Worker |
+| `runner/` | 常驻 AI 队列、容量、路由和 Worker 子进程管理器 |
 | `config/initialization.json` | 唯一部署配置源 |
 | `schemas/loop-agent.sql` | 当前数据库 Schema |
 | `control/loopctl.py` | 任务控制 CLI |
@@ -135,5 +137,4 @@ Python 服务直接提供已提交的 `client/dist/`，生产启动不运行 npm
 3. 根据失败角色读取对应角色目录中的提示词和 `control/README.md` 的职责导航。
 4. 使用 `loopctl.py state` 或 Dashboard 查看任务、execution、依赖和 scope 阻塞事实。
 
-敏感值不进入 README、任务数据库、配置文件或日志。SecretStore 的人工入口是
-`operator/secretctl.py`，具体安全约束以 `AGENTS.md`、角色提示词和实现为准。
+敏感值不进入 README、任务数据库、配置文件或日志。SecretStore 的人工入口是 `operator/secretctl.py`，具体安全约束以 `AGENTS.md`、角色提示词和实现为准。

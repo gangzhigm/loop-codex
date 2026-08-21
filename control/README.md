@@ -18,8 +18,10 @@ Supervisor、Operator、Scheduler、Worker、Runner 都位于仓库根目录对�
 | `../scheduler/main.py` | Scheduler 单实例、heartbeat 和两条独立调度周期 | 任务领取与 AI 执行 |
 | `../scheduler/execution_dispatch.py` | 选择一个 READY 自动任务并通过受控事务排入正式 AI 队列 | Runner 候选选择、AI Worker 启动与业务实现 |
 | `../worker/control.py` | Worker 的领取、心跳、扩锁和结束状态机 | 周期调度 |
-| `../runner/agent_runtime.py` | 常驻读取两类 AI 队列、计算容量、选择候选并发布 heartbeat/快照 | 当前不启动 AI Worker，不执行模型、工具或 finish |
+| `../runner/agent_runtime.py` | 常驻读取两类 AI 队列、计算容量、路由并维护 Worker 子进程和 heartbeat/快照 | 不直接领取任务、调用模型或写任务状态 |
 | `../worker/agent_runtime.py` | 内部 Agent 的 claim、heartbeat、Provider 工具循环和 finish | 周期调度 |
+| `../worker/codex_cli_runtime.py` | Codex CLI 正式 Worker 的 claim、heartbeat、进程监管和 finish | 周期调度与任务选择 |
+| `../worker/planner_codex_runtime.py` | Codex CLI Planner Worker 的预检领取、只读执行和受控写回 | 正式任务修改 |
 | `../supervisor/main.py` | 按 PID 与 heartbeat 监控并恢复独立 Dashboard、Scheduler 与 Runner | 任务查询、领取与任务表写入 |
 | `../client/dashboard_server.py` | 独立本机 HTTP 进程、Secret API、静态资源服务、PID 与 heartbeat | 任务状态直接写入 |
 | `../supervisor/health_run.py` | Supervisor 探活与恢复 | AI 自动化与任务领取 |
@@ -110,7 +112,7 @@ Scheduler 与 Planner 状态说明：
 1. Scheduler 预检链按配置选择 `DRAFT/UNINSPECTED`，通过 loopctl 原子转换为 `DRAFT/QUEUED`。
 2. Scheduler 正式排队链选择 `PENDING/READY` 自动任务，通过 loopctl 原子转换为 `QUEUED/READY` 并创建 `WORKER/QUEUED` execution。
 3. Runner 独立读取 Planner 与 Worker 队列，计算预检、全局和平台容量并选择候选。
-4. 当前 Runner 明确不启动 AI Worker；预检领取、`QUEUED -> RUNNING`、模型调用和后续生命周期尚未接入。
+4. Runner 按 `execution_kind + runtime_environment + capability_level` 启动 Worker；Worker 原子领取 Dispatcher 创建的同一 execution。
 
 Worker 无法领取任务：
 
