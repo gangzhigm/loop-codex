@@ -94,7 +94,7 @@
 ## 状态规则
 
 - `DRAFT`：Operator 已创建任务但尚未形成执行契约；可依次处于 `UNINSPECTED`、`QUEUED` 或 `INSPECTING`。
-- `NEEDS_REVIEW`：Planner 发现信息不足、静态检查失败或需要人工确认拆分；Operator 取得决定后送回 DRAFT/UNINSPECTED。
+- `NEEDS_REVIEW`：Planner 发现信息不足、附件归属不明确，或依赖/范围无法形成安全执行契约；Operator 取得决定后送回 DRAFT/UNINSPECTED。普通拆分不进入该状态。
 - `PENDING`：`preflight_status=READY`，最终等级、精确 scope、锁模式、技术验收和证据完整，等待 Worker 领取。
 - `RUNNING`：Worker 正在执行，Operator 不修改任务定义。
 - `QUEUED`：Dispatcher 已创建 `WORKER/QUEUED` execution，Runner 可选择该任务，但 AI Worker 尚未启动；Operator 不修改任务定义。

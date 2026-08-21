@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import replace
 
 from _loop_support import *  # noqa: F403
-from loopdb import CONFIG_PATH, list_tasks
+from loopdb import CONFIG_PATH, list_tasks, set_task_dependencies
 from scheduler.main import (
     REPOSITORY_ROOT,
     run_scheduler,
@@ -423,6 +423,114 @@ class SchedulerAndPlannerTests(LoopTestCase):
         self.assertEqual((ready["status"], ready["preflight_status"]), ("PENDING", "READY"))
         worker = self.claim("worker-after-planner", "L3")
         self.assertEqual(worker["task"]["id"], "PLANNER-TARGET")
+
+    def test_planner_can_publish_l5_without_level_confirmation(self) -> None:
+        self.enqueue_draft("PLANNER-L5", capability="L5")
+        scheduled = self.run_ctl("schedule-preflight", "--config", str(CONFIG_PATH))
+        execution_id = scheduled["queued"][0]["execution_id"]
+        claimed = self.planner_claim(execution_id)
+
+        ready = self.run_ctl(
+            "preflight-ready",
+            execution_id,
+            "PLANNER-L5",
+            "--expected-row-version",
+            str(claimed["task"]["row_version"]),
+            input_text=self.ready_report(capability="L5"),
+        )
+
+        self.assertEqual((ready["status"], ready["preflight_status"]), ("PENDING", "READY"))
+
+    def test_preflight_split_atomically_creates_drafts_and_rewires_downstream(self) -> None:
+        self.enqueue_draft("SPLIT-PARENT")
+        self.add_task("SPLIT-DOWNSTREAM", "project-2")
+        database = connect(self.db_path)
+        set_task_dependencies(database, "SPLIT-DOWNSTREAM", ["SPLIT-PARENT"])
+        database.close()
+        scheduled = self.run_ctl("schedule-preflight", "--config", str(CONFIG_PATH))
+        execution_id = next(
+            item["execution_id"]
+            for item in scheduled["queued"]
+            if item["task_id"] == "SPLIT-PARENT"
+        )
+        claimed = self.planner_claim(execution_id)
+        report = json.dumps(
+            {
+                "summary": "父任务已拆为两个可独立验收的草稿。",
+                "evidence": ["只读检查确认两个范围互不重叠。"],
+                "split_suggestions": [
+                    {
+                        "reason": "两个模块可以独立完成。",
+                        "tasks": [
+                            {
+                                "id": "SPLIT-CHILD-A",
+                                "title": "子任务 A",
+                                "description": "修改模块 A。",
+                                "acceptance": ["模块 A 回归通过"],
+                                "scope": ["project-1/module-a"],
+                                "capability_level": "L2",
+                                "depends_on": [],
+                                "parallel_with": ["SPLIT-CHILD-B"],
+                            },
+                            {
+                                "id": "SPLIT-CHILD-B",
+                                "title": "子任务 B",
+                                "description": "修改模块 B。",
+                                "acceptance": ["模块 B 回归通过"],
+                                "scope": ["project-1/module-b"],
+                                "capability_level": "L3",
+                                "depends_on": [],
+                                "parallel_with": ["SPLIT-CHILD-A"],
+                            },
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+        split = self.run_ctl(
+            "preflight-split",
+            execution_id,
+            "SPLIT-PARENT",
+            "--expected-row-version",
+            str(claimed["task"]["row_version"]),
+            input_text=report,
+        )
+
+        database = connect(self.db_path)
+        parent = database.execute(
+            "SELECT status, preflight_status, human_required FROM tasks WHERE id='SPLIT-PARENT'"
+        ).fetchone()
+        children = database.execute(
+            "SELECT id, status, preflight_status, priority, estimated_capability_level "
+            "FROM tasks WHERE id LIKE 'SPLIT-CHILD-%' ORDER BY id"
+        ).fetchall()
+        downstream = [
+            row[0]
+            for row in database.execute(
+                "SELECT dependency_id FROM task_dependencies "
+                "WHERE task_id='SPLIT-DOWNSTREAM' ORDER BY dependency_id"
+            ).fetchall()
+        ]
+        execution_outcome = database.execute(
+            "SELECT outcome FROM preflight_executions WHERE execution_id=?",
+            (execution_id,),
+        ).fetchone()[0]
+        validation = validate_database(database)
+        database.close()
+        self.assertEqual(split["child_task_ids"], ["SPLIT-CHILD-A", "SPLIT-CHILD-B"])
+        self.assertEqual(tuple(parent), ("CANCELLED", "FAILED", 0))
+        self.assertEqual(
+            [tuple(row) for row in children],
+            [
+                ("SPLIT-CHILD-A", "DRAFT", "UNINSPECTED", "critical", "L2"),
+                ("SPLIT-CHILD-B", "DRAFT", "UNINSPECTED", "critical", "L3"),
+            ],
+        )
+        self.assertEqual(downstream, ["SPLIT-CHILD-A", "SPLIT-CHILD-B"])
+        self.assertEqual(execution_outcome, "SPLIT")
+        self.assertTrue(validation["ok"], validation["errors"])
 
     def test_targeted_preflight_claim_does_not_substitute_another_task(self) -> None:
         self.enqueue_draft("PLANNER-AVAILABLE")

@@ -29,7 +29,7 @@
 
 - 人工任务管理 Operator：`operator/operator.md`。只管理任务，不实现任务业务内容或管理外部客户端自动化。
 - Scheduler 调度服务：`scheduler/main.py` 与内部 Planner 预检协议 `scheduler/planner.md`。维护 PID、heartbeat 和正常停止；分别周期安排 Planner 预检排队与 READY 自动任务执行分发，不领取任务或调用模型。
-- Planner Worker：`worker/planner_codex_runtime.py` 使用固定 Planner 能力档位领取一个 `PLANNER/QUEUED` execution，只读判断最终能力、范围、冲突和拆分建议，并通过预检控制协议写回。
+- Planner Worker：`worker/planner_codex_runtime.py` 使用固定 Planner 能力档位领取一个 `PLANNER/QUEUED` execution，只读判断最终能力、范围、冲突和是否拆分，并通过预检控制协议写回；安全拆分由宿主原子创建草稿子任务并取消父任务。
 - 通用单任务 Worker 协议：`worker/worker.md`；Codex CLI 使用宿主管理版 `worker/codex-worker.md`。每次只处理一个与入口身份匹配的 `WORKER/QUEUED` execution。
 - AI Runner：`runner/agent_runtime.py` 只维护自身 PID、heartbeat、容量、路由和 Worker 子进程；`worker/agent_runtime.py` 与 `worker/codex_cli_runtime.py` 分别负责内部 Provider 和 Codex CLI 的单任务领取、heartbeat、执行与 finish。
 - 健康检查：Windows 任务计划程序运行 `supervisor/run.ps1`，检查并在必要时恢复 `supervisor/main.py serve`；不领取任务。

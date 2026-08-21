@@ -45,7 +45,7 @@ assert(manifest.dependencies?.["lucide-react"], "前端未声明 lucide-react �
 assert(manifest.devDependencies?.typescript && manifest.devDependencies?.vite, "前端未声明 TypeScript/Vite 构建依赖");
 assert(manifest.scripts?.build === "tsc --noEmit && vite build", "前端构建命令未执行类型检查和 Vite 构建");
 
-assert(source.types.includes('export const TASK_SCHEMA_VERSION = "3.9.0"'), "Schema 契约不正确");
+assert(source.types.includes('export const TASK_SCHEMA_VERSION = "3.10.0"'), "Schema 契约不正确");
 assert(source.api.includes("validateDashboardState"), "缺少状态响应运行时校验");
 assert(source.api.includes('const STATE_ENDPOINT = "/api/state"'), "缺少状态 API");
 assert(source.api.includes('const SERVICE_ACTION_ENDPOINT = "/api/service-action"'), "缺少服务控制 API");

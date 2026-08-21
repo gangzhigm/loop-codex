@@ -279,7 +279,7 @@ class LoopTestCase(unittest.TestCase):
     @staticmethod
     def schema_36() -> str:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
-        schema = schema.replace("PRAGMA user_version = 30900;", "PRAGMA user_version = 30600;")
+        schema = schema.replace("PRAGMA user_version = 31000;", "PRAGMA user_version = 30600;")
         schema = schema.replace("    'DRAFT', 'NEEDS_REVIEW', 'PENDING'", "    'DRAFT', 'PENDING'")
         schema = schema.replace(
             "  estimated_capability_level TEXT CHECK (estimated_capability_level IS NULL OR estimated_capability_level IN (\n"

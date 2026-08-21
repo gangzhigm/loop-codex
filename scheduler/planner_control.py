@@ -24,6 +24,7 @@ from loopdb import (
     bump_revision,
     commit,
     connect,
+    insert_task,
     json_dump,
     load_initialization_config,
     normalize_scope,
@@ -33,15 +34,10 @@ from loopdb import (
     replace_ordered_text,
     resolve_execution_profile,
     rollback,
+    set_task_dependencies,
     task_dict,
     transaction,
 )
-
-
-PLANNER_ESCALATION_MARKERS = {
-    "L5": "APPROVED_PLANNER_ESCALATION: L5",
-    "manual": "APPROVED_PLANNER_ESCALATION: manual",
-}
 
 
 def command_schedule_preflight(args: argparse.Namespace) -> None:
@@ -283,26 +279,6 @@ def planner_task_payload(
         "row_version": value["row_version"],
         "operator_definition": value["operator_definition"],
     }
-
-
-def planner_escalation_is_approved(
-    database: sqlite3.Connection, task: sqlite3.Row, escalation: str
-) -> bool:
-    """检查 Operator 是否逐行写入了精确的 L5/manual 批准标记。"""
-    marker = PLANNER_ESCALATION_MARKERS[escalation].casefold()
-    values = [task["description"] or ""]
-    values.extend(
-        row[0]
-        for row in database.execute(
-            "SELECT text FROM task_acceptance WHERE task_id=? ORDER BY ordinal",
-            (task["id"],),
-        ).fetchall()
-    )
-    return any(
-        marker == line.strip().casefold()
-        for value in values
-        for line in value.splitlines()
-    )
 
 
 def command_preflight_claim(args: argparse.Namespace) -> None:
@@ -587,18 +563,6 @@ def command_preflight_ready(args: argparse.Namespace) -> None:
                 }
             )
             return
-        if capability == "L5" and not planner_escalation_is_approved(
-            database, task, "L5"
-        ):
-            raise LoopError(
-                "Planner 首次 L5 建议必须进入 NEEDS_REVIEW；缺少 Operator 明确批准"
-            )
-        if task["execution_policy"] == "manual" and not planner_escalation_is_approved(
-            database, task, "manual"
-        ):
-            raise LoopError(
-                "Planner 首次 manual 建议必须进入 NEEDS_REVIEW；缺少 Operator 明确批准"
-            )
         resolve_execution_profile(
             task["runtime_environment"], task["provider_id"], capability
         )
@@ -655,6 +619,172 @@ def command_preflight_ready(args: argparse.Namespace) -> None:
                 "task_id": args.task_id,
                 "status": "PENDING",
                 "preflight_status": "READY",
+                "revision": revision,
+            }
+        )
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.close()
+
+
+def command_preflight_split(args: argparse.Namespace) -> None:
+    """原子创建 Planner 拆分出的草稿，改写依赖并逻辑取消父任务。"""
+    report = _read_report(args, {"summary", "split_suggestions", "evidence"})
+    summary = report.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise LoopError("SPLIT 预检 summary 不能为空")
+    evidence = normalize_string_list(
+        report.get("evidence"), "evidence", allow_empty=False
+    )
+    suggestions = normalize_split_suggestions(report.get("split_suggestions"))
+    if len(suggestions) != 1 or len(suggestions[0]["tasks"]) < 2:
+        raise LoopError("SPLIT 必须提供唯一方案且至少包含两个子任务")
+
+    database = connect(args.db)
+    try:
+        transaction(database)
+        task, _ = preflight_finish_context(database, args, "SPLIT")
+        if task is None:
+            commit(database)
+            output(
+                {
+                    "outcome": "ALREADY_FINISHED",
+                    "execution_kind": "PLANNER",
+                    "task_id": args.task_id,
+                    "preflight_status": "FAILED",
+                }
+            )
+            return
+        if database.execute(
+            "SELECT 1 FROM task_attachments WHERE task_id=? LIMIT 1",
+            (args.task_id,),
+        ).fetchone():
+            raise LoopError("带附件任务无法自动确定附件归属，必须返回 NEEDS_REVIEW")
+
+        plan = suggestions[0]
+        proposed_tasks = plan["tasks"]
+        child_ids = [item["id"] for item in proposed_tasks]
+        child_set = set(child_ids)
+        if args.task_id in child_set:
+            raise LoopError("拆分子任务不能复用父任务 id")
+        existing = database.execute(
+            f"SELECT id FROM tasks WHERE id IN ({','.join('?' for _ in child_ids)})",
+            child_ids,
+        ).fetchall()
+        if existing:
+            raise LoopError(
+                "拆分子任务 id 已存在: " + ", ".join(str(row[0]) for row in existing)
+            )
+
+        for proposed in proposed_tasks:
+            parallel = set(proposed["parallel_with"])
+            if proposed["id"] in parallel or not parallel.issubset(child_set):
+                raise LoopError("parallel_with 只能引用其他拆分子任务")
+            if args.task_id in proposed["depends_on"]:
+                raise LoopError("拆分子任务不能依赖被替代的父任务")
+
+        parent_dependencies = [
+            str(row[0])
+            for row in database.execute(
+                "SELECT dependency_id FROM task_dependencies WHERE task_id=? ORDER BY dependency_id",
+                (args.task_id,),
+            ).fetchall()
+        ]
+        downstream_ids = [
+            str(row[0])
+            for row in database.execute(
+                "SELECT task_id FROM task_dependencies WHERE dependency_id=? ORDER BY task_id",
+                (args.task_id,),
+            ).fetchall()
+        ]
+        stamp = now_shanghai()
+        acceptance_by_child = {item["id"]: item["acceptance"] for item in proposed_tasks}
+        for proposed in proposed_tasks:
+            insert_task(
+                database,
+                {
+                    "id": proposed["id"],
+                    "title": proposed["title"],
+                    "description": proposed["description"],
+                    "status": "DRAFT",
+                    "priority": task["priority"],
+                    "estimated_capability_level": proposed["capability_level"],
+                    "runtime_environment": task["runtime_environment"],
+                    "provider_id": task["provider_id"],
+                    "execution_policy": task["execution_policy"],
+                    "scope_hint": proposed["scope"],
+                    "acceptance": acceptance_by_child[proposed["id"]],
+                    "created_at": stamp,
+                    "progress": {
+                        "percent": 0,
+                        "summary": f"由 Planner 从 {args.task_id} 自动拆分。",
+                        "next_step": "等待 Planner 为子任务形成执行契约。",
+                    },
+                },
+                actor=args.execution_id,
+            )
+
+        for proposed in proposed_tasks:
+            dependencies = list(
+                dict.fromkeys([*parent_dependencies, *proposed["depends_on"]])
+            )
+            set_task_dependencies(database, proposed["id"], dependencies)
+
+        for downstream_id in downstream_ids:
+            dependencies = [
+                str(row[0])
+                for row in database.execute(
+                    "SELECT dependency_id FROM task_dependencies WHERE task_id=? ORDER BY dependency_id",
+                    (downstream_id,),
+                ).fetchall()
+                if str(row[0]) != args.task_id
+            ]
+            set_task_dependencies(
+                database,
+                downstream_id,
+                list(dict.fromkeys([*dependencies, *child_ids])),
+            )
+
+        replace_ordered_text(
+            database, "task_preflight_evidence", args.task_id, evidence
+        )
+        database.execute(
+            "UPDATE tasks SET status='CANCELLED', preflight_status='FAILED', "
+            "preflight_execution_id=NULL, preflight_completed_at=?, preflight_failure=NULL, "
+            "capability_level=NULL, lock_mode=NULL, split_suggestions_json=?, updated_at=?, "
+            "progress_percent=0, progress_summary=?, progress_next_step=NULL, "
+            "human_required=0, human_question=NULL, human_options_json='[]', "
+            "human_requested_at=NULL, human_responded_at=NULL, human_response=NULL, "
+            "row_version=row_version+1 WHERE id=?",
+            (
+                stamp,
+                json_dump(suggestions),
+                stamp,
+                summary.strip(),
+                args.task_id,
+            ),
+        )
+        database.execute(
+            "UPDATE preflight_executions SET status='FINISHED', finished_at=?, "
+            "outcome='SPLIT', termination_reason=? WHERE execution_id=? AND status='INSPECTING'",
+            (stamp, plan["reason"], args.execution_id),
+        )
+        database.execute(
+            "INSERT INTO task_history(task_id, at, from_status, to_status, actor, reason) "
+            "VALUES(?, ?, 'DRAFT', 'CANCELLED', ?, ?)",
+            (args.task_id, stamp, args.execution_id, summary.strip()),
+        )
+        revision = bump_revision(database, args.execution_id)
+        commit(database)
+        output(
+            {
+                "outcome": "SPLIT",
+                "execution_kind": "PLANNER",
+                "task_id": args.task_id,
+                "status": "CANCELLED",
+                "child_task_ids": child_ids,
                 "revision": revision,
             }
         )

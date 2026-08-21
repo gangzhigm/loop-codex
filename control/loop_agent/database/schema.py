@@ -23,6 +23,7 @@ from loop_agent.configuration import (
 )
 from loop_agent.constants import (
     ARCHIVE_SCHEMA_USER_VERSION,
+    AUTOMATIC_SPLIT_SCHEMA_USER_VERSION,
     DIAGNOSTIC_SCHEMA_USER_VERSION,
     LEGACY_SCHEMA_USER_VERSION,
     LOCK_MODES,
@@ -96,6 +97,65 @@ def _create_preflight_schema_objects(database: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX idx_preflight_one_active_task "
         "ON preflight_executions(task_id) WHERE status IN ('QUEUED', 'INSPECTING')"
     )
+
+
+def _migrate_automatic_split_schema(database: sqlite3.Connection) -> dict[str, Any]:
+    """允许 Planner 原子记录 SPLIT 结果，并完整保留既有预检审计。"""
+    preflight_count = int(
+        database.execute("SELECT count(*) FROM preflight_executions").fetchone()[0]
+    )
+    active = int(
+        database.execute(
+            "SELECT count(*) FROM preflight_executions WHERE status IN ('QUEUED','INSPECTING')"
+        ).fetchone()[0]
+    )
+    if active:
+        raise LoopError(f"自动拆分 Schema 迁移要求没有活动 Planner execution，当前为 {active}")
+    database.execute("PRAGMA foreign_keys = OFF")
+    try:
+        transaction(database)
+        database.execute(
+            PREFLIGHT_EXECUTIONS_TABLE_SQL.replace(
+                "CREATE TABLE preflight_executions (",
+                "CREATE TABLE preflight_executions_new (",
+                1,
+            )
+        )
+        database.execute(
+            "INSERT INTO preflight_executions_new SELECT * FROM preflight_executions"
+        )
+        database.execute("DROP TABLE preflight_executions")
+        database.execute(
+            "ALTER TABLE preflight_executions_new RENAME TO preflight_executions"
+        )
+        database.execute(
+            "CREATE INDEX idx_preflight_executions_active "
+            "ON preflight_executions(status, lease_expires_at, attempt_deadline_at)"
+        )
+        database.execute(
+            "CREATE UNIQUE INDEX idx_preflight_one_active_task "
+            "ON preflight_executions(task_id) WHERE status IN ('QUEUED', 'INSPECTING')"
+        )
+        database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
+        foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise LoopError(
+                f"自动拆分 Schema 迁移产生外键错误: {len(foreign_key_errors)}"
+            )
+        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise LoopError("自动拆分 Schema 迁移后 quick_check 失败")
+        commit(database)
+    except Exception:
+        rollback(database)
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys = ON")
+    return {
+        "from": "3.9.0",
+        "to": SCHEMA_VERSION,
+        "migrated": True,
+        "preflight_executions_preserved": preflight_count,
+    }
 
 
 def _migrate_scheduling_schema(database: sqlite3.Connection) -> dict[str, Any]:
@@ -191,6 +251,20 @@ def _migrate_worker_queue_schema(database: sqlite3.Connection) -> dict[str, Any]
         database.execute("ALTER TABLE tasks_new RENAME TO tasks")
         database.execute("ALTER TABLE executions_new RENAME TO executions")
         database.execute(
+            PREFLIGHT_EXECUTIONS_TABLE_SQL.replace(
+                "CREATE TABLE preflight_executions (",
+                "CREATE TABLE preflight_executions_new (",
+                1,
+            )
+        )
+        database.execute(
+            "INSERT INTO preflight_executions_new SELECT * FROM preflight_executions"
+        )
+        database.execute("DROP TABLE preflight_executions")
+        database.execute(
+            "ALTER TABLE preflight_executions_new RENAME TO preflight_executions"
+        )
+        database.execute(
             "CREATE INDEX idx_tasks_queue ON tasks(status, preflight_status, runtime_environment, provider_id, "
             "capability_level, execution_policy, priority, created_at, id)"
         )
@@ -201,6 +275,14 @@ def _migrate_worker_queue_schema(database: sqlite3.Connection) -> dict[str, Any]
             "CREATE INDEX idx_tasks_archived ON tasks(archived_at, status, updated_at)"
         )
         _create_current_execution_indexes(database)
+        database.execute(
+            "CREATE INDEX idx_preflight_executions_active "
+            "ON preflight_executions(status, lease_expires_at, attempt_deadline_at)"
+        )
+        database.execute(
+            "CREATE UNIQUE INDEX idx_preflight_one_active_task "
+            "ON preflight_executions(task_id) WHERE status IN ('QUEUED', 'INSPECTING')"
+        )
         database.execute(f"PRAGMA user_version = {SCHEMA_USER_VERSION}")
         foreign_key_errors = database.execute("PRAGMA foreign_key_check").fetchall()
         if foreign_key_errors:
@@ -521,6 +603,8 @@ def migrate_schema(database: sqlite3.Connection) -> dict[str, Any]:
             "from": SCHEMA_VERSION, "to": SCHEMA_VERSION, "migrated": False,
             "archived": 0, "tasks_mapped": 0, "executions_snapshotted": 0,
         }
+    if current == AUTOMATIC_SPLIT_SCHEMA_USER_VERSION:
+        return _migrate_automatic_split_schema(database)
     if current == WORKER_QUEUE_SCHEMA_USER_VERSION:
         return _migrate_worker_queue_schema(database)
     if current == SCHEDULING_SCHEMA_USER_VERSION:

@@ -245,7 +245,7 @@ def normalize_string_list(
 
 
 def normalize_split_suggestions(raw: Any) -> list[dict[str, Any]]:
-    """校验 Planner 拆分建议，但不创建任何子任务。"""
+    """校验 Planner 拆分方案；控制面决定保存建议还是原子创建子任务。"""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -273,6 +273,7 @@ def normalize_split_suggestions(raw: Any) -> list[dict[str, Any]]:
                 "id",
                 "title",
                 "description",
+                "acceptance",
                 "scope",
                 "capability_level",
                 "depends_on",
@@ -302,6 +303,11 @@ def normalize_split_suggestions(raw: Any) -> list[dict[str, Any]]:
                     "id": task_id,
                     "title": title.strip(),
                     "description": description.strip(),
+                    "acceptance": normalize_string_list(
+                        proposed.get("acceptance"),
+                        "拆分子任务 acceptance",
+                        allow_empty=False,
+                    ),
                     "scope": normalize_string_list(
                         proposed.get("scope"),
                         "拆分子任务 scope",

@@ -1,4 +1,4 @@
-export const TASK_SCHEMA_VERSION = "3.9.0";
+export const TASK_SCHEMA_VERSION = "3.10.0";
 
 export type TaskStatus =
   | "DRAFT"
@@ -69,6 +69,7 @@ export interface SplitSuggestion {
     id: string;
     title: string;
     description: string;
+    acceptance: string[];
     scope: string[];
     capability_level: CapabilityLevel;
     depends_on: string[];

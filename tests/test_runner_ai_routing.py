@@ -177,7 +177,13 @@ class RunnerAiRoutingTests(LoopTestCase):
         self.assertEqual(formal[formal.index("--sandbox") + 1], "workspace-write")
         self.assertEqual(planner[planner.index("--sandbox") + 1], "read-only")
         self.assertIn("--ignore-rules", planner)
-        self.assertNotIn("--ignore-rules", formal)
+        self.assertIn("--ignore-rules", formal)
+        self.assertNotIn("--ignore-user-config", planner)
+        self.assertNotIn("--ignore-user-config", formal)
+        self.assertIn("mcp_servers={}", planner)
+        self.assertIn("mcp_servers={}", formal)
+        self.assertIn("plugins", planner)
+        self.assertIn("plugins", formal)
 
     def test_dispatcher_stops_at_public_queue_maximum(self) -> None:
         config = json.loads(json.dumps(load_initialization_config()))

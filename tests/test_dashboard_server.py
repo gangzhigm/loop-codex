@@ -148,7 +148,7 @@ class AttachmentImageTests(unittest.TestCase):
             for task in payload["tasks"]
         }
 
-        self.assertEqual(payload["schema_version"], "3.9.0")
+        self.assertEqual(payload["schema_version"], "3.10.0")
         self.assertEqual(
             payload["settings"]["platform_max_active_executions"],
             {"self_hosted_agent": 8, "codex_cli": 4},
@@ -220,7 +220,7 @@ class AttachmentImageTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn('export const TASK_SCHEMA_VERSION = "3.9.0";', source)
+        self.assertIn('export const TASK_SCHEMA_VERSION = "3.10.0";', source)
         self.assertNotIn('TASK_SCHEMA_VERSION = "3.7.0";', source)
 
     def test_unregistered_path_is_rejected(self) -> None:

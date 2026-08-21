@@ -187,6 +187,7 @@ class PlannerController:
         """把 Planner 结果映射到唯一允许的控制面命令。"""
         command = {
             "READY": "preflight-ready",
+            "SPLIT": "preflight-split",
             "NEEDS_REVIEW": "preflight-needs-review",
             "FAILED": "preflight-fail",
         }.get(outcome)
@@ -226,6 +227,7 @@ def planner_result_schema() -> dict[str, Any]:
             "id": {"type": "string"},
             "title": {"type": "string"},
             "description": {"type": "string"},
+            "acceptance": string_array,
             "scope": string_array,
             "capability_level": {"type": "string", "enum": list(CAPABILITY_LEVELS)},
             "depends_on": string_array,
@@ -235,6 +237,7 @@ def planner_result_schema() -> dict[str, Any]:
             "id",
             "title",
             "description",
+            "acceptance",
             "scope",
             "capability_level",
             "depends_on",
@@ -257,7 +260,7 @@ def planner_result_schema() -> dict[str, Any]:
         "properties": {
             "outcome": {
                 "type": "string",
-                "enum": ["READY", "NEEDS_REVIEW", "FAILED"],
+                "enum": ["READY", "SPLIT", "NEEDS_REVIEW", "FAILED"],
             },
             "summary": {"type": "string"},
             "capability_level": {"type": ["string", "null"]},
@@ -316,6 +319,15 @@ def validate_planner_result(value: Any) -> tuple[str, dict[str, Any]]:
             "scope": value["scope"],
             "lock_mode": value["lock_mode"],
             "technical_acceptance": value["technical_acceptance"],
+            "evidence": evidence,
+        }
+    if outcome == "SPLIT":
+        suggestions = value.get("split_suggestions")
+        if not isinstance(suggestions, list) or len(suggestions) != 1:
+            raise PlannerRunnerError("SPLIT requires exactly one split plan")
+        return outcome, {
+            "summary": summary,
+            "split_suggestions": suggestions,
             "evidence": evidence,
         }
     if outcome == "NEEDS_REVIEW":

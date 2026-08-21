@@ -29,7 +29,7 @@ Windows 计划任务通过 `supervisor/run.ps1` 调用 `health_run.py` 做探活
 1. Operator 通过 `loopctl.py` 创建或更新任务；新任务进入 `DRAFT/UNINSPECTED`。
 2. Scheduler 周期选择 `DRAFT/UNINSPECTED` 并通过 `loopctl.py` 原子排入 Planner 预检队列。
 3. Scheduler 另一条周期链选择 `PENDING/READY` 自动任务，原子排入 `QUEUED/READY` 并创建 `WORKER/QUEUED` execution。
-4. Runner 读取 `PLANNER/QUEUED`，启动只读 Codex Planner Worker并写回最终能力、范围、冲突判断或拆分建议。
+4. Runner 读取 `PLANNER/QUEUED`，启动只读 Codex Planner Worker并写回最终能力、范围和冲突判断；安全拆分由宿主原子创建草稿子任务、改写依赖并取消父任务。
 5. Runner 读取 `WORKER/QUEUED`，按 execution 固化档位启动 Self-hosted 或 Codex CLI Worker，Worker 原子转入 `RUNNING` 并完成任务。
 6. 人工复核成功任务后执行 `confirm`；终态任务可独立归档。
 

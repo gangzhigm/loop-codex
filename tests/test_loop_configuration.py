@@ -9,7 +9,7 @@ from _loop_support import *  # noqa: F403
 class LoopConfigurationTests(LoopTestCase):
     def test_initialization_config_owns_deployment_settings(self) -> None:
         config = load_initialization_config()
-        self.assertEqual(config["config_version"], "5.5.0")
+        self.assertEqual(config["config_version"], "5.6.0")
         self.assertEqual(config["prompts"]["operator"], "operator/operator.md")
         self.assertEqual(config["prompts"]["planner"], "scheduler/planner.md")
         self.assertEqual(config["prompts"]["worker"], "worker/worker.md")
@@ -51,7 +51,7 @@ class LoopConfigurationTests(LoopTestCase):
                     "controller": str(LOOPCTL),
                     "allowed_commands": [
                         "preflight-claim", "preflight-heartbeat", "preflight-ready",
-                        "preflight-needs-review", "preflight-fail",
+                        "preflight-split", "preflight-needs-review", "preflight-fail",
                     ],
                     "direct_sql": False,
                     "report_files": False,
@@ -88,6 +88,10 @@ class LoopConfigurationTests(LoopTestCase):
             set(config["execution_profiles"]["codex_cli"]["capabilities"]),
             set(CAPABILITY_LEVELS),
         )
+        self.assertTrue(config["codex_cli"]["use_user_config"])
+        self.assertTrue(config["codex_cli"]["planner_use_user_config"])
+        self.assertEqual(config["codex_cli"]["approval_policy"], "never")
+        self.assertIn("plugins", config["codex_cli"]["disable_features"])
         self.assertEqual(
             {
                 config["execution_profiles"]["self_hosted_agent"]["providers"]["deepseek"]
@@ -134,7 +138,7 @@ class LoopConfigurationTests(LoopTestCase):
         result = validate_database(database)
         database.close()
         self.assertTrue(result["ok"], result["errors"])
-        self.assertEqual(result["schema_version"], "3.9.0")
+        self.assertEqual(result["schema_version"], "3.10.0")
 
     def test_fresh_schema_has_capability_routing_and_execution_snapshot(self) -> None:
         database = connect(self.db_path)

@@ -40,8 +40,8 @@ $root = Split-Path -Parent (Split-Path -Parent $resolvedConfig)
 $configText = Read-Utf8Strict -Path $resolvedConfig
 $config = $configText | ConvertFrom-Json
 
-Assert-Condition ($config.config_version -eq '5.5.0') 'config_version 为 5.5.0'
-Assert-Condition ($config.database.schema_version -eq '3.9.0') 'Schema 契约为 3.9.0'
+Assert-Condition ($config.config_version -eq '5.6.0') 'config_version 为 5.6.0'
+Assert-Condition ($config.database.schema_version -eq '3.10.0') 'Schema 契约为 3.10.0'
 Assert-Condition ($config.prompts.planner -eq 'scheduler/planner.md') 'Planner 提示词路径唯一且已登记'
 
 $promptPaths = @(
@@ -71,6 +71,7 @@ $expectedWriteback = @(
     'preflight-claim',
     'preflight-heartbeat',
     'preflight-ready',
+    'preflight-split',
     'preflight-needs-review',
     'preflight-fail'
 )
@@ -102,6 +103,10 @@ Assert-Condition ($config.runner.queue_poll_interval_seconds -ge 1) 'Runner 队�
 Assert-Condition ($config.runner.worker_launch_enabled -is [bool]) 'Runner AI Worker 启动开关为布尔值'
 Assert-Condition ($config.codex_cli.sandbox -eq 'workspace-write') '正式 Codex Worker 使用可写沙箱'
 Assert-Condition ($config.codex_cli.planner_sandbox -eq 'read-only') 'Planner Codex Worker 使用只读沙箱'
+Assert-Condition ($config.codex_cli.use_user_config -eq $true) '正式 Codex Worker 保留本机 Provider 路由'
+Assert-Condition ($config.codex_cli.planner_use_user_config -eq $true) 'Planner Codex Worker 保留本机 Provider 路由'
+Assert-Condition ($config.codex_cli.approval_policy -eq 'never') 'Codex Worker 禁止交互式权限提升'
+Assert-Condition (($config.codex_cli.disable_features -contains 'plugins') -and ($config.codex_cli.disable_features -contains 'hooks')) 'Codex Worker 禁用用户插件和 Hook'
 
 $operatorPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.operator)
 $plannerPrompt = Read-Utf8Strict -Path (Join-Path $root $config.prompts.planner)

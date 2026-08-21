@@ -18,11 +18,12 @@ function ListBlock({ title, values, empty = "无", code = false }: { title: stri
 
 function PlannerSplitSuggestions({ suggestions }: { suggestions?: SplitSuggestion[] }) {
   if (!suggestions?.length) return null;
-  return <section className="detail-block"><h3>Planner 拆分建议</h3><p>等待 Operator 或用户决定；此处不会自动创建子任务。</p>
+  return <section className="detail-block"><h3>Planner 拆分记录</h3>
     {suggestions.map((group, index) => <div className="split-suggestion" key={`${group.reason}-${index}`}><strong>{group.reason}</strong>
       {group.tasks.map((proposed) => <div className="split-task" key={proposed.id}>
         <strong>{proposed.id} · {proposed.title} · {proposed.capability_level}</strong>
         <span>{proposed.description}</span>
+        <span>验收：{proposed.acceptance.join("；")}</span>
         <ul className="scope-list">{proposed.scope.map((scope) => <li key={scope}><code>{scope}</code></li>)}</ul>
         <span>依赖：{proposed.depends_on.join("、") || "无"}；可并行：{proposed.parallel_with.join("、") || "无"}</span>
       </div>)}

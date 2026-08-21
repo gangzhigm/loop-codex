@@ -102,7 +102,7 @@ def _planner_codex_command(
     schema_path: Path,
 ) -> list[str]:
     """构建只读 Planner Worker 的 Codex CLI 命令。"""
-    return [
+    command = [
         *settings.command_prefix,
         "exec",
         "--json",
@@ -122,8 +122,17 @@ def _planner_codex_command(
         str(schema_path),
         "-c",
         f'model_reasoning_effort="{profile.reasoning}"',
-        "-",
+        "-c",
+        f'approval_policy="{settings.approval_policy}"',
+        "-c",
+        "mcp_servers={}",
     ]
+    for feature in settings.disable_features:
+        command.extend(["--disable", feature])
+    command.extend([
+        "-",
+    ])
+    return command
 
 
 def _execute_attempt(

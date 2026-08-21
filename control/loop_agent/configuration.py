@@ -195,7 +195,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         )
     )
     valid = (
-        config.get("config_version") == "5.5.0"
+        config.get("config_version") == "5.6.0"
         and workspace.get("timezone") == "Asia/Shanghai"
         and isinstance(workspace.get("name"), str)
         and isinstance(workspace.get("task_root"), str)
@@ -303,7 +303,7 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and planner_writeback.get("controller") == str(BASE_DIR / "control" / "loopctl.py")
         and planner_writeback.get("allowed_commands") == [
             "preflight-claim", "preflight-heartbeat", "preflight-ready",
-            "preflight-needs-review", "preflight-fail",
+            "preflight-split", "preflight-needs-review", "preflight-fail",
         ]
         and planner_writeback.get("direct_sql") is False
         and planner_writeback.get("report_files") is False
@@ -351,9 +351,18 @@ def load_initialization_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]
         and codex_cli.get("prompt") == "worker/codex-worker.md"
         and (BASE_DIR / codex_cli["prompt"]).is_file()
         and isinstance(codex_cli.get("use_user_config"), bool)
-        and codex_cli.get("planner_use_user_config") is False
+        and codex_cli.get("use_user_config") is True
+        and codex_cli.get("planner_use_user_config") is True
         and codex_cli.get("sandbox") == "workspace-write"
         and codex_cli.get("planner_sandbox") == "read-only"
+        and codex_cli.get("approval_policy") == "never"
+        and isinstance(codex_cli.get("disable_features"), list)
+        and set(codex_cli["disable_features"]) == {
+            "apps", "browser_use", "browser_use_external",
+            "browser_use_full_cdp_access", "computer_use", "hooks",
+            "image_generation", "in_app_browser", "multi_agent", "plugins",
+            "remote_plugin", "shell_snapshot", "workspace_dependencies",
+        }
         and isinstance(codex_cli.get("termination_grace_seconds"), (int, float))
         and codex_cli["termination_grace_seconds"] > 0
         and isinstance(codex_cli.get("process_poll_interval_seconds"), (int, float))

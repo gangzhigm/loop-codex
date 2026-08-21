@@ -1,5 +1,5 @@
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 30900;
+PRAGMA user_version = 31000;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS preflight_executions (
   lease_expires_at TEXT NOT NULL,
   attempt_deadline_at TEXT NOT NULL,
   finished_at TEXT,
-  outcome TEXT CHECK (outcome IS NULL OR outcome IN ('READY', 'NEEDS_REVIEW', 'FAILED', 'TIMED_OUT')),
+  outcome TEXT CHECK (outcome IS NULL OR outcome IN ('READY', 'SPLIT', 'NEEDS_REVIEW', 'FAILED', 'TIMED_OUT')),
   termination_reason TEXT,
   claimed_task_row_version INTEGER NOT NULL CHECK (claimed_task_row_version >= 1),
   recovered_at TEXT,

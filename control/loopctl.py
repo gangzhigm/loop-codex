@@ -64,6 +64,7 @@ from scheduler.planner_control import (
     command_preflight_heartbeat,
     command_preflight_needs_review,
     command_preflight_ready,
+    command_preflight_split,
 )
 from scheduler.execution_dispatch import (
     command_schedule_execution,
@@ -180,6 +181,7 @@ def parser() -> argparse.ArgumentParser:
     # Planner 结果只能通过 UTF-8 stdin 提交，handler 会验证 fencing 与报告结构。
     for name, handler in (
         ("preflight-ready", command_preflight_ready),
+        ("preflight-split", command_preflight_split),
         ("preflight-needs-review", command_preflight_needs_review),
         ("preflight-fail", command_preflight_fail),
     ):

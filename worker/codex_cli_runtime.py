@@ -96,6 +96,8 @@ class CodexCliSettings:
     prompt_path: Path
     use_user_config: bool
     sandbox: str
+    approval_policy: str
+    disable_features: tuple[str, ...]
     termination_grace_seconds: float
     heartbeat_interval_seconds: float
     stalled_after_seconds: float
@@ -130,6 +132,8 @@ class CodexCliSettings:
             raise CodexCliRunnerError("codex_cli prompt path is unavailable")
         sandbox = raw.get("sandbox")
         use_user_config = raw.get("use_user_config")
+        approval_policy = raw.get("approval_policy")
+        disable_features = raw.get("disable_features")
         grace = raw.get("termination_grace_seconds")
         stdout_limit = raw.get("max_stdout_chars")
         stderr_limit = raw.get("max_stderr_chars")
@@ -140,6 +144,15 @@ class CodexCliSettings:
             raise CodexCliRunnerError("codex_cli sandbox must be read-only or workspace-write")
         if not isinstance(use_user_config, bool):
             raise CodexCliRunnerError("codex_cli use_user_config must be a boolean")
+        if approval_policy != "never":
+            raise CodexCliRunnerError("codex_cli approval_policy must be never")
+        if (
+            not isinstance(disable_features, list)
+            or not disable_features
+            or not all(isinstance(item, str) and item.strip() for item in disable_features)
+            or len(disable_features) != len(set(disable_features))
+        ):
+            raise CodexCliRunnerError("codex_cli disable_features must be unique non-empty names")
         if not isinstance(grace, (int, float)) or grace <= 0:
             raise CodexCliRunnerError("codex_cli termination grace is invalid")
         if not isinstance(heartbeat, (int, float)) or heartbeat <= 0:
@@ -160,6 +173,8 @@ class CodexCliSettings:
             prompt_path=prompt_path,
             use_user_config=use_user_config,
             sandbox=sandbox,
+            approval_policy=approval_policy,
+            disable_features=tuple(disable_features),
             termination_grace_seconds=float(grace),
             heartbeat_interval_seconds=float(heartbeat),
             stalled_after_seconds=float(stalled),
@@ -196,12 +211,14 @@ def _codex_command(
     schema_path: Path,
 ) -> list[str]:
     """构建正式 Worker 的 Codex CLI 命令，供执行器和边界测试共用。"""
-    return [
+    command = [
         *settings.command_prefix,
         "exec",
         "--json",
         "--ephemeral",
         *([] if settings.use_user_config else ["--ignore-user-config"]),
+        "--ignore-rules",
+        "--skip-git-repo-check",
         "--color",
         "never",
         "--model",
@@ -214,8 +231,17 @@ def _codex_command(
         str(schema_path),
         "-c",
         f'model_reasoning_effort="{execution_profile.reasoning}"',
-        "-",
+        "-c",
+        f'approval_policy="{settings.approval_policy}"',
+        "-c",
+        "mcp_servers={}",
     ]
+    for feature in settings.disable_features:
+        command.extend(["--disable", feature])
+    command.extend([
+        "-",
+    ])
+    return command
 
 
 class BoundedText:
